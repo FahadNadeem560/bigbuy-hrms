@@ -260,7 +260,9 @@ function StatusBadge({ status }) {
 
 export default function BigBuyHRMS() {
   const [active, setActive] = useState("dashboard");
+  const [currentUser, setCurrentUser] = useState(null);
   const [role, setRole] = useState("Master");
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
   const [employeeList, setEmployeeList] = useState(initialEmployees);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
@@ -279,6 +281,35 @@ export default function BigBuyHRMS() {
   const summary = getAttendanceSummary(attendance);
   const payrollTotal = getPayrollTotal(payroll);
   const visibleMenu = menu.filter((item) => item.roles.includes(role));
+
+  function demoLogin(selectedRole) {
+    const demoUsers = {
+      Master: { name: "Fahad Nadeem", email: "master@thebigbuy.pk", role: "Master" },
+      HR: { name: "HR User", email: "hr@thebigbuy.pk", role: "HR" },
+      Finance: { name: "Finance User", email: "finance@thebigbuy.pk", role: "Finance" },
+      Employee: { name: "Ali Raza", email: "employee@thebigbuy.pk", role: "Employee", employeeCode: "QAD-001" },
+    };
+
+    setCurrentUser(demoUsers[selectedRole]);
+    setRole(selectedRole);
+    setActive(selectedRole === "Employee" ? "portal" : "dashboard");
+  }
+
+  function handleLogin(e) {
+    e.preventDefault();
+    const email = loginForm.email.toLowerCase().trim();
+
+    if (email.includes("hr")) return demoLogin("HR");
+    if (email.includes("finance") || email.includes("accounts")) return demoLogin("Finance");
+    if (email.includes("employee") || email.includes("staff")) return demoLogin("Employee");
+    return demoLogin("Master");
+  }
+
+  function logout() {
+    setCurrentUser(null);
+    setRole("Master");
+    setActive("dashboard");
+  }
   const portalEmployee = employeeList[0] || initialEmployees[0];
 
   useEffect(() => {
@@ -421,6 +452,57 @@ export default function BigBuyHRMS() {
     }
   }, [role]);
 
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md rounded-3xl shadow-xl border border-slate-100">
+          <CardContent className="p-8">
+            <div className="text-center mb-8">
+              <div className="mx-auto h-16 w-16 rounded-3xl bg-slate-950 text-white flex items-center justify-center text-3xl mb-4">🏢</div>
+              <h1 className="text-3xl font-bold text-slate-950">Big Buy HRMS</h1>
+              <p className="text-slate-500 mt-2">Secure staff, attendance and payroll portal</p>
+            </div>
+
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-slate-600">Email / Employee ID</label>
+                <input
+                  value={loginForm.email}
+                  onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
+                  placeholder="example: hr@thebigbuy.pk"
+                  className="mt-1 w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white outline-none focus:ring-2 focus:ring-slate-200"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-slate-600">Password</label>
+                <input
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                  placeholder="Enter password"
+                  className="mt-1 w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white outline-none focus:ring-2 focus:ring-slate-200"
+                />
+              </div>
+
+              <Button className="w-full rounded-2xl py-3" type="submit">Login</Button>
+            </form>
+
+            <div className="mt-6">
+              <p className="text-xs text-slate-400 mb-3 text-center">Testing shortcuts</p>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" className="rounded-2xl" onClick={() => demoLogin("Master")}>Master</Button>
+                <Button variant="outline" className="rounded-2xl" onClick={() => demoLogin("HR")}>HR</Button>
+                <Button variant="outline" className="rounded-2xl" onClick={() => demoLogin("Finance")}>Finance</Button>
+                <Button variant="outline" className="rounded-2xl" onClick={() => demoLogin("Employee")}>Employee</Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="flex">
@@ -442,8 +524,9 @@ export default function BigBuyHRMS() {
             ))}
           </nav>
           <div className="mt-auto p-4 bg-slate-900 rounded-2xl">
-            <div className="text-sm font-semibold">Logged in as Admin</div>
+            <div className="text-sm font-semibold">{currentUser.name}</div>
             <div className="text-xs text-slate-400 mt-1">Role: {role}</div>
+            <Button variant="secondary" className="rounded-xl w-full mt-3" onClick={logout}>Logout</Button>
           </div>
         </aside>
 
@@ -452,15 +535,20 @@ export default function BigBuyHRMS() {
             <Card className="rounded-2xl shadow-sm border border-slate-100 xl:col-span-3">
               <CardContent className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div>
-                  <div className="font-bold text-slate-950">Preview Access Mode</div>
-                  <div className="text-sm text-slate-500">Switch role to see what each user type can access.</div>
+                  <div className="font-bold text-slate-950">Logged in: {currentUser.name}</div>
+                  <div className="text-sm text-slate-500">Role: {role} • {currentUser.email}</div>
                 </div>
-                <select value={role} onChange={(e) => setRole(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white outline-none">
-                  <option>Master</option>
-                  <option>HR</option>
-                  <option>Finance</option>
-                  <option>Employee</option>
-                </select>
+                <div className="flex gap-2 items-center">
+                  {currentUser.role === "Master" && (
+                    <select value={role} onChange={(e) => setRole(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white outline-none">
+                      <option>Master</option>
+                      <option>HR</option>
+                      <option>Finance</option>
+                      <option>Employee</option>
+                    </select>
+                  )}
+                  <Button variant="outline" className="rounded-2xl" onClick={logout}>Logout</Button>
+                </div>
               </CardContent>
             </Card>
 
@@ -476,18 +564,6 @@ export default function BigBuyHRMS() {
             </Card>
           </div>
 
-          <div className="mb-4 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-            <div>
-              <div className="font-bold text-slate-950">Preview Access Mode</div>
-              <div className="text-sm text-slate-500">Switch role to see what each user type can access.</div>
-            </div>
-            <select value={role} onChange={(e) => setRole(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white outline-none">
-              <option>Master</option>
-              <option>HR</option>
-              <option>Finance</option>
-              <option>Employee</option>
-            </select>
-          </div>
           <div className="lg:hidden mb-4 bg-slate-950 text-white rounded-2xl p-4">
             <div className="font-bold text-xl">Big Buy HRMS</div>
             <div className="flex gap-2 overflow-x-auto mt-4 pb-1">
