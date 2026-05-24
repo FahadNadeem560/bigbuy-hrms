@@ -192,8 +192,7 @@ async function importEmployeesFromCSV(file) {
     setImporting(false);
     return;
   }
-  const lines = text.split("
-").filter(Boolean);
+  const lines = text.split("\n").filter(Boolean);
 
   if (lines.length < 2) {
     alert("CSV file is empty");
@@ -260,8 +259,7 @@ async function importEmployeesFromCSV(file) {
 function downloadCSV(filename, rows) {
   if (!rows.length) return;
   const headers = Object.keys(rows[0]);
-  const csv = [headers.join(","), ...rows.map((r) => headers.map((h) => `"${String(r[h] ?? "").replaceAll('"', '""')}"`).join(","))].join("
-");
+  const csv = [headers.join(","), ...rows.map((r) => headers.map((h) => `"${String(r[h] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
