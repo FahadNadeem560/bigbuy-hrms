@@ -29,21 +29,84 @@ const branchCodeMap = {
   Clifton: "CLF",
 };
 
+const staffLevelPolicies = {
+  Management: {
+    label: "Management",
+    defaultShiftStart: "10:30",
+    defaultShiftEnd: "19:30",
+    requiredHours: 9,
+    breakMinutes: 60,
+    graceMinutes: 30,
+    halfDayLateMinutes: 120,
+    halfDayEarlyOutMinutes: 120,
+    latePenaltyCount: 3,
+    latePenaltyDays: 0,
+    overtimeEligible: false,
+    overtimeAfterHours: 0,
+    overtimeNeedsApproval: true,
+    adjustShortHoursAgainstOT: false,
+    noticeDays: 90,
+  },
+  "Floor Management": {
+    label: "Floor Management",
+    defaultShiftStart: "10:45",
+    defaultShiftEnd: "21:15",
+    requiredHours: 10.5,
+    breakMinutes: 45,
+    graceMinutes: 20,
+    halfDayLateMinutes: 120,
+    halfDayEarlyOutMinutes: 120,
+    latePenaltyCount: 3,
+    latePenaltyDays: 1,
+    overtimeEligible: true,
+    overtimeAfterHours: 10.5,
+    overtimeNeedsApproval: true,
+    adjustShortHoursAgainstOT: true,
+    noticeDays: 45,
+  },
+  "Non-Management": {
+    label: "Non-Management",
+    defaultShiftStart: "10:45",
+    defaultShiftEnd: "21:15",
+    requiredHours: 10.5,
+    breakMinutes: 45,
+    graceMinutes: 15,
+    halfDayLateMinutes: 90,
+    halfDayEarlyOutMinutes: 90,
+    latePenaltyCount: 3,
+    latePenaltyDays: 1,
+    overtimeEligible: true,
+    overtimeAfterHours: 10.5,
+    overtimeNeedsApproval: true,
+    adjustShortHoursAgainstOT: true,
+    noticeDays: 15,
+  },
+};
+
+const loanPolicy = {
+  minimumServiceYears: 2,
+  maximumSalaryPercent: 90,
+  maximumRepaymentMonths: 6,
+  cooldownAfterRepaymentMonths: 12,
+  requiresTwoGuarantors: true,
+  requiresSurety: true,
+};
+
 const initialEmployees = [
-  { id: "QAD-001", name: "Ali Raza", branch: "Qayyumabad", dept: "Grocery", designation: "Salesman", type: "Permanent", salary: 42000, eobi: "Registered", status: "Active", phone: "0300-0000001", joiningDate: "2024-01-01" },
-  { id: "PAF-001", name: "Hassan Khan", branch: "PAF Faisal", dept: "Cash Counter", designation: "Cashier", type: "Permanent", salary: 48000, eobi: "Registered", status: "Active", phone: "0300-0000002", joiningDate: "2023-04-01" },
-  { id: "QAD-002", name: "Noman Ahmed", branch: "Qayyumabad", dept: "Garments", designation: "Salesman", type: "Daily Wage", salary: 1800, eobi: "Not Applicable", status: "Active", phone: "0300-0000003", joiningDate: "2025-02-01" },
-  { id: "PAF-002", name: "Shahzaib", branch: "PAF Faisal", dept: "Security", designation: "Guard", type: "Contractor", salary: 0, eobi: "Contractor", status: "Active", phone: "0300-0000004", joiningDate: "2025-06-01" },
-  { id: "QAD-003", name: "Usman Tariq", branch: "Qayyumabad", dept: "Crockery", designation: "Salesman", type: "Permanent", salary: 40000, eobi: "Pending", status: "Active", phone: "0300-0000005", joiningDate: "2024-09-01" },
+  { id: "QAD-001", name: "Ali Raza", branch: "Qayyumabad", dept: "Grocery", designation: "Salesman", level: "Non-Management", type: "Permanent", salary: 42000, eobi: "Registered", status: "Active", phone: "0300-0000001", joiningDate: "2024-01-01" },
+  { id: "PAF-001", name: "Hassan Khan", branch: "PAF Faisal", dept: "Cash Counter", designation: "Cashier", level: "Non-Management", type: "Permanent", salary: 48000, eobi: "Registered", status: "Active", phone: "0300-0000002", joiningDate: "2023-04-01" },
+  { id: "QAD-002", name: "Noman Ahmed", branch: "Qayyumabad", dept: "Garments", designation: "Floor Supervisor", level: "Floor Management", type: "Permanent", salary: 65000, eobi: "Registered", status: "Active", phone: "0300-0000003", joiningDate: "2025-02-01" },
+  { id: "PAF-002", name: "Shahzaib", branch: "PAF Faisal", dept: "Security", designation: "Guard", level: "Non-Management", type: "Contractor", salary: 0, eobi: "Contractor", status: "Active", phone: "0300-0000004", joiningDate: "2025-06-01" },
+  { id: "QAD-003", name: "Usman Tariq", branch: "Qayyumabad", dept: "Crockery", designation: "Store Manager", level: "Management", type: "Permanent", salary: 90000, eobi: "Pending", status: "Active", phone: "0300-0000005", joiningDate: "2024-09-01" },
 ];
 
 const demoRawPunches = [
-  { employeeCode: "QAD-001", name: "Ali Raza", date: "2026-04-01", checkIn: "10:52", checkOut: "21:40", branch: "Qayyumabad", shiftStart: "10:45", shiftEnd: "21:15" },
-  { employeeCode: "QAD-001", name: "Ali Raza", date: "2026-04-02", checkIn: "11:07", checkOut: "21:15", branch: "Qayyumabad", shiftStart: "10:45", shiftEnd: "21:15" },
-  { employeeCode: "PAF-001", name: "Hassan Khan", date: "2026-04-01", checkIn: "11:30", checkOut: "21:15", branch: "PAF Faisal", shiftStart: "10:45", shiftEnd: "21:15" },
-  { employeeCode: "PAF-001", name: "Hassan Khan", date: "2026-04-02", checkIn: "10:50", checkOut: "19:30", branch: "PAF Faisal", shiftStart: "10:45", shiftEnd: "21:15" },
-  { employeeCode: "QAD-002", name: "Noman Ahmed", date: "2026-04-01", checkIn: "13:02", checkOut: "23:45", branch: "Qayyumabad", shiftStart: "13:00", shiftEnd: "23:30" },
-  { employeeCode: "QAD-003", name: "Usman Tariq", date: "2026-04-01", checkIn: "-", checkOut: "-", branch: "Qayyumabad", shiftStart: "10:45", shiftEnd: "21:15" },
+  { employeeCode: "QAD-001", name: "Ali Raza", level: "Non-Management", date: "2026-04-01", checkIn: "10:52", checkOut: "21:40", branch: "Qayyumabad", shiftStart: "10:45", shiftEnd: "21:15" },
+  { employeeCode: "QAD-001", name: "Ali Raza", level: "Non-Management", date: "2026-04-02", checkIn: "11:07", checkOut: "21:15", branch: "Qayyumabad", shiftStart: "10:45", shiftEnd: "21:15" },
+  { employeeCode: "PAF-001", name: "Hassan Khan", level: "Non-Management", date: "2026-04-01", checkIn: "11:30", checkOut: "21:15", branch: "PAF Faisal", shiftStart: "10:45", shiftEnd: "21:15" },
+  { employeeCode: "PAF-001", name: "Hassan Khan", level: "Non-Management", date: "2026-04-02", checkIn: "10:50", checkOut: "19:30", branch: "PAF Faisal", shiftStart: "10:45", shiftEnd: "21:15" },
+  { employeeCode: "QAD-002", name: "Noman Ahmed", level: "Floor Management", date: "2026-04-01", checkIn: "10:58", checkOut: "22:00", branch: "Qayyumabad", shiftStart: "10:45", shiftEnd: "21:15" },
+  { employeeCode: "QAD-003", name: "Usman Tariq", level: "Management", date: "2026-04-01", checkIn: "10:55", checkOut: "19:55", branch: "Qayyumabad", shiftStart: "10:30", shiftEnd: "19:30" },
 ];
 
 const loans = [
@@ -71,6 +134,7 @@ const menu = [
   { key: "reports", label: "Reports", icon: "📄", roles: ["Master", "HR", "Finance"] },
   { key: "imports", label: "Import Center", icon: "📥", roles: ["Master", "HR"] },
   { key: "exports", label: "Excel Export", icon: "📊", roles: ["Master", "HR", "Finance"] },
+  { key: "policies", label: "Policy Rules", icon: "⚙️", roles: ["Master", "HR"] },
   { key: "users", label: "Users & Roles", icon: "🔐", roles: ["Master"] },
 ];
 
@@ -135,35 +199,117 @@ function money(value) { return `Rs. ${Math.round(Number(value || 0)).toLocaleStr
 function timeToMinutes(t) { if (!t || t === "-") return null; const [h, m] = t.split(":").map(Number); return h * 60 + m; }
 function minutesToHours(min) { return Math.round((Number(min || 0) / 60) * 100) / 100; }
 
+function getPolicyForLevel(level) {
+  return staffLevelPolicies[level] || staffLevelPolicies["Non-Management"];
+}
+
 function processAttendancePunch(row) {
-  const start = timeToMinutes(row.shiftStart);
-  const end = timeToMinutes(row.shiftEnd);
+  const policy = getPolicyForLevel(row.level);
+  const start = timeToMinutes(row.shiftStart || policy.defaultShiftStart);
+  const end = timeToMinutes(row.shiftEnd || policy.defaultShiftEnd);
   const inMin = timeToMinutes(row.checkIn);
   const outMin = timeToMinutes(row.checkOut);
-  const requiredMinutes = 630;
-  if (inMin === null || outMin === null) return { ...row, actualHours: 0, lateMinutes: 0, shortHours: 10.5, overtimeHours: 0, status: "Absent", approval: "Auto" };
+  const requiredMinutes = Number(policy.requiredHours || 10.5) * 60;
+
+  if (inMin === null || outMin === null) {
+    return {
+      ...row,
+      policyLevel: policy.label,
+      requiredHours: policy.requiredHours,
+      actualHours: 0,
+      lateMinutes: 0,
+      earlyOutMinutes: 0,
+      shortHours: policy.requiredHours,
+      overtimeHours: 0,
+      status: "Absent",
+      approval: "Auto",
+      noticeDays: policy.noticeDays,
+    };
+  }
+
   const actualMinutes = Math.max(0, outMin - inMin);
-  const lateMinutes = Math.max(0, inMin - start - 15);
+  const lateMinutes = Math.max(0, inMin - start - policy.graceMinutes);
   const earlyOutMinutes = Math.max(0, end - outMin);
   const shortMinutes = Math.max(0, requiredMinutes - actualMinutes);
-  const overtimeMinutes = Math.max(0, actualMinutes - requiredMinutes);
+
+  let overtimeMinutes = 0;
+  if (policy.overtimeEligible) {
+    overtimeMinutes = Math.max(0, actualMinutes - Number(policy.overtimeAfterHours || policy.requiredHours) * 60);
+  }
+
   let status = "Present";
-  if (lateMinutes > 90 || earlyOutMinutes > 90) status = "Half Day";
+  if (lateMinutes > policy.halfDayLateMinutes || earlyOutMinutes > policy.halfDayEarlyOutMinutes) status = "Half Day";
   else if (lateMinutes > 0) status = "Late";
-  return { ...row, actualHours: minutesToHours(actualMinutes), lateMinutes, shortHours: minutesToHours(shortMinutes), overtimeHours: minutesToHours(overtimeMinutes), status, approval: overtimeMinutes > 0 ? "OT Pending" : "Auto" };
+
+  return {
+    ...row,
+    policyLevel: policy.label,
+    requiredHours: policy.requiredHours,
+    actualHours: minutesToHours(actualMinutes),
+    lateMinutes,
+    earlyOutMinutes,
+    shortHours: minutesToHours(shortMinutes),
+    overtimeHours: minutesToHours(overtimeMinutes),
+    status,
+    approval: overtimeMinutes > 0 && policy.overtimeNeedsApproval ? "OT Pending" : "Auto",
+    noticeDays: policy.noticeDays,
+  };
 }
 
 function calculatePayrollForEmployee(employee, adjustments = {}, loanRows = []) {
+  const policy = getPolicyForLevel(employee.level);
   const monthlySalary = Number(employee.salary || 0);
   const dailySalary = monthlySalary / 30;
-  const hourlySalary = dailySalary / 10.5;
+  const hourlySalary = dailySalary / Number(policy.requiredHours || 10.5);
   const absentDeduction = dailySalary * Number(adjustments.absentDays || 0);
-  const lateDeduction = Number(adjustments.lateCount || 0) >= 3 ? dailySalary : 0;
-  const overtimeAmount = hourlySalary * Number(adjustments.otHours || 0);
+  const latePenaltyDays = Number(adjustments.lateCount || 0) >= Number(policy.latePenaltyCount || 3) ? Number(policy.latePenaltyDays || 0) : 0;
+  const lateDeduction = dailySalary * latePenaltyDays;
+  const overtimeAmount = policy.overtimeEligible ? hourlySalary * Number(adjustments.otHours || 0) : 0;
   const loanDeduction = loanRows.find((loan) => loan.employeeCode === employee.id)?.monthly || 0;
   const additions = Number(adjustments.commission || 0) + Number(adjustments.fuel || 0) + Number(adjustments.arrears || 0) + Number(adjustments.leaveAdjustment || 0) + overtimeAmount;
   const deductions = absentDeduction + lateDeduction + loanDeduction;
-  return { employeeCode: employee.id, name: employee.name, branch: employee.branch, department: employee.dept, gross: monthlySalary, presentDays: Number(adjustments.presentDays || 0), absentDays: Number(adjustments.absentDays || 0), lateCount: Number(adjustments.lateCount || 0), otHours: Number(adjustments.otHours || 0), absentDeduction, lateDeduction, overtimeAmount, commission: Number(adjustments.commission || 0), fuel: Number(adjustments.fuel || 0), arrears: Number(adjustments.arrears || 0), leaveAdjustment: Number(adjustments.leaveAdjustment || 0), loanDeduction, finalSalary: monthlySalary + additions - deductions };
+
+  return {
+    employeeCode: employee.id,
+    name: employee.name,
+    branch: employee.branch,
+    department: employee.dept,
+    level: employee.level,
+    gross: monthlySalary,
+    presentDays: Number(adjustments.presentDays || 0),
+    absentDays: Number(adjustments.absentDays || 0),
+    lateCount: Number(adjustments.lateCount || 0),
+    otHours: policy.overtimeEligible ? Number(adjustments.otHours || 0) : 0,
+    absentDeduction,
+    lateDeduction,
+    overtimeAmount,
+    commission: Number(adjustments.commission || 0),
+    fuel: Number(adjustments.fuel || 0),
+    arrears: Number(adjustments.arrears || 0),
+    leaveAdjustment: Number(adjustments.leaveAdjustment || 0),
+    loanDeduction,
+    finalSalary: monthlySalary + additions - deductions,
+    noticeDays: policy.noticeDays,
+  };
+}
+
+function checkLoanEligibility(employee, existingLoans = []) {
+  const joiningDate = employee.joiningDate ? new Date(employee.joiningDate) : null;
+  const today = new Date();
+  const serviceYears = joiningDate ? (today - joiningDate) / (1000 * 60 * 60 * 24 * 365.25) : 0;
+  const activeLoan = existingLoans.some((loan) => loan.employeeCode === employee.id && loan.status === "Active");
+  const maximumLoan = Number(employee.salary || 0) * (loanPolicy.maximumSalaryPercent / 100);
+
+  return {
+    eligible: serviceYears >= loanPolicy.minimumServiceYears && !activeLoan,
+    serviceYears: Math.floor(serviceYears * 10) / 10,
+    maximumLoan,
+    reason: serviceYears < loanPolicy.minimumServiceYears
+      ? "Service below 2 years"
+      : activeLoan
+      ? "Active loan already exists"
+      : "Eligible",
+  };
 }
 
 function StatusBadge({ status }) {
@@ -296,7 +442,7 @@ export default function BigBuyHRMS() {
   const [payrollStatus, setPayrollStatus] = useState("Draft");
   const [selectedPayslip, setSelectedPayslip] = useState(null);
   const [zktConnected, setZktConnected] = useState(false);
-  const [newEmployee, setNewEmployee] = useState({ branch: "Qayyumabad", fullName: "", designation: "", department: "", salary: "", phone: "" });
+  const [newEmployee, setNewEmployee] = useState({ branch: "Qayyumabad", fullName: "", designation: "", department: "", level: "Non-Management", salary: "", phone: "" });
   const [importPreview, setImportPreview] = useState([]);
   const [importing, setImporting] = useState(false);
 
@@ -356,7 +502,7 @@ export default function BigBuyHRMS() {
       setLoadingEmployees(true);
       const { data, error } = await supabase.from("employees").select("*").order("created_at", { ascending: true });
       if (!error && data && data.length > 0) {
-        setEmployeeList(data.map((emp) => ({ id: emp.employee_code, name: emp.full_name, branch: emp.branch, dept: emp.department, designation: emp.designation || "-", type: emp.employee_type || "Permanent", salary: emp.salary || 0, eobi: emp.eobi_status || "Pending", status: emp.status || "Active", phone: emp.phone || "-", joiningDate: emp.joining_date || "" })));
+        setEmployeeList(data.map((emp) => ({ id: emp.employee_code, name: emp.full_name, branch: emp.branch, dept: emp.department, designation: emp.designation || "-", level: emp.level || emp.staff_level || "Non-Management", type: emp.employee_type || "Permanent", salary: emp.salary || 0, eobi: emp.eobi_status || "Pending", status: emp.status || "Active", phone: emp.phone || "-", joiningDate: emp.joining_date || "" })));
       }
       setLoadingEmployees(false);
     }
@@ -431,18 +577,18 @@ export default function BigBuyHRMS() {
     const sameBranch = employeeList.filter((e) => e.id.startsWith(prefix));
     const next = String(sameBranch.length + 1).padStart(3, "0");
     const code = `${prefix}-${next}`;
-    const payload = { employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation, department: newEmployee.department, branch: newEmployee.branch, employee_type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone, eobi_status: "Pending", status: "Active" };
+    const payload = { employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation, department: newEmployee.department, branch: newEmployee.branch, level: newEmployee.level, staff_level: newEmployee.level, employee_type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone, eobi_status: "Pending", status: "Active" };
     const { error } = await supabase.from("employees").insert(payload);
 
     await createEmployeeAuth(payload);
     if (error) return alert(`Error: ${error.message}`);
-    setEmployeeList((prev) => [...prev, { id: code, name: newEmployee.fullName, branch: newEmployee.branch, dept: newEmployee.department, designation: newEmployee.designation, type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone || "-", eobi: "Pending", status: "Active" }]);
-    setNewEmployee({ branch: "Qayyumabad", fullName: "", designation: "", department: "", salary: "", phone: "" }); setShowEmployeeForm(false);
+    setEmployeeList((prev) => [...prev, { id: code, name: newEmployee.fullName, branch: newEmployee.branch, dept: newEmployee.department, designation: newEmployee.designation, level: newEmployee.level, type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone || "-", eobi: "Pending", status: "Active" }]);
+    setNewEmployee({ branch: "Qayyumabad", fullName: "", designation: "", department: "", level: "Non-Management", salary: "", phone: "" }); setShowEmployeeForm(false);
   }
 
   async function updateEmployee() {
     if (!editingEmployee) return;
-    const payload = { full_name: editingEmployee.name, branch: editingEmployee.branch, department: editingEmployee.dept, designation: editingEmployee.designation, salary: Number(editingEmployee.salary || 0), eobi_status: editingEmployee.eobi, phone: editingEmployee.phone, status: editingEmployee.status };
+    const payload = { full_name: editingEmployee.name, branch: editingEmployee.branch, department: editingEmployee.dept, designation: editingEmployee.designation, level: editingEmployee.level, staff_level: editingEmployee.level, salary: Number(editingEmployee.salary || 0), eobi_status: editingEmployee.eobi, phone: editingEmployee.phone, status: editingEmployee.status };
     const { error } = await supabase.from("employees").update(payload).eq("employee_code", editingEmployee.id);
     if (error) return alert(`Update Failed: ${error.message}`);
     setEmployeeList((prev) => prev.map((e) => e.id === editingEmployee.id ? editingEmployee : e)); setEditingEmployee(null);
@@ -513,7 +659,9 @@ export default function BigBuyHRMS() {
 
           {active === "approval" && <div><PageTitle title="Salary Lock & Approval" subtitle="HR prepares payroll, Finance reviews, Master locks final salary." action={<Button className="rounded-2xl" disabled={payrollStatus === "Locked"} onClick={() => setPayrollStatus("Locked")}>Lock Payroll</Button>} /><div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6"><StatCard title="Current Status" value={payrollStatus} sub="Payroll approval stage" icon="🔒" /><StatCard title="HR Review" value="Done" sub="Attendance checked" icon="✅" /><StatCard title="Finance Review" value={payrollStatus === "Draft" ? "Pending" : "Done"} sub="Deductions checked" icon="💰" /><StatCard title="Master Lock" value={payrollStatus === "Locked" ? "Locked" : "Open"} sub="Final approval" icon="🛡️" /></div><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><Card className="rounded-2xl border border-slate-100"><CardContent className="p-5"><h3 className="font-bold mb-2">1. HR Prepared</h3><p className="text-sm text-slate-500">Attendance, leave and late marks checked.</p><Badge tone="green">Completed</Badge></CardContent></Card><Card className="rounded-2xl border border-slate-100"><CardContent className="p-5"><h3 className="font-bold mb-2">2. Finance Review</h3><p className="text-sm text-slate-500">Loans, deductions and allowances verified.</p><Button className="rounded-2xl mt-3" onClick={() => setPayrollStatus("Finance Approved")}>Approve Finance</Button></CardContent></Card><Card className="rounded-2xl border border-slate-100"><CardContent className="p-5"><h3 className="font-bold mb-2">3. Master Lock</h3><p className="text-sm text-slate-500">After lock, payroll cannot be edited.</p><Badge tone={payrollStatus === "Locked" ? "red" : "yellow"}>{payrollStatus === "Locked" ? "Locked" : "Awaiting Lock"}</Badge></CardContent></Card></div></div>}
 
-          {active === "loans" && <div><PageTitle title="Loans & Advances" subtitle="Track employee loans, deductions and balances." action={<Button className="rounded-2xl">+ Add Loan</Button>} /><Table headers={["Employee", "Total Loan", "Monthly Deduction", "Paid", "Balance", "Status"]} rows={loans} renderRow={(l) => <tr key={l.employeeCode}><td className="px-4 py-3 font-medium">{l.name}<div className="text-xs text-slate-400">{l.employeeCode}</div></td><td className="px-4 py-3">{money(l.total)}</td><td className="px-4 py-3">{money(l.monthly)}</td><td className="px-4 py-3">{money(l.paid)}</td><td className="px-4 py-3 font-bold">{money(l.balance)}</td><td className="px-4 py-3"><Badge tone="green">{l.status}</Badge></td></tr>} /></div>}
+          {active === "loans" && <div><PageTitle title="Loans & Advances" subtitle="Track employee loans with eligibility based on service, salary limit and active loan status." action={<Button className="rounded-2xl">+ Add Loan</Button>} /><Table headers={["Employee", "Service", "Max Eligible", "Current Loan", "Balance", "Eligibility"]} rows={activeEmployees} renderRow={(e) => { const check = checkLoanEligibility(e, loans); const loan = loans.find((l) => l.employeeCode === e.id); return <tr key={e.id}><td className="px-4 py-3 font-medium">{e.name}<div className="text-xs text-slate-400">{e.id}</div></td><td className="px-4 py-3">{check.serviceYears} yrs</td><td className="px-4 py-3">{money(check.maximumLoan)}</td><td className="px-4 py-3">{money(loan?.total || 0)}</td><td className="px-4 py-3 font-bold">{money(loan?.balance || 0)}</td><td className="px-4 py-3"><Badge tone={check.eligible ? "green" : "yellow"}>{check.reason}</Badge></td></tr>; }} /></div>}
+
+          {active === "policies" && <PolicyRules />}
 
           {active === "portal" && <div><PageTitle title="Employee Self-Service Portal" subtitle="Employee can view own attendance, payslip, loan and requests." action={<Button className="rounded-2xl">Apply Leave</Button>} /><div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6"><StatCard title="Employee" value={portalEmployee?.name || "Employee"} sub={portalEmployee?.id} icon="🧑‍💼" /><StatCard title="Salary Slip" value={portalPayroll ? money(portalPayroll.finalSalary) : "N/A"} sub={payrollMonth} icon="🧾" /><StatCard title="Loan Balance" value={money(loans.find((l) => l.employeeCode === portalEmployee?.id)?.balance || 0)} sub="Current balance" icon="💳" /></div>{portalPayroll && <PayslipCard row={portalPayroll} month={payrollMonth} close={() => {}} />}</div>}
 
@@ -528,11 +676,52 @@ export default function BigBuyHRMS() {
 }
 
 function EmployeeAdd({ employee, setEmployee, save, close }) {
-  return <Card className="rounded-2xl shadow-sm border border-slate-100 mb-4"><CardContent className="p-5"><div className="flex justify-between mb-4"><h2 className="text-lg font-bold">Add New Employee</h2><Button variant="outline" className="rounded-2xl" onClick={close}>Close</Button></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3"><select value={employee.branch} onChange={(e) => setEmployee({ ...employee, branch: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white">{Object.keys(branchCodeMap).map((b) => <option key={b}>{b}</option>)}</select><input placeholder="Full Name" value={employee.fullName} onChange={(e) => setEmployee({ ...employee, fullName: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input placeholder="Designation" value={employee.designation} onChange={(e) => setEmployee({ ...employee, designation: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input placeholder="Department" value={employee.department} onChange={(e) => setEmployee({ ...employee, department: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input placeholder="Phone" value={employee.phone} onChange={(e) => setEmployee({ ...employee, phone: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input type="number" placeholder="Salary" value={employee.salary} onChange={(e) => setEmployee({ ...employee, salary: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /></div><div className="flex justify-end mt-4"><Button className="rounded-2xl" onClick={save}>Save Employee</Button></div></CardContent></Card>;
+  return <Card className="rounded-2xl shadow-sm border border-slate-100 mb-4"><CardContent className="p-5"><div className="flex justify-between mb-4"><h2 className="text-lg font-bold">Add New Employee</h2><Button variant="outline" className="rounded-2xl" onClick={close}>Close</Button></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-3"><select value={employee.branch} onChange={(e) => setEmployee({ ...employee, branch: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white">{Object.keys(branchCodeMap).map((b) => <option key={b}>{b}</option>)}</select><select value={employee.level} onChange={(e) => setEmployee({ ...employee, level: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white">{Object.keys(staffLevelPolicies).map((level) => <option key={level}>{level}</option>)}</select><input placeholder="Full Name" value={employee.fullName} onChange={(e) => setEmployee({ ...employee, fullName: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input placeholder="Designation" value={employee.designation} onChange={(e) => setEmployee({ ...employee, designation: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input placeholder="Department" value={employee.department} onChange={(e) => setEmployee({ ...employee, department: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input placeholder="Phone" value={employee.phone} onChange={(e) => setEmployee({ ...employee, phone: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input type="number" placeholder="Salary" value={employee.salary} onChange={(e) => setEmployee({ ...employee, salary: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /></div><div className="flex justify-end mt-4"><Button className="rounded-2xl" onClick={save}>Save Employee</Button></div></CardContent></Card>;
+}
+
+function PolicyRules() {
+  return (
+    <div>
+      <PageTitle title="Policy Rules" subtitle="Flexible timing, overtime, late, half-day and notice rules by employee level." action={<Badge tone="blue">Configurable Engine</Badge>} />
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
+        {Object.values(staffLevelPolicies).map((policy) => (
+          <Card key={policy.label} className="rounded-2xl shadow-sm border border-slate-100">
+            <CardContent className="p-5">
+              <h2 className="text-xl font-bold mb-3">{policy.label}</h2>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between"><span>Default Shift</span><b>{policy.defaultShiftStart} - {policy.defaultShiftEnd}</b></div>
+                <div className="flex justify-between"><span>Required Hours</span><b>{policy.requiredHours}</b></div>
+                <div className="flex justify-between"><span>Break Limit</span><b>{policy.breakMinutes} min</b></div>
+                <div className="flex justify-between"><span>Grace Time</span><b>{policy.graceMinutes} min</b></div>
+                <div className="flex justify-between"><span>Half Day Late</span><b>{policy.halfDayLateMinutes} min</b></div>
+                <div className="flex justify-between"><span>Late Penalty</span><b>{policy.latePenaltyCount} late = {policy.latePenaltyDays} day</b></div>
+                <div className="flex justify-between"><span>OT Eligible</span><Badge tone={policy.overtimeEligible ? "green" : "red"}>{policy.overtimeEligible ? "Yes" : "No"}</Badge></div>
+                <div className="flex justify-between"><span>OT After</span><b>{policy.overtimeAfterHours || "N/A"} hrs</b></div>
+                <div className="flex justify-between"><span>Notice Period</span><b>{policy.noticeDays} days</b></div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <Card className="rounded-2xl shadow-sm border border-slate-100">
+        <CardContent className="p-5">
+          <h2 className="text-lg font-bold mb-3">Loan Policy Automation</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className="p-4 rounded-2xl bg-slate-50"><b>Minimum Service</b><br />{loanPolicy.minimumServiceYears} years</div>
+            <div className="p-4 rounded-2xl bg-slate-50"><b>Maximum Loan</b><br />{loanPolicy.maximumSalaryPercent}% of gross salary</div>
+            <div className="p-4 rounded-2xl bg-slate-50"><b>Repayment</b><br />Within {loanPolicy.maximumRepaymentMonths} months</div>
+            <div className="p-4 rounded-2xl bg-slate-50"><b>Cooldown</b><br />{loanPolicy.cooldownAfterRepaymentMonths} months after repayment</div>
+            <div className="p-4 rounded-2xl bg-slate-50"><b>Guarantors</b><br />{loanPolicy.requiresTwoGuarantors ? "Two required" : "Not required"}</div>
+            <div className="p-4 rounded-2xl bg-slate-50"><b>Surety</b><br />{loanPolicy.requiresSurety ? "Required" : "Not required"}</div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 function EmployeeEdit({ employee, setEmployee, save, close }) {
-  return <Card className="rounded-2xl shadow-sm border border-slate-100 mb-4"><CardContent className="p-5"><div className="flex justify-between mb-4"><h2 className="text-lg font-bold">Edit Employee</h2><Button variant="outline" className="rounded-2xl" onClick={close}>Close</Button></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3"><input value={employee.id} disabled className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-slate-100" /><input value={employee.name} onChange={(e) => setEmployee({ ...employee, name: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input value={employee.dept} onChange={(e) => setEmployee({ ...employee, dept: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input type="number" value={employee.salary} onChange={(e) => setEmployee({ ...employee, salary: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><select value={employee.status} onChange={(e) => setEmployee({ ...employee, status: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200"><option>Active</option><option>Inactive</option><option>Resigned</option></select><input value={employee.eobi} onChange={(e) => setEmployee({ ...employee, eobi: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /></div><div className="flex justify-end gap-2 mt-4"><Button variant="outline" className="rounded-2xl" onClick={close}>Cancel</Button><Button className="rounded-2xl" onClick={save}>Save Changes</Button></div></CardContent></Card>;
+  return <Card className="rounded-2xl shadow-sm border border-slate-100 mb-4"><CardContent className="p-5"><div className="flex justify-between mb-4"><h2 className="text-lg font-bold">Edit Employee</h2><Button variant="outline" className="rounded-2xl" onClick={close}>Close</Button></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-3"><input value={employee.id} disabled className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-slate-100" /><select value={employee.level || "Non-Management"} onChange={(e) => setEmployee({ ...employee, level: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200">{Object.keys(staffLevelPolicies).map((level) => <option key={level}>{level}</option>)}</select><input value={employee.name} onChange={(e) => setEmployee({ ...employee, name: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input value={employee.dept} onChange={(e) => setEmployee({ ...employee, dept: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><input type="number" value={employee.salary} onChange={(e) => setEmployee({ ...employee, salary: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /><select value={employee.status} onChange={(e) => setEmployee({ ...employee, status: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200"><option>Active</option><option>Inactive</option><option>Resigned</option></select><input value={employee.eobi} onChange={(e) => setEmployee({ ...employee, eobi: e.target.value })} className="px-4 py-2.5 rounded-2xl border border-slate-200" /></div><div className="flex justify-end gap-2 mt-4"><Button variant="outline" className="rounded-2xl" onClick={close}>Cancel</Button><Button className="rounded-2xl" onClick={save}>Save Changes</Button></div></CardContent></Card>;
 }
 
 function PayslipCard({ row, month, close }) {
