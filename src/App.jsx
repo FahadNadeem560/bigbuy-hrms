@@ -568,7 +568,7 @@ function ImportCenter({ importing, importPreview, importEmployeesFromCSV }) {
 
           <div className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300">
             <input
-              key={Date.now()}
+              key="employee-upload-input"
               type="file"
               accept=".csv,.xls,.xlsx"
               id="employee-import"
@@ -577,6 +577,7 @@ function ImportCenter({ importing, importPreview, importEmployeesFromCSV }) {
                 const file = e.target.files?.[0];
                 if (file) {
                   window.selectedEmployeeImportFile = file;
+                  alert(`Selected file: ${file.name}`);
                 }
               }}
             />
