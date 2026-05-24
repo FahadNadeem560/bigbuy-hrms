@@ -406,7 +406,15 @@ async function importEmployeesFromCSV(file) {
 function downloadCSV(filename, rows) {
   if (!rows.length) return;
   const headers = Object.keys(rows[0]);
-  const csv = [headers.join(","), ...rows.map((r) => headers.map((h) => `"${String(r[h] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
+  const csv = [
+    headers.join(","),
+    ...rows.map((r) =>
+      headers
+        .map((h) => `"${String(r[h] ?? "").replaceAll('"', '""')}"`)
+        .join(",")
+    ),
+  ].join("\n");
+
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -414,6 +422,73 @@ function downloadCSV(filename, rows) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadTemplate(type) {
+  const templates = {
+    employees: [
+      {
+        name: "Ali Raza",
+        designation: "Salesman",
+        department: "Grocery",
+        branch: "Qayyumabad",
+        level: "Non-Management",
+        employee_type: "Permanent",
+        salary: 42000,
+        phone: "03001234567",
+        joining_date: "2026-04-01",
+        eobi_status: "Pending",
+        cnic: "42101-0000000-0",
+        shift: "Shift A",
+      },
+    ],
+    attendance: [
+      {
+        employee_code: "QAD-001",
+        date: "2026-04-01",
+        check_in: "10:45",
+        check_out: "21:15",
+        branch: "Qayyumabad",
+        shift_start: "10:45",
+        shift_end: "21:15",
+      },
+    ],
+    salary_adjustments: [
+      {
+        employee_code: "QAD-001",
+        commission: 0,
+        fuel: 0,
+        arrears: 0,
+        bonus: 0,
+        deduction: 0,
+        remarks: "Monthly adjustment",
+      },
+    ],
+    loans: [
+      {
+        employee_code: "QAD-001",
+        loan_amount: 25000,
+        monthly_deduction: 5000,
+        start_date: "2026-04-01",
+        months: 5,
+        guarantor_1: "QAD-002",
+        guarantor_2: "PAF-001",
+        surety_details: "Asset / cheque / acceptable surety",
+      },
+    ],
+    leaves: [
+      {
+        employee_code: "QAD-001",
+        leave_type: "Casual",
+        from_date: "2026-04-10",
+        to_date: "2026-04-11",
+        approved_by: "HR Manager",
+        remarks: "Approved leave",
+      },
+    ],
+  };
+
+  downloadCSV(`${type}_template.csv`, templates[type] || []);
 }
 
 function printPayslip(row, month) {
@@ -754,6 +829,16 @@ function ImportCenter({ importing, importPreview, importEmployeesFromCSV }) {
 
       <Card className="rounded-2xl shadow-sm border border-slate-100 mb-6">
         <CardContent className="p-6">
+          <h2 className="text-lg font-bold mb-3">Download Import Templates</h2>
+          <p className="text-sm text-slate-500 mb-4">Download a template, fill it in, then upload it back to the HRMS.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-6">
+            <Button variant="outline" className="rounded-2xl" onClick={() => downloadTemplate("employees")}>Employee Template</Button>
+            <Button variant="outline" className="rounded-2xl" onClick={() => downloadTemplate("attendance")}>Attendance Template</Button>
+            <Button variant="outline" className="rounded-2xl" onClick={() => downloadTemplate("salary_adjustments")}>Salary Template</Button>
+            <Button variant="outline" className="rounded-2xl" onClick={() => downloadTemplate("loans")}>Loan Template</Button>
+            <Button variant="outline" className="rounded-2xl" onClick={() => downloadTemplate("leaves")}>Leave Template</Button>
+          </div>
+
           <h2 className="text-lg font-bold mb-3">Upload Employee CSV</h2>
 
           <div className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300">
@@ -802,7 +887,7 @@ function ImportCenter({ importing, importPreview, importEmployeesFromCSV }) {
             </div>
 
             <p className="text-sm text-slate-500 mt-3">
-              Required columns: name, designation, department, branch, salary, phone
+              Required employee columns: name, designation, department, branch, level, employee_type, salary, phone, joining_date, eobi_status, cnic, shift
             </p>
           </div>
         </CardContent>
