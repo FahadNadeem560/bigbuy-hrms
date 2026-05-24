@@ -69,6 +69,7 @@ const menu = [
   { key: "loans", label: "Loans", icon: "💳", roles: ["Master", "HR", "Finance", "Employee"] },
   { key: "portal", label: "Employee Portal", icon: "🧑‍💼", roles: ["Master", "Employee"] },
   { key: "reports", label: "Reports", icon: "📄", roles: ["Master", "HR", "Finance"] },
+  { key: "imports", label: "Import Center", icon: "📥", roles: ["Master", "HR"] },
   { key: "exports", label: "Excel Export", icon: "📊", roles: ["Master", "HR", "Finance"] },
   { key: "users", label: "Users & Roles", icon: "🔐", roles: ["Master"] },
 ];
@@ -170,6 +171,74 @@ function StatusBadge({ status }) {
   return <Badge tone={tone}>{status}</Badge>;
 }
 
+async function importEmployeesFromCSV(file) {
+  setImporting(true);
+
+  const text = await file.text();
+  const lines = text.split("\n").filter(Boolean);
+
+  if (lines.length < 2) {
+    alert("CSV file is empty");
+    setImporting(false);
+    return;
+  }
+
+  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+
+  const parsed = lines.slice(1).map((line) => {
+    const values = line.split(",");
+    const obj = {};
+
+    headers.forEach((h, i) => {
+      obj[h] = values[i]?.trim() || "";
+    });
+
+    return obj;
+  });
+
+  setImportPreview(parsed);
+
+  for (const row of parsed) {
+    const branch = row.branch || "Qayyumabad";
+    const prefix = branchCodeMap[branch] || "EMP";
+    const sameBranch = employeeList.filter((e) => e.id.startsWith(prefix));
+    const next = String(sameBranch.length + 1 + Math.floor(Math.random() * 100)).padStart(3, "0");
+    const code = `${prefix}-${next}`;
+
+    const payload = {
+      employee_code: code,
+      full_name: row.name || row.full_name || "Unnamed",
+      designation: row.designation || "-",
+      department: row.department || "General",
+      branch,
+      employee_type: row.type || "Permanent",
+      salary: Number(row.salary || 0),
+      phone: row.phone || "-",
+      eobi_status: row.eobi || "Pending",
+      status: "Active",
+    };
+
+    await supabase.from("employees").insert(payload);
+    await createEmployeeAuth(payload);
+
+    setEmployeeList((prev) => [...prev, {
+      id: payload.employee_code,
+      name: payload.full_name,
+      branch: payload.branch,
+      dept: payload.department,
+      designation: payload.designation,
+      type: payload.employee_type,
+      salary: payload.salary,
+      eobi: payload.eobi_status,
+      status: payload.status,
+      phone: payload.phone,
+    }]);
+  }
+
+  setImporting(false);
+  alert(`${parsed.length} employees imported successfully.`);
+}
+
 function downloadCSV(filename, rows) {
   if (!rows.length) return;
   const headers = Object.keys(rows[0]);
@@ -197,6 +266,7 @@ function printPayslip(row, month) {
 export default function BigBuyHRMS() {
   const [active, setActive] = useState("dashboard");
   const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [role, setRole] = useState("Master");
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [employeeList, setEmployeeList] = useState(initialEmployees);
@@ -210,6 +280,8 @@ export default function BigBuyHRMS() {
   const [selectedPayslip, setSelectedPayslip] = useState(null);
   const [zktConnected, setZktConnected] = useState(false);
   const [newEmployee, setNewEmployee] = useState({ branch: "Qayyumabad", fullName: "", designation: "", department: "", salary: "", phone: "" });
+  const [importPreview, setImportPreview] = useState([]);
+  const [importing, setImporting] = useState(false);
 
   const processedAttendance = useMemo(() => demoRawPunches.map(processAttendancePunch), []);
   const visibleMenu = menu.filter((item) => item.roles.includes(role));
@@ -220,6 +292,49 @@ export default function BigBuyHRMS() {
   const portalPayroll = generatedPayroll.find((p) => p.employeeCode === portalEmployee?.id) || generatedPayroll[0];
 
   useEffect(() => {
+    async function initializeAuth() {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (session?.user) {
+        const metadata = session.user.user_metadata || {};
+        const role = metadata.role || "Employee";
+
+        setCurrentUser({
+          name: metadata.name || session.user.email,
+          email: session.user.email,
+          role,
+          employeeCode: metadata.employeeCode || null,
+        });
+
+        setRole(role);
+        setActive(role === "Employee" ? "portal" : "dashboard");
+      }
+
+      supabase.auth.onAuthStateChange((_event, session) => {
+        if (session?.user) {
+          const metadata = session.user.user_metadata || {};
+          const role = metadata.role || "Employee";
+
+          setCurrentUser({
+            name: metadata.name || session.user.email,
+            email: session.user.email,
+            role,
+            employeeCode: metadata.employeeCode || null,
+          });
+
+          setRole(role);
+        } else {
+          setCurrentUser(null);
+        }
+
+        setAuthLoading(false);
+      });
+
+      setAuthLoading(false);
+    }
+
+    initializeAuth();
+
     async function loadEmployees() {
       setLoadingEmployees(true);
       const { data, error } = await supabase.from("employees").select("*").order("created_at", { ascending: true });
@@ -245,13 +360,53 @@ export default function BigBuyHRMS() {
     setCurrentUser(users[selectedRole]); setRole(selectedRole); setActive(selectedRole === "Employee" ? "portal" : "dashboard");
   }
 
-  function handleLogin(e) {
+  async function handleLogin(e) {
     e.preventDefault();
-    const email = loginForm.email.toLowerCase();
-    if (email.includes("hr")) return demoLogin("HR");
-    if (email.includes("finance") || email.includes("account")) return demoLogin("Finance");
-    if (email.includes("employee") || email.includes("staff")) return demoLogin("Employee");
-    return demoLogin("Master");
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: loginForm.email,
+      password: loginForm.password,
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (data?.user) {
+      const metadata = data.user.user_metadata || {};
+      const role = metadata.role || "Employee";
+
+      setCurrentUser({
+        name: metadata.name || data.user.email,
+        email: data.user.email,
+        role,
+        employeeCode: metadata.employeeCode || null,
+      });
+
+      setRole(role);
+      setActive(role === "Employee" ? "portal" : "dashboard");
+    }
+  }
+
+  async function createEmployeeAuth(employee, password = "123456") {
+    try {
+      const fakeEmail = `${employee.employee_code.toLowerCase()}@thebigbuy.pk`;
+
+      await supabase.auth.signUp({
+        email: fakeEmail,
+        password,
+        options: {
+          data: {
+            name: employee.full_name,
+            role: "Employee",
+            employeeCode: employee.employee_code,
+          },
+        },
+      });
+    } catch (e) {
+      console.log("Auth creation skipped", e.message);
+    }
   }
 
   async function saveEmployee() {
@@ -261,6 +416,8 @@ export default function BigBuyHRMS() {
     const code = `${prefix}-${next}`;
     const payload = { employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation, department: newEmployee.department, branch: newEmployee.branch, employee_type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone, eobi_status: "Pending", status: "Active" };
     const { error } = await supabase.from("employees").insert(payload);
+
+    await createEmployeeAuth(payload);
     if (error) return alert(`Error: ${error.message}`);
     setEmployeeList((prev) => [...prev, { id: code, name: newEmployee.fullName, branch: newEmployee.branch, dept: newEmployee.department, designation: newEmployee.designation, type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone || "-", eobi: "Pending", status: "Active" }]);
     setNewEmployee({ branch: "Qayyumabad", fullName: "", designation: "", department: "", salary: "", phone: "" }); setShowEmployeeForm(false);
@@ -278,6 +435,17 @@ export default function BigBuyHRMS() {
     const { error } = await supabase.from("employees").update({ status }).eq("employee_code", id);
     if (error) return alert(`Status update failed: ${error.message}`);
     setEmployeeList((prev) => prev.map((e) => e.id === id ? { ...e, status } : e));
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <div className="text-5xl mb-4">🏢</div>
+          <div className="text-xl font-bold">Loading Big Buy HRMS...</div>
+        </div>
+      </div>
+    );
   }
 
   if (!currentUser) {
@@ -298,12 +466,18 @@ export default function BigBuyHRMS() {
         <aside className="hidden lg:flex w-72 min-h-screen bg-slate-950 text-white p-5 flex-col fixed left-0 top-0 bottom-0">
           <div className="mb-8"><div className="text-2xl font-bold">Big Buy HRMS</div><div className="text-slate-400 text-sm mt-1">Staff • Attendance • Payroll</div></div>
           <nav className="space-y-2 overflow-y-auto">{visibleMenu.map((item) => <button key={item.key} onClick={() => setActive(item.key)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-left transition ${active === item.key ? "bg-white text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}><span>{item.icon}</span><span>{item.label}</span></button>)}</nav>
-          <div className="mt-auto p-4 bg-slate-900 rounded-2xl"><div className="text-sm font-semibold">{currentUser.name}</div><div className="text-xs text-slate-400 mt-1">Role: {role}</div><Button variant="secondary" className="rounded-xl w-full mt-3" onClick={() => setCurrentUser(null)}>Logout</Button></div>
+          <div className="mt-auto p-4 bg-slate-900 rounded-2xl"><div className="text-sm font-semibold">{currentUser.name}</div><div className="text-xs text-slate-400 mt-1">Role: {role}</div><Button variant="secondary" className="rounded-xl w-full mt-3" onClick={async () => {
+              await supabase.auth.signOut();
+              setCurrentUser(null);
+            }}>Logout</Button></div>
         </aside>
 
         <main className="flex-1 p-4 md:p-8 lg:ml-72">
           <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 mb-4">
-            <Card className="rounded-2xl shadow-sm border border-slate-100 xl:col-span-3"><CardContent className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div className="font-bold text-slate-950">Logged in: {currentUser.name}</div><div className="text-sm text-slate-500">Role: {role} • {currentUser.email}</div></div><div className="flex gap-2 items-center">{currentUser.role === "Master" && <select value={role} onChange={(e) => setRole(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white outline-none"><option>Master</option><option>HR</option><option>Finance</option><option>Employee</option></select>}<Button variant="outline" className="rounded-2xl" onClick={() => setCurrentUser(null)}>Logout</Button></div></CardContent></Card>
+            <Card className="rounded-2xl shadow-sm border border-slate-100 xl:col-span-3"><CardContent className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3"><div><div className="font-bold text-slate-950">Logged in: {currentUser.name}</div><div className="text-sm text-slate-500">Role: {role} • {currentUser.email}</div></div><div className="flex gap-2 items-center">{currentUser.role === "Master" && <select value={role} onChange={(e) => setRole(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200 bg-white outline-none"><option>Master</option><option>HR</option><option>Finance</option><option>Employee</option></select>}<Button variant="outline" className="rounded-2xl" onClick={async () => {
+              await supabase.auth.signOut();
+              setCurrentUser(null);
+            }}>Logout</Button></div></CardContent></Card>
             <Card className="rounded-2xl shadow-sm border border-slate-100"><CardContent className="p-4"><div className="font-bold mb-3">System Status</div><div className="space-y-2 text-sm"><div className="flex justify-between"><span>Database</span><Badge tone="green">Connected</Badge></div><div className="flex justify-between"><span>ZKT</span><Badge tone={zktConnected ? "green" : "yellow"}>{zktConnected ? "Live" : "Ready"}</Badge></div><div className="flex justify-between"><span>Payroll</span><Badge tone={payrollStatus === "Locked" ? "red" : "blue"}>{payrollStatus}</Badge></div></div></CardContent></Card>
           </div>
           <div className="lg:hidden mb-4 bg-slate-950 text-white rounded-2xl p-4"><div className="font-bold text-xl">Big Buy HRMS</div><div className="flex gap-2 overflow-x-auto mt-4 pb-1">{visibleMenu.map((item) => <Button key={item.key} onClick={() => setActive(item.key)} variant="secondary" className="rounded-xl whitespace-nowrap">{item.icon} {item.label}</Button>)}</div></div>
@@ -327,6 +501,7 @@ export default function BigBuyHRMS() {
           {active === "portal" && <div><PageTitle title="Employee Self-Service Portal" subtitle="Employee can view own attendance, payslip, loan and requests." action={<Button className="rounded-2xl">Apply Leave</Button>} /><div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6"><StatCard title="Employee" value={portalEmployee?.name || "Employee"} sub={portalEmployee?.id} icon="🧑‍💼" /><StatCard title="Salary Slip" value={portalPayroll ? money(portalPayroll.finalSalary) : "N/A"} sub={payrollMonth} icon="🧾" /><StatCard title="Loan Balance" value={money(loans.find((l) => l.employeeCode === portalEmployee?.id)?.balance || 0)} sub="Current balance" icon="💳" /></div>{portalPayroll && <PayslipCard row={portalPayroll} month={payrollMonth} close={() => {}} />}</div>}
 
           {active === "reports" && <ReportCards />}
+          {active === "imports" && <ImportCenter importing={importing} importPreview={importPreview} importEmployeesFromCSV={importEmployeesFromCSV} />}
           {active === "exports" && <ExportCenter employees={employeeList} payroll={generatedPayroll} attendance={processedAttendance} loans={loans} />}
           {active === "users" && <UsersRoles />}
         </main>
@@ -354,6 +529,61 @@ function ReportCards() {
 function ExportCenter({ employees, payroll, attendance, loans }) {
   const exports = [{ title: "Employee Master", data: employees }, { title: "Attendance", data: attendance }, { title: "Payroll", data: payroll }, { title: "Loan Balance", data: loans }];
   return <div><PageTitle title="Excel Export Center" subtitle="Download Excel-compatible CSV backups anytime." action={<Button className="rounded-2xl" onClick={() => exports.forEach((x) => downloadCSV(`${x.title}.csv`, x.data))}>Export All</Button>} /><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">{exports.map((x) => <Card key={x.title} className="rounded-2xl shadow-sm border border-slate-100"><CardContent className="p-5"><div className="h-12 w-12 rounded-2xl bg-slate-100 flex items-center justify-center text-2xl">📊</div><h3 className="font-bold mt-4">{x.title}</h3><p className="text-sm text-slate-500 mt-2">Download {x.data.length} records.</p><Button variant="outline" className="rounded-2xl mt-4 w-full" onClick={() => downloadCSV(`${x.title}.csv`, x.data)}>Download</Button></CardContent></Card>)}</div></div>;
+}
+
+function ImportCenter({ importing, importPreview, importEmployeesFromCSV }) {
+  return (
+    <div>
+      <PageTitle
+        title="Employee Import Center"
+        subtitle="Upload CSV employee sheets and auto-create employee accounts."
+        action={<Badge tone="blue">CSV Upload Enabled</Badge>}
+      />
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
+        <StatCard title="Import Status" value={importing ? "IMPORTING" : "READY"} sub="Bulk employee creation" icon="📥" />
+        <StatCard title="Preview Rows" value={importPreview.length} sub="Detected records" icon="👥" />
+        <StatCard title="Auto Login" value="Enabled" sub="Creates employee auth" icon="🔐" />
+      </div>
+
+      <Card className="rounded-2xl shadow-sm border border-slate-100 mb-6">
+        <CardContent className="p-6">
+          <h2 className="text-lg font-bold mb-3">Upload Employee CSV</h2>
+
+          <div className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300">
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) importEmployeesFromCSV(file);
+              }}
+            />
+
+            <p className="text-sm text-slate-500 mt-3">
+              Required columns: name, designation, department, branch, salary, phone
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {importPreview.length > 0 && (
+        <Table
+          headers={["Name", "Designation", "Department", "Branch", "Salary"]}
+          rows={importPreview}
+          renderRow={(r, i) => (
+            <tr key={i}>
+              <td className="px-4 py-3 font-medium">{r.name || r.full_name}</td>
+              <td className="px-4 py-3">{r.designation}</td>
+              <td className="px-4 py-3">{r.department}</td>
+              <td className="px-4 py-3">{r.branch}</td>
+              <td className="px-4 py-3">{money(r.salary)}</td>
+            </tr>
+          )}
+        />
+      )}
+    </div>
+  );
 }
 
 function UsersRoles() {
