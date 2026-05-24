@@ -573,11 +573,44 @@ function ImportCenter({ importing, importPreview, importEmployeesFromCSV }) {
               key={Date.now()}
               type="file"
               accept=".csv,.xls,.xlsx"
+              id="employee-import"
+              className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) importEmployeesFromCSV(file);
+                if (file) {
+                  window.selectedEmployeeImportFile = file;
+                }
               }}
             />
+
+            <div className="flex flex-wrap gap-3 mt-4">
+              <label
+                htmlFor="employee-import"
+                className="px-4 py-2 rounded-2xl bg-slate-950 text-white cursor-pointer text-sm font-medium"
+              >
+                Choose File
+              </label>
+
+              <Button
+                className="rounded-2xl"
+                onClick={() => {
+                  if (!window.selectedEmployeeImportFile) {
+                    alert("Please choose a file first.");
+                    return;
+                  }
+
+                  importEmployeesFromCSV(window.selectedEmployeeImportFile)
+                    .then(() => {
+                      alert("File processed successfully.");
+                    })
+                    .catch((err) => {
+                      alert(`Import failed: ${err.message}`);
+                    });
+                }}
+              >
+                Upload Employees
+              </Button>
+            </div>
 
             <p className="text-sm text-slate-500 mt-3">
               Required columns: name, designation, department, branch, salary, phone
