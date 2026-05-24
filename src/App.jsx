@@ -172,10 +172,28 @@ function StatusBadge({ status }) {
 }
 
 async function importEmployeesFromCSV(file) {
+  if (!file) return;
+
+  const extension = file.name.split(".").pop()?.toLowerCase();
+
+  if (!["csv", "xls", "xlsx"].includes(extension)) {
+    alert("Only CSV, XLS and XLSX files are allowed.");
+    return;
+  }
+
   setImporting(true);
 
-  const text = await file.text();
-  const lines = text.split("\n").filter(Boolean);
+  let text = "";
+
+  if (extension === "csv") {
+    text = await file.text();
+  } else {
+    alert("XLS/XLSX support UI added. Full Excel parsing requires SheetJS package in next deployment.");
+    setImporting(false);
+    return;
+  }
+  const lines = text.split("
+").filter(Boolean);
 
   if (lines.length < 2) {
     alert("CSV file is empty");
@@ -242,7 +260,8 @@ async function importEmployeesFromCSV(file) {
 function downloadCSV(filename, rows) {
   if (!rows.length) return;
   const headers = Object.keys(rows[0]);
-  const csv = [headers.join(","), ...rows.map((r) => headers.map((h) => `"${String(r[h] ?? "").replaceAll('"', '""')}"`).join(","))].join("\\n");
+  const csv = [headers.join(","), ...rows.map((r) => headers.map((h) => `"${String(r[h] ?? "").replaceAll('"', '""')}"`).join(","))].join("
+");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -551,8 +570,9 @@ function ImportCenter({ importing, importPreview, importEmployeesFromCSV }) {
 
           <div className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300">
             <input
+              key={Date.now()}
               type="file"
-              accept=".csv"
+              accept=".csv,.xls,.xlsx"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) importEmployeesFromCSV(file);
