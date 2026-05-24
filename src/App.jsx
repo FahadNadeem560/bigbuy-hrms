@@ -172,6 +172,7 @@ function StatusBadge({ status }) {
 }
 
 async function importEmployeesFromCSV(file) {
+  setImporting(true);
   if (!file) return;
 
   const extension = file.name.split(".").pop()?.toLowerCase();
