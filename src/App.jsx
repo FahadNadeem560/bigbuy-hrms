@@ -7,22 +7,25 @@ const SUPABASE_ANON_KEY = "sb_publishable_Zm7dA_mLxb8ci8r5loLryQ_NBx9WSoF";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const branchCodeMap = {
-  Qayyumabad: "QAD",
-  "PAF Faisal": "PAF",
-  Korangi: "KOR",
-  Clifton: "CLF",
+  "HO - Admin": "HO",
+  "Main Branch": "MAIN",
+  "DHA Branch": "DHA",
+  "WAREHOUSE": "WH",
+  "Warehouse": "WH",
+  "BASE FAISAL": "PAF",
+  "Base Faisal": "PAF",
 };
 
 const staffLevelPolicies = {
   Management: {
     label: "Management",
-    defaultShiftStart: "10:30",
-    defaultShiftEnd: "19:30",
+    defaultShiftStart: "00:00",
+    defaultShiftEnd: "00:00",
     requiredHours: 9,
     breakMinutes: 60,
-    graceMinutes: 30,
-    halfDayLateMinutes: 120,
-    halfDayEarlyOutMinutes: 120,
+    graceMinutes: 0,
+    halfDayLateMinutes: 0,
+    halfDayEarlyOutMinutes: 0,
     latePenaltyCount: 3,
     latePenaltyDays: 0,
     overtimeEligible: false,
@@ -33,25 +36,25 @@ const staffLevelPolicies = {
   },
   "Floor Management": {
     label: "Floor Management",
-    defaultShiftStart: "10:45",
-    defaultShiftEnd: "21:15",
+    defaultShiftStart: "11:00",
+    defaultShiftEnd: "21:30",
     requiredHours: 10.5,
     breakMinutes: 45,
-    graceMinutes: 20,
-    halfDayLateMinutes: 120,
-    halfDayEarlyOutMinutes: 120,
+    graceMinutes: 15,
+    halfDayLateMinutes: 90,
+    halfDayEarlyOutMinutes: 90,
     latePenaltyCount: 3,
     latePenaltyDays: 1,
-    overtimeEligible: true,
-    overtimeAfterHours: 10.5,
+    overtimeEligible: false,
+    overtimeAfterHours: 0,
     overtimeNeedsApproval: true,
     adjustShortHoursAgainstOT: true,
     noticeDays: 45,
   },
   "Non-Management": {
     label: "Non-Management",
-    defaultShiftStart: "10:45",
-    defaultShiftEnd: "21:15",
+    defaultShiftStart: "11:00",
+    defaultShiftEnd: "21:30",
     requiredHours: 10.5,
     breakMinutes: 45,
     graceMinutes: 15,
@@ -251,45 +254,91 @@ function StatusBadge({ status }) {
 }
 
 function normalizeHeader(value) {
-  return String(value || "").trim().toLowerCase().replaceAll(" ", "_").replaceAll("-", "_");
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll(".", "")
+    .replaceAll("/", "_")
+    .replaceAll(" ", "_")
+    .replaceAll("-", "_");
+}
+
+function normalizeBranch(value) {
+  const raw = String(value || "").trim();
+  const key = raw.toLowerCase().replace(/\s+/g, " ");
+  const matches = {
+    "ho - admin": "HO - Admin",
+    "ho-admin": "HO - Admin",
+    "main branch": "Main Branch",
+    "dha branch": "DHA Branch",
+    "warehouse": "WAREHOUSE",
+    "base faisal": "BASE FAISAL",
+    "paf faisal": "BASE FAISAL",
+  };
+  return matches[key] || raw;
+}
+
+function normalizeStaffLevel(value) {
+  const raw = String(value || "").trim().toLowerCase().replaceAll("-", " ");
+  if (raw === "management") return "Management";
+  if (raw === "floor management") return "Floor Management";
+  if (raw === "non management" || raw === "nonmanagement") return "Non-Management";
+  return String(value || "").trim() || "Non-Management";
+}
+
+function normalizeSalary(value) {
+  const cleaned = String(value ?? "").replace(/[^0-9.-]/g, "");
+  if (!cleaned) return "";
+  const numeric = Number(cleaned);
+  return Number.isFinite(numeric) ? numeric : "";
 }
 
 function normalizeImportRow(row) {
   const clean = {};
   Object.entries(row || {}).forEach(([key, value]) => { clean[normalizeHeader(key)] = String(value ?? "").trim(); });
+  const phone = clean.whatsapp_number || clean.whatsapp || clean.phone || clean.mobile || "";
   return {
-    employee_code: clean.employee_code || clean.employee_id || clean.id || "",
+    employee_code: clean.employee_code || clean.employee_id || clean.empid || clean.emp_id || clean.id || "",
     name: clean.name || clean.full_name || clean.employee_name || "",
     designation: clean.designation || "",
     department: clean.department || clean.dept || "",
-    branch: clean.branch || "",
-    level: clean.level || clean.staff_level || "Non-Management",
+    category_department: clean.category_department || clean.category_dept || "",
+    branch: normalizeBranch(clean.branch || clean.payroll_branch || clean.location || ""),
+    level: normalizeStaffLevel(clean.level || clean.staff_level || ""),
     employee_type: clean.employee_type || clean.type || "Permanent",
-    salary: clean.salary || clean.gross_salary || "",
-    phone: clean.phone || clean.mobile || "",
+    salary: normalizeSalary(clean.salary || clean.gross_salary || clean.basic_salary || ""),
+    phone,
+    whatsapp_number: phone,
+    cnic: clean.cnic || clean.nic_number || clean.nic || "",
+    fathers_cnic: clean.fathers_cnic || clean.father_cnic || clean.father_nic || "",
     joining_date: clean.joining_date || clean.date_of_joining || "",
     eobi_status: clean.eobi_status || clean.eobi || "Pending",
-    cnic: clean.cnic || "",
-    shift: clean.shift || "",
+    status: clean.status || clean.payroll_status || "Active",
+    shift: clean.shift || clean.assigned_shift_code || "",
   };
 }
 
-function validateEmployeeImportRows(rows, existingEmployees) {
+function validateEmployeeImportRows(rows) {
   const validBranches = Object.keys(branchCodeMap);
   const validLevels = Object.keys(staffLevelPolicies);
-  const existingCodes = new Set(existingEmployees.map((e) => e.id));
   const seenCodes = new Set();
   return rows.map((row, index) => {
     const errors = [];
+    if (!row.employee_code) errors.push("Employee ID is required");
     if (!row.name) errors.push("Name is required");
     if (!row.branch) errors.push("Branch is required");
     else if (!validBranches.includes(row.branch)) errors.push("Invalid branch");
     if (!validLevels.includes(row.level)) errors.push("Invalid level");
-    if (!row.salary || Number.isNaN(Number(row.salary))) errors.push("Invalid salary");
-    if (row.employee_code && existingCodes.has(row.employee_code)) errors.push("Employee ID already exists");
+    // Salary is optional during employee master onboarding and can be completed later.
+    if (row.salary !== "" && Number.isNaN(Number(row.salary))) errors.push("Invalid salary");
+    // These are compulsory for new enrolment, but are not blocking this first legacy data migration.
+    const missingRequiredDetails = [];
+    if (!row.whatsapp_number) missingRequiredDetails.push("WhatsApp");
+    if (!row.cnic) missingRequiredDetails.push("CNIC");
+    if (!row.fathers_cnic) missingRequiredDetails.push("Father's CNIC");
     if (row.employee_code && seenCodes.has(row.employee_code)) errors.push("Duplicate ID in file");
     if (row.employee_code) seenCodes.add(row.employee_code);
-    return { ...row, rowNumber: index + 2, errors, valid: errors.length === 0 };
+    return { ...row, rowNumber: index + 2, errors, missingRequiredDetails, valid: errors.length === 0 };
   });
 }
 
@@ -328,7 +377,7 @@ function downloadCSV(filename, rows) {
 
 function downloadTemplate(type) {
   const templates = {
-    employees: [{ employee_code: "", name: "Ali Raza", designation: "Salesman", department: "Grocery", branch: "Qayyumabad", level: "Non-Management", employee_type: "Permanent", salary: 42000, phone: "03001234567", joining_date: "2026-04-01", eobi_status: "Pending", cnic: "42101-0000000-0", shift: "Shift A" }],
+    employees: [{ employee_code: "1001", name: "Ali Raza", designation: "Sales Associate", department: "Grocery", category_department: "Sales", branch: "Main Branch", level: "Non-Management", employee_type: "Permanent", salary: 42000, whatsapp_number: "923001234567", cnic: "42101-0000000-0", fathers_cnic: "42101-0000001-0", joining_date: "2026-04-01", eobi_status: "Pending", status: "Active", shift: "SHIFT_A" }],
     attendance: [{ employee_code: "QAD-001", date: "2026-04-01", check_in: "10:45", check_out: "21:15", branch: "Qayyumabad", shift_start: "10:45", shift_end: "21:15" }],
     salary_adjustments: [{ employee_code: "QAD-001", commission: 0, fuel: 0, arrears: 0, bonus: 0, deduction: 0, remarks: "Monthly adjustment" }],
     loans: [{ employee_code: "QAD-001", loan_amount: 25000, monthly_deduction: 5000, start_date: "2026-04-01", months: 5, guarantor_1: "QAD-002", guarantor_2: "PAF-001", surety_details: "Asset / cheque / acceptable surety" }],
@@ -364,7 +413,7 @@ export default function BigBuyHRMS() {
   const [payrollStatus, setPayrollStatus] = useState("Draft");
   const [selectedPayslip, setSelectedPayslip] = useState(null);
   const [zktConnected, setZktConnected] = useState(false);
-  const [newEmployee, setNewEmployee] = useState({ branch: "Qayyumabad", fullName: "", designation: "", department: "", level: "Non-Management", salary: "", phone: "" });
+  const [newEmployee, setNewEmployee] = useState({ branch: "Main Branch", fullName: "", designation: "", department: "", level: "Non-Management", salary: "", phone: "" });
   const [selectedImportFile, setSelectedImportFile] = useState(null);
   const [importPreview, setImportPreview] = useState([]);
   const [importing, setImporting] = useState(false);
@@ -452,7 +501,7 @@ export default function BigBuyHRMS() {
     }
     try {
       const rawRows = await readImportFile(selectedImportFile);
-      const checked = validateEmployeeImportRows(rawRows, employeeList);
+      const checked = validateEmployeeImportRows(rawRows);
       setImportPreview(checked);
       const invalid = checked.filter((r) => !r.valid).length;
       setImportMessage(invalid ? `${checked.length} rows found. ${invalid} rows have errors; correct them before import.` : `${checked.length} rows found and ready to import.`);
@@ -474,36 +523,53 @@ export default function BigBuyHRMS() {
     }
     setImporting(true);
     setImportError("");
-    const reservedCodes = [];
-    const inserted = [];
+    setImportMessage("");
     try {
-      for (const row of validRows) {
-        const code = row.employee_code || generateNextCode(row.branch, employeeList, reservedCodes);
-        reservedCodes.push(code);
-        const payload = {
-          employee_code: code,
-          full_name: row.name,
-          designation: row.designation || "-",
-          department: row.department || "General",
-          branch: row.branch,
-          employee_type: row.employee_type || "Permanent",
-          salary: Number(row.salary || 0),
-          phone: row.phone || "-",
-          eobi_status: row.eobi_status || "Pending",
-          status: "Active",
-          joining_date: row.joining_date || null,
-        };
-        const { error } = await supabase.from("employees").insert(payload);
-        if (error) throw new Error(`${code}: ${error.message}`);
-        inserted.push({
-          id: code, name: payload.full_name, branch: payload.branch, dept: payload.department,
-          designation: payload.designation, level: row.level, type: payload.employee_type,
-          salary: payload.salary, eobi: payload.eobi_status, status: payload.status,
-          phone: payload.phone, joiningDate: payload.joining_date || "",
-        });
+      const rowsForUpload = validRows.map((row) => ({
+        employee_code: row.employee_code,
+        full_name: row.name,
+        designation: row.designation,
+        department: row.department,
+        category_department: row.category_department,
+        branch: row.branch,
+        staff_level: row.level,
+        employee_type: row.employee_type,
+        salary: row.salary === "" ? 0 : Number(row.salary),
+        phone: row.phone,
+        whatsapp_number: row.whatsapp_number,
+        cnic: row.cnic,
+        fathers_cnic: row.fathers_cnic,
+        joining_date: row.joining_date,
+        eobi_status: row.eobi_status,
+        status: row.status,
+        shift: row.shift,
+      }));
+      const { data, error } = await supabase.rpc("import_employee_master_batch", {
+        p_rows: rowsForUpload,
+        p_source_filename: selectedImportFile?.name || "Employee Master Upload",
+      });
+      if (error) throw new Error(error.message);
+      const result = Array.isArray(data) ? data[0] : data;
+      const imported = Number(result?.imported_or_updated || 0);
+      const rejected = Number(result?.rejected || 0);
+      setImportMessage(`${imported} employees imported/updated successfully.${rejected ? ` ${rejected} rows were rejected.` : ""}`);
+      const { data: refreshed, error: refreshError } = await supabase.from("employees").select("*").order("created_at", { ascending: true });
+      if (!refreshError && refreshed) {
+        setEmployeeList(refreshed.map((emp) => ({
+          id: emp.employee_code,
+          name: emp.full_name,
+          branch: emp.branch,
+          dept: emp.department,
+          designation: emp.designation || "-",
+          level: emp.staff_level || "Non-Management",
+          type: emp.employee_type || "Permanent",
+          salary: emp.salary || 0,
+          eobi: emp.eobi_status || "Pending",
+          status: emp.status || "Active",
+          phone: emp.phone || emp.whatsapp_number || "-",
+          joiningDate: emp.joining_date || "",
+        })));
       }
-      setEmployeeList((prev) => [...prev, ...inserted]);
-      setImportMessage(`${inserted.length} employees imported successfully.`);
       setSelectedImportFile(null);
       setImportPreview([]);
     } catch (error) {
@@ -563,7 +629,7 @@ function EmployeeEdit({ employee, setEmployee, save, close }) {
 
 function ImportCenter({ selectedFile, setSelectedFile, preview, importing, message, error, onPreview, onImport }) {
   const invalidCount = preview.filter((row) => !row.valid).length;
-  return <div><PageTitle title="Import Center" subtitle="Download Excel templates, upload employee details, preview errors and confirm import." /><Card className="rounded-2xl border border-slate-100 shadow-sm mb-6"><CardContent className="p-6"><h2 className="text-lg font-bold mb-3">Download Templates</h2><div className="grid grid-cols-1 md:grid-cols-5 gap-3">{["employees", "attendance", "salary_adjustments", "loans", "leaves"].map((type) => <Button key={type} variant="outline" className="rounded-2xl" onClick={() => downloadTemplate(type)}>{type.replaceAll("_", " ")}</Button>)}</div></CardContent></Card><Card className="rounded-2xl border border-slate-100 shadow-sm mb-6"><CardContent className="p-6"><h2 className="text-lg font-bold mb-3">Upload Employee File</h2><input type="file" accept=".csv,.xls,.xlsx" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} className="block w-full text-sm mb-3" />{selectedFile && <p className="text-sm text-slate-600 mb-3">Selected: <b>{selectedFile.name}</b></p>}<div className="flex gap-3"><Button onClick={onPreview} className="rounded-2xl">Preview File</Button><Button onClick={onImport} disabled={importing || !preview.length || invalidCount > 0} className="rounded-2xl">{importing ? "Importing..." : "Confirm Import"}</Button></div>{message && <div className="mt-4 p-3 rounded-xl bg-blue-50 text-blue-700">{message}</div>}{error && <div className="mt-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}</CardContent></Card>{preview.length > 0 && <Table headers={["Row", "Employee ID", "Name", "Branch", "Level", "Salary", "Status"]} rows={preview} renderRow={(r) => <tr key={r.rowNumber}><td className="px-4 py-3">{r.rowNumber}</td><td className="px-4 py-3">{r.employee_code || "Auto"}</td><td className="px-4 py-3">{r.name}</td><td className="px-4 py-3">{r.branch}</td><td className="px-4 py-3">{r.level}</td><td className="px-4 py-3">{money(r.salary)}</td><td className="px-4 py-3"><Badge tone={r.valid ? "green" : "red"}>{r.valid ? "Ready" : r.errors.join(", ")}</Badge></td></tr>} />}</div>;
+  return <div><PageTitle title="Import Center" subtitle="Download Excel templates, upload employee details, preview errors and confirm import." /><Card className="rounded-2xl border border-slate-100 shadow-sm mb-6"><CardContent className="p-6"><h2 className="text-lg font-bold mb-3">Download Templates</h2><div className="grid grid-cols-1 md:grid-cols-5 gap-3">{["employees", "attendance", "salary_adjustments", "loans", "leaves"].map((type) => <Button key={type} variant="outline" className="rounded-2xl" onClick={() => downloadTemplate(type)}>{type.replaceAll("_", " ")}</Button>)}</div></CardContent></Card><Card className="rounded-2xl border border-slate-100 shadow-sm mb-6"><CardContent className="p-6"><h2 className="text-lg font-bold mb-3">Upload Employee File</h2><input type="file" accept=".csv,.xls,.xlsx" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} className="block w-full text-sm mb-3" />{selectedFile && <p className="text-sm text-slate-600 mb-3">Selected: <b>{selectedFile.name}</b></p>}<div className="flex gap-3"><Button onClick={onPreview} className="rounded-2xl">Preview File</Button><Button onClick={onImport} disabled={importing || !preview.length || invalidCount > 0} className="rounded-2xl">{importing ? "Importing..." : "Confirm Import"}</Button></div>{message && <div className="mt-4 p-3 rounded-xl bg-blue-50 text-blue-700">{message}</div>}{error && <div className="mt-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}</CardContent></Card>{preview.length > 0 && <Table headers={["Row", "Employee ID", "Name", "Branch", "Level", "Salary", "Status"]} rows={preview} renderRow={(r) => <tr key={r.rowNumber}><td className="px-4 py-3">{r.rowNumber}</td><td className="px-4 py-3">{r.employee_code || "Auto"}</td><td className="px-4 py-3">{r.name}</td><td className="px-4 py-3">{r.branch}</td><td className="px-4 py-3">{r.level}</td><td className="px-4 py-3">{money(r.salary)}</td><td className="px-4 py-3"><Badge tone={!r.valid ? "red" : r.missingRequiredDetails?.length ? "yellow" : "green"}>{!r.valid ? r.errors.join(", ") : r.missingRequiredDetails?.length ? `Ready - complete later: ${r.missingRequiredDetails.join(", ")}` : "Ready"}</Badge></td></tr>} />}</div>;
 }
 
 function PolicyRules() {
