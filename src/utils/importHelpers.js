@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { BRANCH_ALIASES, BRANCH_CODE_MAP } from "../constants/branches";
+import { BRANCH_ALIASES, BRANCH_CODE_MAP } from "../constants/branches.js";
 
 export function normalizeHeader(value) {
   return String(value || "").trim().toLowerCase().replaceAll(".", "").replaceAll("/", "_").replaceAll(" ", "_").replaceAll("-", "_");
