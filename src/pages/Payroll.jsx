@@ -1,7 +1,7 @@
 import React from "react";
-import { Button, PageTitle, Table } from "../components/ui";
-import { money } from "../utils/format";
-import { downloadCSV } from "../utils/downloads";
+import { Button, PageTitle, Table } from "../components/ui.js";
+import { money } from "../utils/format.js";
+import { downloadCSV } from "../utils/downloads.js";
 
 export default function Payroll({ rows, selectedPayslip, setSelectedPayslip, payrollMonth, PayslipCard }) {
   return (
