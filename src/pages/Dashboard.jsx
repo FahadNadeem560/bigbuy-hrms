@@ -1,5 +1,5 @@
 import React from "react";
-import { Button, PageTitle, StatCard } from "../components/ui.js";
+import { Button, PageTitle, StatCard } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 
 export default function Dashboard({ activeEmployees, attendanceRows, payrollRows, payrollStatus, setActive }) {
