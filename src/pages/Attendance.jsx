@@ -1,7 +1,7 @@
 import React from "react";
-import { Button, PageTitle, Table } from "../components/ui";
-import StatusBadge from "../components/StatusBadge";
-import { downloadCSV } from "../utils/downloads";
+import { Button, PageTitle, Table } from "../components/ui.js";
+import StatusBadge from "../components/StatusBadge.jsx";
+import { downloadCSV } from "../utils/downloads.js";
 
 export default function Attendance({ rows }) {
   return (
