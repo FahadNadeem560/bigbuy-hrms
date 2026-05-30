@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import Layout from "./components/Layout.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Attendance from "./pages/Attendance.jsx";
-import Payroll from "./pages/PayrollSafe.jsx";
+import Payroll from "./pages/Payroll.jsx";
 import Imports from "./pages/Imports.jsx";
 import Policies from "./pages/Policies.jsx";
 import Exports from "./pages/Exports.jsx";
