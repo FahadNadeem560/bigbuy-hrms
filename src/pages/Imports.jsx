@@ -1,5 +1,5 @@
 import React from "react";
-import { Badge, Button, Card, CardContent, PageTitle, Table } from "../components/ui.js";
+import { Badge, Button, Card, CardContent, PageTitle, Table } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { downloadTemplate } from "../utils/downloads.js";
 
