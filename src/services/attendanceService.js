@@ -1,4 +1,4 @@
-import { supabase } from "../lib/supabaseClient";
+import { supabase } from "../lib/supabaseClient.js";
 
 export async function fetchRecentAttendance(limit = 200) {
   const { data, error } = await supabase
@@ -27,4 +27,13 @@ export async function fetchAttendanceImportBatches(limit = 50) {
     .limit(limit);
   if (error) throw error;
   return data || [];
+}
+
+export async function importZKTRawPunches(rows, sourceFilename) {
+  const { data, error } = await supabase.rpc("import_zkt_raw_punches", {
+    p_rows: rows,
+    p_source_filename: sourceFilename || "manual-zkt-upload",
+  });
+  if (error) throw error;
+  return Array.isArray(data) ? data[0] : data;
 }
