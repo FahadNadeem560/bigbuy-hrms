@@ -1,0 +1,16 @@
+export const MENU_ITEMS = [
+  { key: "dashboard", label: "Dashboard", icon: "🏢", roles: ["Master", "HR", "Finance"] },
+  { key: "employees", label: "Employees", icon: "👥", roles: ["Master", "HR"] },
+  { key: "attendance", label: "Attendance", icon: "⏱️", roles: ["Master", "HR", "Finance", "Employee"] },
+  { key: "zkt", label: "ZKT Live Sync", icon: "🛰️", roles: ["Master", "HR"] },
+  { key: "audit", label: "Attendance Audit", icon: "🕵️", roles: ["Master", "HR"] },
+  { key: "payroll", label: "Payroll", icon: "💰", roles: ["Master", "Finance"] },
+  { key: "approval", label: "Salary Approval", icon: "🔒", roles: ["Master", "Finance"] },
+  { key: "loans", label: "Loans", icon: "💳", roles: ["Master", "HR", "Finance", "Employee"] },
+  { key: "portal", label: "Employee Portal", icon: "🧑‍💼", roles: ["Master", "Employee"] },
+  { key: "reports", label: "Reports", icon: "📄", roles: ["Master", "HR", "Finance"] },
+  { key: "imports", label: "Import Center", icon: "📥", roles: ["Master", "HR"] },
+  { key: "exports", label: "Excel Export", icon: "📊", roles: ["Master", "HR", "Finance"] },
+  { key: "policies", label: "Policy Rules", icon: "⚙️", roles: ["Master", "HR"] },
+  { key: "users", label: "Users & Roles", icon: "🔐", roles: ["Master"] },
+];
