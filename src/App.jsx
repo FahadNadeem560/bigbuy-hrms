@@ -9,23 +9,36 @@ import Policies from "./pages/Policies.jsx";
 import Exports from "./pages/Exports.jsx";
 import ZKTSync from "./pages/ZKTSync.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
-import { processAttendancePunch } from "./utils/attendanceRules.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
 import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
 import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch } from "./services/employeeService.js";
+import { fetchRecentAttendance } from "./services/attendanceService.js";
 
 const demoUser = { name: "Fahad Nadeem", email: "fahad-nadeem@hotmail.com", role: "Master" };
 const demoLoans = [];
 const demoAdjustments = {};
-const demoRawPunches = [
-  { employeeCode: "1001", name: "Demo Employee", level: "Non-Management", date: "2026-04-01", checkIn: "11:00", checkOut: "21:45", branch: "Main Branch", shiftStart: "11:00", shiftEnd: "21:30" },
-];
+
+function mapAttendanceRow(row) {
+  return {
+    employeeCode: row.employee_code || "",
+    name: row.employee_code || "",
+    level: row.eligibility_group || "",
+    date: row.work_date || row.attendance_date || "",
+    checkIn: row.check_in ? String(row.check_in).slice(11, 16) : "",
+    checkOut: row.check_out ? String(row.check_out).slice(11, 16) : "",
+    actualHours: Number(row.actual_hours || row.worked_hours || 0),
+    lateMinutes: Number(row.late_minutes || 0),
+    overtimeHours: Number(row.overtime_hours || 0),
+    status: row.attendance_status || "Pending",
+  };
+}
 
 export default function BigBuyHRMS() {
   const [active, setActive] = useState("dashboard");
   const [role, setRole] = useState("Master");
   const [employees, setEmployees] = useState([]);
+  const [attendanceRows, setAttendanceRows] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [query, setQuery] = useState("");
   const [branch, setBranch] = useState("All");
@@ -39,7 +52,6 @@ export default function BigBuyHRMS() {
   const [error, setError] = useState("");
   const [selectedPayslip, setSelectedPayslip] = useState(null);
   const visibleMenu = useMemo(() => MENU_ITEMS.filter((item) => item.roles.includes(role)), [role]);
-  const attendanceRows = useMemo(() => demoRawPunches.map(processAttendancePunch), []);
   const filteredEmployees = useMemo(() => employees.filter((employee) => (branch === "All" || employee.branch === branch) && `${employee.name} ${employee.id} ${employee.dept} ${employee.phone}`.toLowerCase().includes(query.toLowerCase())), [employees, branch, query]);
   const activeEmployees = useMemo(() => employees.filter((employee) => employee.status === "Active"), [employees]);
   const payrollRows = useMemo(() => activeEmployees.map((employee) => calculatePayrollForEmployee(employee, demoAdjustments[employee.id] || {}, demoLoans)), [activeEmployees]);
@@ -56,7 +68,16 @@ export default function BigBuyHRMS() {
     }
   }
 
-  useEffect(() => { loadEmployees(); }, []);
+  async function loadAttendance() {
+    try {
+      const rows = await fetchRecentAttendance(500);
+      setAttendanceRows((rows || []).map(mapAttendanceRow));
+    } catch (err) {
+      setError(`Attendance load failed: ${err.message}`);
+    }
+  }
+
+  useEffect(() => { loadEmployees(); loadAttendance(); }, []);
 
   async function saveEmployee() {
     const code = `EMP-${String(Date.now()).slice(-6)}`;
