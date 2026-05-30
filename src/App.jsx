@@ -7,6 +7,7 @@ import Payroll from "./pages/Payroll.jsx";
 import Imports from "./pages/Imports.jsx";
 import Policies from "./pages/Policies.jsx";
 import Exports from "./pages/Exports.jsx";
+import ZKTSync from "./pages/ZKTSync.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
 import { processAttendancePunch } from "./utils/attendanceRules.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
@@ -123,6 +124,7 @@ export default function BigBuyHRMS() {
       {error && <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}
       {active === "dashboard" && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
       {active === "employees" && <Employees query={query} setQuery={setQuery} branch={branch} setBranch={setBranch} showEmployeeForm={showEmployeeForm} setShowEmployeeForm={setShowEmployeeForm} newEmployee={newEmployee} setNewEmployee={setNewEmployee} saveEmployee={saveEmployee} editingEmployee={editingEmployee} setEditingEmployee={setEditingEmployee} updateEmployee={updateEmployee} loadingEmployees={loadingEmployees} filteredEmployees={filteredEmployees} updateEmployeeStatus={updateEmployeeStatus} />}
+      {active === "zkt" && <ZKTSync />}
       {active === "attendance" && <Attendance rows={attendanceRows} />}
       {active === "payroll" && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
       {active === "imports" && <Imports selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} />}
