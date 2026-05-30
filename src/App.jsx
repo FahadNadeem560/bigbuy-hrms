@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import Layout from "./components/Layout.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
+import Employees from "./pages/Employees.jsx";
 import Attendance from "./pages/Attendance.jsx";
 import Payroll from "./pages/Payroll.jsx";
 import Imports from "./pages/Imports.jsx";
@@ -24,6 +25,11 @@ const demoRawPunches = [
 export default function BigBuyHRMS() {
   const [active, setActive] = useState("dashboard");
   const [role, setRole] = useState("Master");
+  const [query, setQuery] = useState("");
+  const [branch, setBranch] = useState("All");
+  const [showEmployeeForm, setShowEmployeeForm] = useState(false);
+  const [newEmployee, setNewEmployee] = useState({ branch: "Main Branch", fullName: "", designation: "", department: "", level: "Non-Management", salary: "", phone: "", cnic: "", fathersCnic: "" });
+  const [editingEmployee, setEditingEmployee] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [preview, setPreview] = useState([]);
   const [importing, setImporting] = useState(false);
@@ -83,6 +89,7 @@ export default function BigBuyHRMS() {
   return (
     <Layout user={demoUser} role={role} setRole={setRole} active={active} setActive={setActive} visibleMenu={visibleMenu}>
       {active === "dashboard" && <Dashboard activeEmployees={demoEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
+      {active === "employees" && <Employees query={query} setQuery={setQuery} branch={branch} setBranch={setBranch} showEmployeeForm={showEmployeeForm} setShowEmployeeForm={setShowEmployeeForm} newEmployee={newEmployee} setNewEmployee={setNewEmployee} saveEmployee={() => {}} editingEmployee={editingEmployee} setEditingEmployee={setEditingEmployee} updateEmployee={() => {}} loadingEmployees={false} filteredEmployees={demoEmployees} updateEmployeeStatus={() => {}} />}
       {active === "attendance" && <Attendance rows={attendanceRows} />}
       {active === "payroll" && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
       {active === "imports" && <Imports selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} />}
