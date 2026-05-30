@@ -1,22 +1,22 @@
 import React, { useEffect, useMemo, useState } from "react";
-import Layout from "./components/Layout";
-import { Card, CardContent, Button, PageTitle } from "./components/ui";
-import { BRANCH_CODE_MAP } from "./constants/branches";
-import { MENU_ITEMS } from "./config/menu";
-import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies";
-import Dashboard from "./pages/Dashboard";
-import Employees from "./pages/Employees";
-import Attendance from "./pages/Attendance";
-import Payroll from "./pages/Payroll";
-import Loans from "./pages/Loans";
-import Imports from "./pages/Imports";
-import Policies from "./pages/Policies";
-import Exports from "./pages/Exports";
-import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch } from "./services/employeeService";
-import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers";
-import { processAttendancePunch } from "./utils/attendanceRules";
-import { calculatePayrollForEmployee } from "./utils/payrollRules";
-import { money } from "./utils/format";
+import Layout from "./components/Layout.jsx";
+import { Card, CardContent, Button, PageTitle } from "./components/ui.js";
+import { BRANCH_CODE_MAP } from "./constants/branches.js";
+import { MENU_ITEMS } from "./config/menu.js";
+import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
+import Dashboard from "./pages/Dashboard.jsx";
+import Employees from "./pages/Employees.jsx";
+import Attendance from "./pages/Attendance.jsx";
+import Payroll from "./pages/Payroll.jsx";
+import Loans from "./pages/Loans.jsx";
+import Imports from "./pages/Imports.jsx";
+import Policies from "./pages/Policies.jsx";
+import Exports from "./pages/Exports.jsx";
+import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch } from "./services/employeeService.js";
+import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
+import { processAttendancePunch } from "./utils/attendanceRules.js";
+import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
+import { money } from "./utils/format.js";
 
 const demoRawPunches = [
   { employeeCode: "1001", name: "Demo Employee", level: "Non-Management", date: "2026-04-01", checkIn: "11:00", checkOut: "21:45", branch: "Main Branch", shiftStart: "11:00", shiftEnd: "21:30" },
