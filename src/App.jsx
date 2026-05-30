@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Layout from "./components/Layout.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Employees from "./pages/Employees.jsx";
@@ -12,10 +12,9 @@ import { processAttendancePunch } from "./utils/attendanceRules.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
 import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
-import { importEmployeeMasterBatch } from "./services/employeeService.js";
+import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch } from "./services/employeeService.js";
 
 const demoUser = { name: "Fahad Nadeem", email: "fahad-nadeem@hotmail.com", role: "Master" };
-const demoEmployees = [];
 const demoLoans = [];
 const demoAdjustments = {};
 const demoRawPunches = [
@@ -25,6 +24,8 @@ const demoRawPunches = [
 export default function BigBuyHRMS() {
   const [active, setActive] = useState("dashboard");
   const [role, setRole] = useState("Master");
+  const [employees, setEmployees] = useState([]);
+  const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [query, setQuery] = useState("");
   const [branch, setBranch] = useState("All");
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
@@ -38,7 +39,55 @@ export default function BigBuyHRMS() {
   const [selectedPayslip, setSelectedPayslip] = useState(null);
   const visibleMenu = useMemo(() => MENU_ITEMS.filter((item) => item.roles.includes(role)), [role]);
   const attendanceRows = useMemo(() => demoRawPunches.map(processAttendancePunch), []);
-  const payrollRows = useMemo(() => demoEmployees.map((employee) => calculatePayrollForEmployee(employee, demoAdjustments[employee.id] || {}, demoLoans)), []);
+  const filteredEmployees = useMemo(() => employees.filter((employee) => (branch === "All" || employee.branch === branch) && `${employee.name} ${employee.id} ${employee.dept} ${employee.phone}`.toLowerCase().includes(query.toLowerCase())), [employees, branch, query]);
+  const activeEmployees = useMemo(() => employees.filter((employee) => employee.status === "Active"), [employees]);
+  const payrollRows = useMemo(() => activeEmployees.map((employee) => calculatePayrollForEmployee(employee, demoAdjustments[employee.id] || {}, demoLoans)), [activeEmployees]);
+
+  async function loadEmployees() {
+    setLoadingEmployees(true);
+    try {
+      const rows = await fetchEmployees();
+      setEmployees(rows);
+    } catch (err) {
+      setError(`Employee load failed: ${err.message}`);
+    } finally {
+      setLoadingEmployees(false);
+    }
+  }
+
+  useEffect(() => { loadEmployees(); }, []);
+
+  async function saveEmployee() {
+    const code = `EMP-${String(Date.now()).slice(-6)}`;
+    const payload = { employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation, department: newEmployee.department, branch: newEmployee.branch, staff_level: newEmployee.level, employee_type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone, whatsapp_number: newEmployee.phone, cnic: newEmployee.cnic, fathers_cnic: newEmployee.fathersCnic, eobi_status: "Pending", status: "Active" };
+    try {
+      await createEmployee(payload);
+      await loadEmployees();
+      setShowEmployeeForm(false);
+    } catch (err) {
+      setError(`Save failed: ${err.message}`);
+    }
+  }
+
+  async function updateEmployee() {
+    if (!editingEmployee) return;
+    try {
+      await updateEmployeeByCode(editingEmployee.id, { full_name: editingEmployee.name, department: editingEmployee.dept, branch: editingEmployee.branch, staff_level: editingEmployee.level, salary: Number(editingEmployee.salary || 0), status: editingEmployee.status });
+      await loadEmployees();
+      setEditingEmployee(null);
+    } catch (err) {
+      setError(`Update failed: ${err.message}`);
+    }
+  }
+
+  async function updateEmployeeStatus(id, status) {
+    try {
+      await updateEmployeeByCode(id, { status });
+      await loadEmployees();
+    } catch (err) {
+      setError(`Status update failed: ${err.message}`);
+    }
+  }
 
   async function onPreview() {
     setError("");
@@ -58,27 +107,10 @@ export default function BigBuyHRMS() {
     setImporting(true);
     setError("");
     try {
-      const rows = preview.filter((row) => row.valid).map((row) => ({
-        employee_code: row.employee_code,
-        full_name: row.name,
-        designation: row.designation,
-        department: row.department,
-        category_department: row.category_department,
-        branch: row.branch,
-        staff_level: row.level,
-        employee_type: row.employee_type,
-        salary: row.salary === "" ? 0 : Number(row.salary),
-        phone: row.phone,
-        whatsapp_number: row.whatsapp_number,
-        cnic: row.cnic,
-        fathers_cnic: row.fathers_cnic,
-        joining_date: row.joining_date,
-        eobi_status: row.eobi_status,
-        status: row.status,
-        shift: row.shift,
-      }));
+      const rows = preview.filter((row) => row.valid).map((row) => ({ employee_code: row.employee_code, full_name: row.name, designation: row.designation, department: row.department, category_department: row.category_department, branch: row.branch, staff_level: row.level, employee_type: row.employee_type, salary: row.salary === "" ? 0 : Number(row.salary), phone: row.phone, whatsapp_number: row.whatsapp_number, cnic: row.cnic, fathers_cnic: row.fathers_cnic, joining_date: row.joining_date, eobi_status: row.eobi_status, status: row.status, shift: row.shift }));
       const result = await importEmployeeMasterBatch(rows, selectedFile?.name || "Employee Master Upload");
       setMessage(`${Number(result?.imported_or_updated || 0)} employees imported/updated successfully.`);
+      await loadEmployees();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -88,13 +120,14 @@ export default function BigBuyHRMS() {
 
   return (
     <Layout user={demoUser} role={role} setRole={setRole} active={active} setActive={setActive} visibleMenu={visibleMenu}>
-      {active === "dashboard" && <Dashboard activeEmployees={demoEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
-      {active === "employees" && <Employees query={query} setQuery={setQuery} branch={branch} setBranch={setBranch} showEmployeeForm={showEmployeeForm} setShowEmployeeForm={setShowEmployeeForm} newEmployee={newEmployee} setNewEmployee={setNewEmployee} saveEmployee={() => {}} editingEmployee={editingEmployee} setEditingEmployee={setEditingEmployee} updateEmployee={() => {}} loadingEmployees={false} filteredEmployees={demoEmployees} updateEmployeeStatus={() => {}} />}
+      {error && <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}
+      {active === "dashboard" && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
+      {active === "employees" && <Employees query={query} setQuery={setQuery} branch={branch} setBranch={setBranch} showEmployeeForm={showEmployeeForm} setShowEmployeeForm={setShowEmployeeForm} newEmployee={newEmployee} setNewEmployee={setNewEmployee} saveEmployee={saveEmployee} editingEmployee={editingEmployee} setEditingEmployee={setEditingEmployee} updateEmployee={updateEmployee} loadingEmployees={loadingEmployees} filteredEmployees={filteredEmployees} updateEmployeeStatus={updateEmployeeStatus} />}
       {active === "attendance" && <Attendance rows={attendanceRows} />}
       {active === "payroll" && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
       {active === "imports" && <Imports selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} />}
       {active === "policies" && <Policies />}
-      {active === "exports" && <Exports employees={demoEmployees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
+      {active === "exports" && <Exports employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
     </Layout>
   );
 }
