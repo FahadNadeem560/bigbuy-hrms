@@ -1,0 +1,41 @@
+import React from "react";
+import { Button } from "./ui.jsx";
+
+export default function Layout2({ user, role, setRole, active, setActive, visibleMenu, children }) {
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="flex">
+        <aside className="hidden lg:flex w-72 min-h-screen bg-slate-950 text-white p-5 flex-col fixed left-0 top-0 bottom-0">
+          <div className="mb-8">
+            <div className="text-2xl font-bold">Big Buy HRMS</div>
+            <div className="text-slate-400 text-sm mt-1">Staff • Attendance • Payroll</div>
+          </div>
+          <nav className="space-y-2 overflow-y-auto">
+            {visibleMenu.map((item) => (
+              <button key={item.key} onClick={() => setActive(item.key)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-left transition ${active === item.key ? "bg-white text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}>
+                <span>{item.icon}</span><span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="mt-auto p-4 bg-slate-900 rounded-2xl">
+            <div className="text-sm font-semibold">{user.name}</div>
+            <div className="text-xs text-slate-400 mt-1">Role: {role}</div>
+          </div>
+        </aside>
+        <main className="flex-1 p-4 md:p-8 lg:ml-72">
+          <div className="mb-5 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row justify-between gap-3">
+            <div><div className="font-bold">{user.name}</div><div className="text-sm text-slate-500">{user.email} • {role}</div></div>
+            <select value={role} onChange={(e) => setRole(e.target.value)} className="px-4 py-2 rounded-2xl border border-slate-200"><option>Master</option><option>HR</option><option>Finance</option><option>Employee</option></select>
+          </div>
+          <div className="lg:hidden mb-4 bg-slate-950 text-white rounded-2xl p-4">
+            <div className="font-bold text-xl">Big Buy HRMS</div>
+            <div className="flex gap-2 overflow-x-auto mt-4">
+              {visibleMenu.map((item) => <Button key={item.key} onClick={() => setActive(item.key)} variant="secondary" className="rounded-xl whitespace-nowrap">{item.icon} {item.label}</Button>)}
+            </div>
+          </div>
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
