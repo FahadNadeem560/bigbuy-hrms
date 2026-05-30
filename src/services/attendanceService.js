@@ -11,9 +11,9 @@ export async function fetchRecentAttendance(limit = 200) {
 }
 
 export async function runAttendanceProcessing(fromDate, toDate) {
-  const { data, error } = await supabase.rpc("run_attendance_processing", {
-    p_from_date: fromDate,
-    p_to_date: toDate,
+  const { data, error } = await supabase.rpc("process_zkt_raw_punches", {
+    p_from_date: fromDate || null,
+    p_to_date: toDate || null,
   });
   if (error) throw error;
   return data;
