@@ -1,7 +1,7 @@
 import React from "react";
-import { Badge, Button, Card, CardContent, PageTitle, Table } from "../components/ui";
-import { money } from "../utils/format";
-import { downloadTemplate } from "../utils/downloads";
+import { Badge, Button, Card, CardContent, PageTitle, Table } from "../components/ui.js";
+import { money } from "../utils/format.js";
+import { downloadTemplate } from "../utils/downloads.js";
 
 export default function Imports({ selectedFile, setSelectedFile, preview, importing, message, error, onPreview, onImport }) {
   const invalidCount = preview.filter((row) => !row.valid).length;
