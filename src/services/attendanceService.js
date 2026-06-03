@@ -1,13 +1,25 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-export async function fetchRecentAttendance(limit = 200) {
-  const { data, error } = await supabase
-    .from("attendance")
-    .select("*")
-    .order("attendance_date", { ascending: false })
-    .limit(limit);
-  if (error) throw error;
-  return data || [];
+export async function fetchRecentAttendance(limit = 25000) {
+  const pageSize = 1000;
+  const allRows = [];
+
+  for (let from = 0; from < limit; from += pageSize) {
+    const to = Math.min(from + pageSize - 1, limit - 1);
+    const { data, error } = await supabase
+      .from("attendance")
+      .select("*")
+      .order("attendance_date", { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    allRows.push(...data);
+    if (data.length < pageSize) break;
+  }
+
+  return allRows;
 }
 
 export async function runAttendanceProcessing(fromDate, toDate) {
