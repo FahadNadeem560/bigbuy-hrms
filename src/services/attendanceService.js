@@ -37,3 +37,11 @@ export async function importZKTRawPunches(rows, sourceFilename) {
   if (error) throw error;
   return Array.isArray(data) ? data[0] : data;
 }
+
+export async function importPendingStorageFiles() {
+  const { data, error } = await supabase.functions.invoke("zkt-storage-import", {
+    body: { source: "manual_button" },
+  });
+  if (error) throw error;
+  return data;
+}
