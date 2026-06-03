@@ -1,13 +1,14 @@
 import React, { useState } from "react";
 import * as XLSX from "xlsx";
 import { Button, Card, CardContent, PageTitle } from "../components/ui.js";
-import { importZKTRawPunches, runAttendanceProcessing } from "../services/attendanceService.js";
+import { importPendingStorageFiles, importZKTRawPunches, runAttendanceProcessing } from "../services/attendanceService.js";
 
 export default function ZKTSync() {
   const [file, setFile] = useState(null);
   const [fromDate, setFromDate] = useState("2026-01-01");
   const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
+  const [storageBusy, setStorageBusy] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -36,6 +37,20 @@ export default function ZKTSync() {
     }
   }
 
+  async function importStorageFiles() {
+    setMessage("");
+    setError("");
+    setStorageBusy(true);
+    try {
+      const result = await importPendingStorageFiles();
+      setMessage(`Storage import completed. Processed files: ${Number(result?.processed_files || 0)}.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setStorageBusy(false);
+    }
+  }
+
   async function processAttendance() {
     setMessage("");
     setError("");
@@ -53,7 +68,14 @@ export default function ZKTSync() {
 
   return (
     <div>
-      <PageTitle title="ZKT Live Sync" subtitle="Import ZKT attendance Excel/CSV files and process raw punches into attendance." />
+      <PageTitle title="ZKT Live Sync" subtitle="Import ZKT attendance files and process raw punches into attendance." />
+      <Card className="rounded-2xl border border-slate-100 shadow-sm mb-6">
+        <CardContent className="p-6">
+          <h2 className="text-lg font-bold mb-3">Storage Import</h2>
+          <p className="text-sm text-slate-600 mb-4">Import all pending CSV files from Supabase Storage: zkt-attendance-imports/incoming.</p>
+          <Button onClick={importStorageFiles} disabled={storageBusy} className="rounded-2xl">{storageBusy ? "Importing Pending Files..." : "Import Pending Storage Files"}</Button>
+        </CardContent>
+      </Card>
       <Card className="rounded-2xl border border-slate-100 shadow-sm mb-6">
         <CardContent className="p-6">
           <h2 className="text-lg font-bold mb-3">Manual Attendance Import</h2>
