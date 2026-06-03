@@ -70,7 +70,7 @@ export default function BigBuyHRMS() {
 
   async function loadAttendance() {
     try {
-      const rows = await fetchRecentAttendance(500);
+      const rows = await fetchRecentAttendance(25000);
       setAttendanceRows((rows || []).map(mapAttendanceRow));
     } catch (err) {
       setError(`Attendance load failed: ${err.message}`);
