@@ -6,16 +6,18 @@ export async function fetchRecentAttendance(limit = 25000) {
 
   for (let from = 0; from < limit; from += pageSize) {
     const to = Math.min(from + pageSize - 1, limit - 1);
+
     const { data, error } = await supabase
       .from("attendance")
       .select("*")
-      .order("attendance_date", { ascending: false })
+      .order("work_date", { ascending: false })
       .range(from, to);
 
     if (error) throw error;
     if (!data || data.length === 0) break;
 
     allRows.push(...data);
+
     if (data.length < pageSize) break;
   }
 
