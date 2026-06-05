@@ -9,6 +9,26 @@ import Policies from "./pages/Policies.jsx";
 import Exports from "./pages/Exports.jsx";
 import ZKTSync from "./pages/ZKTSync.jsx";
 import Timesheet from "./pages/Timesheet.jsx";
+import LeaveManagement from "./pages/LeaveManagement.jsx";
+import AttendanceAdjustment from "./pages/AttendanceAdjustment.jsx";
+import MissingPunch from "./pages/MissingPunch.jsx";
+import ManpowerDashboard from "./pages/ManpowerDashboard.jsx";
+import PayrollAutomation from "./pages/PayrollAutomation.jsx";
+import LoanManagement from "./pages/LoanManagement.jsx";
+import FinalSettlement from "./pages/FinalSettlement.jsx";
+import EmployeeProfile from "./pages/EmployeeProfile.jsx";
+import DocumentManagement from "./pages/DocumentManagement.jsx";
+import Warnings from "./pages/Warnings.jsx";
+import Recruitment from "./pages/Recruitment.jsx";
+import BranchDashboard from "./pages/BranchDashboard.jsx";
+import ExecutiveDashboard from "./pages/ExecutiveDashboard.jsx";
+import AssetTracking from "./pages/AssetTracking.jsx";
+import Performance from "./pages/Performance.jsx";
+import AttendanceAlerts from "./pages/AttendanceAlerts.jsx";
+import LeaveLiability from "./pages/LeaveLiability.jsx";
+import IncrementHistory from "./pages/IncrementHistory.jsx";
+import BranchTransfer from "./pages/BranchTransfer.jsx";
+import AIAssistant from "./pages/AIAssistant.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
@@ -144,15 +164,47 @@ export default function BigBuyHRMS() {
   return (
     <Layout user={demoUser} role={role} setRole={setRole} active={active} setActive={setActive} visibleMenu={visibleMenu}>
       {error && <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}
+
+      {/* Core */}
       {active === "dashboard" && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
       {active === "employees" && <Employees query={query} setQuery={setQuery} branch={branch} setBranch={setBranch} showEmployeeForm={showEmployeeForm} setShowEmployeeForm={setShowEmployeeForm} newEmployee={newEmployee} setNewEmployee={setNewEmployee} saveEmployee={saveEmployee} editingEmployee={editingEmployee} setEditingEmployee={setEditingEmployee} updateEmployee={updateEmployee} loadingEmployees={loadingEmployees} filteredEmployees={filteredEmployees} updateEmployeeStatus={updateEmployeeStatus} />}
-      {active === "timesheet" && <Timesheet />}
-      {active === "zkt" && <ZKTSync />}
+      {active === "profile" && <EmployeeProfile />}
+      {active === "recruitment" && <Recruitment />}
+      {active === "documents" && <DocumentManagement />}
+
+      {/* Attendance */}
       {active === "attendance" && <Attendance rows={attendanceRows} />}
+      {active === "timesheet" && <Timesheet />}
+      {active === "adjustments" && <AttendanceAdjustment />}
+      {active === "missing-punch" && <MissingPunch />}
+      {active === "alerts" && <AttendanceAlerts />}
+      {active === "zkt" && <ZKTSync />}
+
+      {/* Leave */}
+      {active === "leave" && <LeaveManagement />}
+      {active === "leave-liability" && <LeaveLiability />}
+
+      {/* Workforce */}
+      {active === "manpower" && <ManpowerDashboard />}
+      {active === "branch-dashboard" && <BranchDashboard />}
+      {active === "executive" && <ExecutiveDashboard />}
+      {active === "transfers" && <BranchTransfer />}
+      {active === "warnings" && <Warnings />}
+      {active === "performance" && <Performance />}
+      {active === "assets" && <AssetTracking />}
+
+      {/* Payroll & Finance */}
+      {active === "payroll-automation" && <PayrollAutomation role={role} />}
       {active === "payroll" && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
+      {active === "loans" && <LoanManagement />}
+      {active === "increments" && <IncrementHistory />}
+      {active === "settlement" && <FinalSettlement role={role} />}
+
+      {/* System */}
       {active === "imports" && <Imports selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} />}
-      {active === "policies" && <Policies />}
       {active === "exports" && <Exports employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
+      {active === "policies" && <Policies />}
+      {active === "ai-assistant" && <AIAssistant />}
     </Layout>
   );
 }
