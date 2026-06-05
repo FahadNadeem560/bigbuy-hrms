@@ -6,6 +6,7 @@ export const MENU_ITEMS = [
   { key: "profile", label: "Employee Profile", icon: "🧑", roles: ["Master", "HR"] },
   { key: "recruitment", label: "Recruitment", icon: "🎯", roles: ["Master", "HR"] },
   { key: "documents", label: "Documents", icon: "🗂️", roles: ["Master", "HR"] },
+  { key: "credentials", label: "Staff Credentials", icon: "🔑", roles: ["Master", "HR"] },
 
   // Attendance
   { key: "attendance", label: "Attendance", icon: "⏱️", roles: ["Master", "HR", "Finance", "Employee"] },

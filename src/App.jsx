@@ -29,6 +29,7 @@ import LeaveLiability from "./pages/LeaveLiability.jsx";
 import IncrementHistory from "./pages/IncrementHistory.jsx";
 import BranchTransfer from "./pages/BranchTransfer.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
+import StaffCredentials from "./pages/StaffCredentials.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
@@ -204,6 +205,7 @@ export default function BigBuyHRMS() {
       {active === "imports" && <Imports selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} />}
       {active === "exports" && <Exports employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
       {active === "policies" && <Policies />}
+      {active === "credentials" && <StaffCredentials />}
       {active === "ai-assistant" && <AIAssistant />}
     </Layout>
   );
