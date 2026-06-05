@@ -2,6 +2,7 @@ export const MENU_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: "🏢", roles: ["Master", "HR", "Finance"] },
   { key: "employees", label: "Employees", icon: "👥", roles: ["Master", "HR"] },
   { key: "attendance", label: "Attendance", icon: "⏱️", roles: ["Master", "HR", "Finance", "Employee"] },
+  { key: "timesheet", label: "Timesheet", icon: "📋", roles: ["Master", "HR", "Finance", "Employee"] },
   { key: "zkt", label: "ZKT Live Sync", icon: "🛰️", roles: ["Master", "HR"] },
   { key: "audit", label: "Attendance Audit", icon: "🕵️", roles: ["Master", "HR"] },
   { key: "payroll", label: "Payroll", icon: "💰", roles: ["Master", "Finance"] },
