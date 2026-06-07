@@ -4,9 +4,8 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Employees from "./pages/Employees.jsx";
 import Attendance from "./pages/Attendance.jsx";
 import Payroll from "./pages/Payroll.jsx";
-import Imports from "./pages/Imports.jsx";
+import DataManagement from "./pages/DataManagement.jsx";
 import Policies from "./pages/Policies.jsx";
-import Exports from "./pages/Exports.jsx";
 import ZKTSync from "./pages/ZKTSync.jsx";
 import Timesheet from "./pages/Timesheet.jsx";
 import LeaveManagement from "./pages/LeaveManagement.jsx";
@@ -202,8 +201,7 @@ export default function BigBuyHRMS() {
       {active === "settlement" && <FinalSettlement role={role} />}
 
       {/* System */}
-      {active === "imports" && <Imports selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} />}
-      {active === "exports" && <Exports employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
+      {active === "imports" && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
       {active === "policies" && <Policies />}
       {active === "credentials" && <StaffCredentials />}
       {active === "ai-assistant" && <AIAssistant />}
