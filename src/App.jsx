@@ -99,7 +99,7 @@ export default function BigBuyHRMS() {
     } catch (err) { setError(`Attendance load failed: ${err.message}`); }
   }
 
-  useEffect(() => { runMigrations(); loadEmployees(); loadAttendance(); }, []);
+  useEffect(() => { runMigrations().then(() => { loadEmployees(); loadAttendance(); }); }, []);
 
   async function saveEmployee() {
     const code = `EMP-${String(Date.now()).slice(-6)}`;
