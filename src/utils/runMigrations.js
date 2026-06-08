@@ -1,30 +1,26 @@
 import { supabase } from "../lib/supabaseClient.js";
 
+const MIGRATION_VERSION = "2026-06-09-v1";
 let ran = false;
 
-/**
- * Calls the run_migrations() Supabase function to apply any missing
- * columns and tables on app startup. Runs at most once per session.
- *
- * Prerequisites: run SUPABASE_MIGRATIONS.sql in the Supabase SQL Editor
- * at least once so the run_migrations() function exists in the database.
- */
 export async function runMigrations() {
-  if (ran) return;
+  if (ran) return false;
   ran = true;
+
+  if (localStorage.getItem("hrms_db_version") === MIGRATION_VERSION) return false;
 
   try {
     const { error } = await supabase.rpc("run_migrations");
     if (error) {
-      console.warn(
-        "[HRMS] Auto-migration failed:",
-        error.message,
-        "\nPlease run SUPABASE_MIGRATIONS.sql manually in the Supabase SQL Editor."
-      );
+      console.warn("[HRMS] Auto-migration failed:", error.message,
+        "\nPlease run SUPABASE_MIGRATIONS.sql manually in the Supabase SQL Editor.");
     } else {
+      localStorage.setItem("hrms_db_version", MIGRATION_VERSION);
       console.log("[HRMS] Database schema is up to date.");
     }
   } catch (err) {
     console.warn("[HRMS] Migration check skipped:", err.message);
   }
+
+  return true;
 }
