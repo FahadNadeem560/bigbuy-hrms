@@ -100,10 +100,7 @@ export default function BigBuyHRMS() {
   }
 
   useEffect(() => {
-    runMigrations().then(migrated => {
-      const delay = migrated ? 3000 : 0;
-      setTimeout(() => { loadEmployees(); loadAttendance(); }, delay);
-    });
+    runMigrations().then(() => { loadEmployees(); loadAttendance(); });
   }, []);
 
   async function saveEmployee() {
