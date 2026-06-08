@@ -29,6 +29,15 @@ import IncrementHistory from "./pages/IncrementHistory.jsx";
 import BranchTransfer from "./pages/BranchTransfer.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
 import StaffCredentials from "./pages/StaffCredentials.jsx";
+import DepartmentManagement from "./pages/DepartmentManagement.jsx";
+import RosterManagement from "./pages/RosterManagement.jsx";
+import OneTimeAdjustments from "./pages/OneTimeAdjustments.jsx";
+import TaxManagement from "./pages/TaxManagement.jsx";
+import FuelAllowance from "./pages/FuelAllowance.jsx";
+import FixedAllowances from "./pages/FixedAllowances.jsx";
+import CompensationManagement from "./pages/CompensationManagement.jsx";
+import PolicySettings from "./pages/PolicySettings.jsx";
+import SalaryComparison from "./pages/SalaryComparison.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
@@ -55,6 +64,19 @@ function mapAttendanceRow(row) {
   };
 }
 
+const BLANK_EMPLOYEE = {
+  branch: "Main Branch", fullName: "", designation: "", department: "",
+  level: "Non-Management", salary: "", phone: "", cnic: "", fathersCnic: "",
+  joiningDate: "", employeeType: "Permanent",
+  cnicIssueDate: "", cnicExpiryDate: "",
+  referencePersonName: "", referencePersonContact: "",
+  emergencyContactName: "", emergencyContactNumber: "", emergencyContactRelationship: "",
+  billingAddress: "", permanentAddress: "", currentAddress: "",
+  personalPhone: "", workPhone: "", email: "",
+  bankName: "", accountNumber: "", iban: "",
+  photoUrl: "", cnicCopyUrl: "", employmentContractUrl: "",
+};
+
 export default function BigBuyHRMS() {
   const [active, setActive] = useState("dashboard");
   const [role, setRole] = useState("Master");
@@ -64,7 +86,7 @@ export default function BigBuyHRMS() {
   const [query, setQuery] = useState("");
   const [branch, setBranch] = useState("All");
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
-  const [newEmployee, setNewEmployee] = useState({ branch: "Main Branch", fullName: "", designation: "", department: "", level: "Non-Management", salary: "", phone: "", cnic: "", fathersCnic: "" });
+  const [newEmployee, setNewEmployee] = useState(BLANK_EMPLOYEE);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [preview, setPreview] = useState([]);
@@ -102,11 +124,27 @@ export default function BigBuyHRMS() {
 
   async function saveEmployee() {
     const code = `EMP-${String(Date.now()).slice(-6)}`;
-    const payload = { employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation, department: newEmployee.department, branch: newEmployee.branch, staff_level: newEmployee.level, employee_type: "Permanent", salary: Number(newEmployee.salary || 0), phone: newEmployee.phone, whatsapp_number: newEmployee.phone, cnic: newEmployee.cnic, fathers_cnic: newEmployee.fathersCnic, eobi_status: "Pending", status: "Active" };
+    const payload = {
+      employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation,
+      department: newEmployee.department, branch: newEmployee.branch, staff_level: newEmployee.level,
+      employee_type: newEmployee.employeeType || "Permanent", salary: Number(newEmployee.salary || 0),
+      phone: newEmployee.phone, whatsapp_number: newEmployee.phone,
+      cnic: newEmployee.cnic, fathers_cnic: newEmployee.fathersCnic,
+      joining_date: newEmployee.joiningDate || null, eobi_status: "Pending", status: "Active",
+      cnic_issue_date: newEmployee.cnicIssueDate || null, cnic_expiry_date: newEmployee.cnicExpiryDate || null,
+      reference_person_name: newEmployee.referencePersonName, reference_person_contact: newEmployee.referencePersonContact,
+      emergency_contact_name: newEmployee.emergencyContactName, emergency_contact_number: newEmployee.emergencyContactNumber,
+      emergency_contact_relationship: newEmployee.emergencyContactRelationship,
+      billing_address: newEmployee.billingAddress, permanent_address: newEmployee.permanentAddress, current_address: newEmployee.currentAddress,
+      personal_phone: newEmployee.personalPhone, work_phone: newEmployee.workPhone, email: newEmployee.email,
+      bank_name: newEmployee.bankName, account_number: newEmployee.accountNumber, iban: newEmployee.iban,
+      photo_url: newEmployee.photoUrl, cnic_copy_url: newEmployee.cnicCopyUrl, employment_contract_url: newEmployee.employmentContractUrl,
+    };
     try {
       await createEmployee(payload);
       await loadEmployees();
       setShowEmployeeForm(false);
+      setNewEmployee(BLANK_EMPLOYEE);
     } catch (err) {
       setError(`Save failed: ${err.message}`);
     }
@@ -115,7 +153,19 @@ export default function BigBuyHRMS() {
   async function updateEmployee() {
     if (!editingEmployee) return;
     try {
-      await updateEmployeeByCode(editingEmployee.id, { full_name: editingEmployee.name, department: editingEmployee.dept, branch: editingEmployee.branch, staff_level: editingEmployee.level, salary: Number(editingEmployee.salary || 0), status: editingEmployee.status });
+      await updateEmployeeByCode(editingEmployee.id, {
+        full_name: editingEmployee.name, department: editingEmployee.dept,
+        branch: editingEmployee.branch, staff_level: editingEmployee.level,
+        salary: Number(editingEmployee.salary || 0), status: editingEmployee.status,
+        cnic: editingEmployee.cnic, fathers_cnic: editingEmployee.fathersCnic,
+        cnic_issue_date: editingEmployee.cnicIssueDate || null, cnic_expiry_date: editingEmployee.cnicExpiryDate || null,
+        reference_person_name: editingEmployee.referencePersonName, reference_person_contact: editingEmployee.referencePersonContact,
+        emergency_contact_name: editingEmployee.emergencyContactName, emergency_contact_number: editingEmployee.emergencyContactNumber,
+        emergency_contact_relationship: editingEmployee.emergencyContactRelationship,
+        billing_address: editingEmployee.billingAddress, permanent_address: editingEmployee.permanentAddress, current_address: editingEmployee.currentAddress,
+        personal_phone: editingEmployee.personalPhone, work_phone: editingEmployee.workPhone, email: editingEmployee.email,
+        bank_name: editingEmployee.bankName, account_number: editingEmployee.accountNumber, iban: editingEmployee.iban,
+      });
       await loadEmployees();
       setEditingEmployee(null);
     } catch (err) {
@@ -133,8 +183,7 @@ export default function BigBuyHRMS() {
   }
 
   async function onPreview() {
-    setError("");
-    setMessage("");
+    setError(""); setMessage("");
     if (!selectedFile) return setError("Please choose a CSV, XLS or XLSX file first.");
     try {
       const rows = await readImportFile(selectedFile);
@@ -147,10 +196,16 @@ export default function BigBuyHRMS() {
   }
 
   async function onImport() {
-    setImporting(true);
-    setError("");
+    setImporting(true); setError("");
     try {
-      const rows = preview.filter((row) => row.valid).map((row) => ({ employee_code: row.employee_code, full_name: row.name, designation: row.designation, department: row.department, category_department: row.category_department, branch: row.branch, staff_level: row.level, employee_type: row.employee_type, salary: row.salary === "" ? 0 : Number(row.salary), phone: row.phone, whatsapp_number: row.whatsapp_number, cnic: row.cnic, fathers_cnic: row.fathers_cnic, joining_date: row.joining_date, eobi_status: row.eobi_status, status: row.status, shift: row.shift }));
+      const rows = preview.filter((row) => row.valid).map((row) => ({
+        employee_code: row.employee_code, full_name: row.name, designation: row.designation,
+        department: row.department, category_department: row.category_department,
+        branch: row.branch, staff_level: row.level, employee_type: row.employee_type,
+        salary: row.salary === "" ? 0 : Number(row.salary), phone: row.phone,
+        whatsapp_number: row.whatsapp_number, cnic: row.cnic, fathers_cnic: row.fathers_cnic,
+        joining_date: row.joining_date, eobi_status: row.eobi_status, status: row.status, shift: row.shift,
+      }));
       const result = await importEmployeeMasterBatch(rows, selectedFile?.name || "Employee Master Upload");
       setMessage(`${Number(result?.imported_or_updated || 0)} employees imported/updated successfully.`);
       await loadEmployees();
@@ -168,6 +223,7 @@ export default function BigBuyHRMS() {
       {/* Core */}
       {active === "dashboard" && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
       {active === "employees" && <Employees query={query} setQuery={setQuery} branch={branch} setBranch={setBranch} showEmployeeForm={showEmployeeForm} setShowEmployeeForm={setShowEmployeeForm} newEmployee={newEmployee} setNewEmployee={setNewEmployee} saveEmployee={saveEmployee} editingEmployee={editingEmployee} setEditingEmployee={setEditingEmployee} updateEmployee={updateEmployee} loadingEmployees={loadingEmployees} filteredEmployees={filteredEmployees} updateEmployeeStatus={updateEmployeeStatus} />}
+      {active === "departments" && <DepartmentManagement />}
       {active === "profile" && <EmployeeProfile />}
       {active === "recruitment" && <Recruitment />}
       {active === "documents" && <DocumentManagement />}
@@ -175,6 +231,7 @@ export default function BigBuyHRMS() {
       {/* Attendance */}
       {active === "attendance" && <Attendance rows={attendanceRows} />}
       {active === "timesheet" && <Timesheet />}
+      {active === "roster" && <RosterManagement />}
       {active === "adjustments" && <AttendanceAdjustment />}
       {active === "missing-punch" && <MissingPunch />}
       {active === "alerts" && <AttendanceAlerts />}
@@ -196,12 +253,19 @@ export default function BigBuyHRMS() {
       {/* Payroll & Finance */}
       {active === "payroll-automation" && <PayrollAutomation role={role} />}
       {active === "payroll" && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
+      {active === "salary-comparison" && <SalaryComparison />}
+      {active === "compensation" && <CompensationManagement />}
+      {active === "tax" && <TaxManagement role={role} />}
+      {active === "fuel" && <FuelAllowance role={role} />}
+      {active === "fixed-allowances" && <FixedAllowances />}
+      {active === "adjustments-pay" && <OneTimeAdjustments role={role} />}
       {active === "loans" && <LoanManagement />}
       {active === "increments" && <IncrementHistory />}
       {active === "settlement" && <FinalSettlement role={role} />}
 
       {/* System */}
       {active === "imports" && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
+      {active === "policy-settings" && <PolicySettings />}
       {active === "policies" && <Policies />}
       {active === "credentials" && <StaffCredentials />}
       {active === "ai-assistant" && <AIAssistant />}

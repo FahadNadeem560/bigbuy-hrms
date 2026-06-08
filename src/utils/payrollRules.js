@@ -1,5 +1,24 @@
 import { STAFF_LEVEL_POLICIES, LOAN_POLICY } from "../config/staffPolicies";
 
+const DEFAULT_TAX_SLABS = [
+  { min_amount: 0, max_amount: 600000, base_tax: 0, rate_percentage: 0 },
+  { min_amount: 600001, max_amount: 1200000, base_tax: 0, rate_percentage: 5 },
+  { min_amount: 1200001, max_amount: 2200000, base_tax: 30000, rate_percentage: 15 },
+  { min_amount: 2200001, max_amount: 3200000, base_tax: 180000, rate_percentage: 25 },
+  { min_amount: 3200001, max_amount: 4100000, base_tax: 430000, rate_percentage: 30 },
+  { min_amount: 4100001, max_amount: 999999999, base_tax: 700000, rate_percentage: 35 },
+];
+
+export function calculateMonthlyTax(annualSalary, slabs) {
+  const s = (slabs && slabs.length > 0) ? slabs : DEFAULT_TAX_SLABS;
+  const annual = Number(annualSalary || 0);
+  if (annual <= 0) return 0;
+  const slab = s.find(sl => annual >= Number(sl.min_amount) && annual <= Number(sl.max_amount));
+  if (!slab || Number(slab.rate_percentage) === 0) return 0;
+  const annualTax = Number(slab.base_tax) + ((annual - Number(slab.min_amount)) * Number(slab.rate_percentage) / 100);
+  return Math.round(annualTax / 12);
+}
+
 export function getPolicyForLevel(level) {
   return STAFF_LEVEL_POLICIES[level] || STAFF_LEVEL_POLICIES["Non-Management"];
 }
