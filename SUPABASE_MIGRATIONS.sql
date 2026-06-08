@@ -66,12 +66,22 @@ ALTER TABLE leave_requests
   ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
 
 -- ─────────────────────────────────────────────────────────────
--- loans: optional display columns
+-- loans: all required columns + permissions
 -- ─────────────────────────────────────────────────────────────
-ALTER TABLE loans
-  ADD COLUMN IF NOT EXISTS loan_type    TEXT DEFAULT 'General',
-  ADD COLUMN IF NOT EXISTS loan_date    DATE,
-  ADD COLUMN IF NOT EXISTS granted_date DATE;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_type           TEXT    DEFAULT 'General';
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_date           DATE;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS granted_date        DATE;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS status              TEXT    DEFAULT 'Active';
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS employee_code       TEXT;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS employee_name       TEXT;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_amount         NUMERIC DEFAULT 0;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS monthly_deduction   NUMERIC DEFAULT 0;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS outstanding_balance NUMERIC DEFAULT 0;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS start_date          DATE;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS reason              TEXT;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS repayment_months    INTEGER;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS auto_deduct         BOOLEAN DEFAULT TRUE;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.loans TO anon, authenticated;
 
 -- ─────────────────────────────────────────────────────────────
 -- notifications: recipient_code for employee-level routing
@@ -484,9 +494,20 @@ BEGIN
   ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
 
   -- ── loans ──────────────────────────────────────────────────
-  ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_type    TEXT DEFAULT 'General';
-  ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_date    DATE;
-  ALTER TABLE loans ADD COLUMN IF NOT EXISTS granted_date DATE;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_type           TEXT    DEFAULT 'General';
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_date           DATE;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS granted_date        DATE;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS status              TEXT    DEFAULT 'Active';
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS employee_code       TEXT;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS employee_name       TEXT;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS loan_amount         NUMERIC DEFAULT 0;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS monthly_deduction   NUMERIC DEFAULT 0;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS outstanding_balance NUMERIC DEFAULT 0;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS start_date          DATE;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS reason              TEXT;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS repayment_months    INTEGER;
+  ALTER TABLE loans ADD COLUMN IF NOT EXISTS auto_deduct         BOOLEAN DEFAULT TRUE;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.loans TO anon, authenticated;
 
   -- ── notifications ──────────────────────────────────────────
   CREATE TABLE IF NOT EXISTS notifications (

@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-06-09-v2";
+const MIGRATION_VERSION = "2026-06-09-v3";
 let ran = false;
 
 export async function runMigrations() {
