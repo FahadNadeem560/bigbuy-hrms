@@ -17,6 +17,7 @@ import AllowancesHub from "./pages/AllowancesHub.jsx";
 import PayrollExtras from "./pages/PayrollExtras.jsx";
 import LoanHub from "./pages/LoanHub.jsx";
 import SettingsHub from "./pages/SettingsHub.jsx";
+import ApprovalQueue from "./pages/ApprovalQueue.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
@@ -55,6 +56,7 @@ const BLANK_EMPLOYEE = {
   personalPhone: "", workPhone: "", email: "",
   bankName: "", accountNumber: "", iban: "",
   photoUrl: "", cnicCopyUrl: "", employmentContractUrl: "",
+  supervisorId: "", isSupervisor: false, isManager: false,
 };
 
 export default function BigBuyHRMS() {
@@ -84,22 +86,16 @@ export default function BigBuyHRMS() {
 
   async function loadEmployees() {
     setLoadingEmployees(true);
-    try {
-      setEmployees(await fetchEmployees());
-    } catch (err) {
-      setError(`Employee load failed: ${err.message}`);
-    } finally {
-      setLoadingEmployees(false);
-    }
+    try { setEmployees(await fetchEmployees()); }
+    catch (err) { setError(`Employee load failed: ${err.message}`); }
+    finally { setLoadingEmployees(false); }
   }
 
   async function loadAttendance() {
     try {
       const rows = await fetchRecentAttendance(25000);
       setAttendanceRows((rows || []).map(mapAttendanceRow));
-    } catch (err) {
-      setError(`Attendance load failed: ${err.message}`);
-    }
+    } catch (err) { setError(`Attendance load failed: ${err.message}`); }
   }
 
   useEffect(() => { loadEmployees(); loadAttendance(); }, []);
@@ -121,15 +117,14 @@ export default function BigBuyHRMS() {
       personal_phone: newEmployee.personalPhone, work_phone: newEmployee.workPhone, email: newEmployee.email,
       bank_name: newEmployee.bankName, account_number: newEmployee.accountNumber, iban: newEmployee.iban,
       photo_url: newEmployee.photoUrl, cnic_copy_url: newEmployee.cnicCopyUrl, employment_contract_url: newEmployee.employmentContractUrl,
+      supervisor_id: newEmployee.supervisorId || null,
+      is_supervisor: !!newEmployee.isSupervisor,
+      is_manager: !!newEmployee.isManager,
     };
     try {
-      await createEmployee(payload);
-      await loadEmployees();
-      setShowEmployeeForm(false);
-      setNewEmployee(BLANK_EMPLOYEE);
-    } catch (err) {
-      setError(`Save failed: ${err.message}`);
-    }
+      await createEmployee(payload); await loadEmployees();
+      setShowEmployeeForm(false); setNewEmployee(BLANK_EMPLOYEE);
+    } catch (err) { setError(`Save failed: ${err.message}`); }
   }
 
   async function updateEmployee() {
@@ -147,21 +142,17 @@ export default function BigBuyHRMS() {
         billing_address: editingEmployee.billingAddress, permanent_address: editingEmployee.permanentAddress, current_address: editingEmployee.currentAddress,
         personal_phone: editingEmployee.personalPhone, work_phone: editingEmployee.workPhone, email: editingEmployee.email,
         bank_name: editingEmployee.bankName, account_number: editingEmployee.accountNumber, iban: editingEmployee.iban,
+        supervisor_id: editingEmployee.supervisorId || null,
+        is_supervisor: !!editingEmployee.isSupervisor,
+        is_manager: !!editingEmployee.isManager,
       });
-      await loadEmployees();
-      setEditingEmployee(null);
-    } catch (err) {
-      setError(`Update failed: ${err.message}`);
-    }
+      await loadEmployees(); setEditingEmployee(null);
+    } catch (err) { setError(`Update failed: ${err.message}`); }
   }
 
   async function updateEmployeeStatus(id, status) {
-    try {
-      await updateEmployeeByCode(id, { status });
-      await loadEmployees();
-    } catch (err) {
-      setError(`Status update failed: ${err.message}`);
-    }
+    try { await updateEmployeeByCode(id, { status }); await loadEmployees(); }
+    catch (err) { setError(`Status update failed: ${err.message}`); }
   }
 
   async function onPreview() {
@@ -170,11 +161,8 @@ export default function BigBuyHRMS() {
     try {
       const rows = await readImportFile(selectedFile);
       const checked = validateEmployeeImportRows(rows, STAFF_LEVEL_POLICIES);
-      setPreview(checked);
-      setMessage(`${checked.length} rows found.`);
-    } catch (err) {
-      setError(err.message);
-    }
+      setPreview(checked); setMessage(`${checked.length} rows found.`);
+    } catch (err) { setError(err.message); }
   }
 
   async function onImport() {
@@ -191,11 +179,8 @@ export default function BigBuyHRMS() {
       const result = await importEmployeeMasterBatch(rows, selectedFile?.name || "Employee Master Upload");
       setMessage(`${Number(result?.imported_or_updated || 0)} employees imported/updated successfully.`);
       await loadEmployees();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setImporting(false);
-    }
+    } catch (err) { setError(err.message); }
+    finally { setImporting(false); }
   }
 
   const employeeProps = {
@@ -204,6 +189,7 @@ export default function BigBuyHRMS() {
     newEmployee, setNewEmployee, saveEmployee,
     editingEmployee, setEditingEmployee, updateEmployee,
     loadingEmployees, filteredEmployees, updateEmployeeStatus,
+    employees,
   };
 
   return (
@@ -222,7 +208,7 @@ export default function BigBuyHRMS() {
       {active === "zkt"         && <ZKTSync />}
 
       {/* Leave */}
-      {active === "leave"       && <LeaveManagement />}
+      {active === "leave"       && <LeaveManagement role={role} />}
 
       {/* Workforce */}
       {active === "workforce"   && <WorkforceHub />}
@@ -234,6 +220,9 @@ export default function BigBuyHRMS() {
       {active === "allowances"         && <AllowancesHub role={role} />}
       {active === "payroll-extras"     && <PayrollExtras role={role} />}
       {active === "loans"              && <LoanHub role={role} />}
+
+      {/* Approvals */}
+      {active === "approval-queue" && <ApprovalQueue role={role} />}
 
       {/* System */}
       {active === "imports"     && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}

@@ -22,6 +22,9 @@ export const MENU_ITEMS = [
   { key: "payroll-extras",     label: "Adjustments & Tax", icon: "🧾", section: "Payroll & Finance", roles: ["Master","HR","Finance"] },
   { key: "loans",              label: "Loans & Settlement", icon: "💳", section: "Payroll & Finance", roles: ["Master","HR","Finance","Employee"] },
 
+  // Approvals
+  { key: "approval-queue", label: "Approval Queue",   icon: "✅", section: "Approvals",         roles: ["Master","HR"] },
+
   // System
   { key: "imports",      label: "Data Management",     icon: "🗄️", section: "System",           roles: ["Master","HR","Finance"] },
   { key: "settings",     label: "Settings",            icon: "⚙️", section: "System",           roles: ["Master"] },

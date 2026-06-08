@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { money } from "../utils/format.js";
+import NotificationBell from "../components/NotificationBell.jsx";
 
-const TABS = [
-  { id: "attendance", label: "My Attendance", icon: "⏱️" },
-  { id: "leave", label: "My Leave", icon: "🌴" },
-  { id: "payslips", label: "My Payslips", icon: "💰" },
-  { id: "warnings", label: "My Warnings", icon: "⚠️" },
-  { id: "performance", label: "My Performance", icon: "⭐" },
-  { id: "loans", label: "My Loans", icon: "💳" },
-  { id: "profile", label: "My Profile", icon: "🧑" },
+const BASE_TABS = [
+  { id: "attendance",  label: "My Attendance",  icon: "⏱️" },
+  { id: "leave",       label: "My Leave",        icon: "🌴" },
+  { id: "payslips",    label: "My Payslips",     icon: "💰" },
+  { id: "warnings",    label: "My Warnings",     icon: "⚠️" },
+  { id: "performance", label: "My Performance",  icon: "⭐" },
+  { id: "loans",       label: "My Loans",        icon: "💳" },
+  { id: "profile",     label: "My Profile",      icon: "🧑" },
 ];
 
 const SHORT_TOLERANCE = 1.5;
@@ -67,6 +68,13 @@ export default function EmployeeSelfService() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
+  // My Team state
+  const [team, setTeam] = useState([]);
+  const [teamLeave, setTeamLeave] = useState([]);
+  const [teamAtt, setTeamAtt] = useState([]);
+  const [teamSignoffs, setTeamSignoffs] = useState([]);
+  const [teamMsg, setTeamMsg] = useState("");
+
   // Data
   const [attendance, setAttendance] = useState([]);
   const [leaveBalance, setLeaveBalance] = useState(null);
@@ -89,6 +97,7 @@ export default function EmployeeSelfService() {
     const sess = JSON.parse(raw);
     setSession(sess);
     loadAll(sess);
+    loadTeam(sess);
   }, []);
 
   async function loadAll(sess) {
@@ -152,6 +161,46 @@ export default function EmployeeSelfService() {
     return { totalOT, payableOT };
   }, [attendance]);
 
+  async function loadTeam(sess) {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const month = today.slice(0, 7);
+      const [{ data: members }, { data: lv }, { data: att }, { data: so }] = await Promise.all([
+        supabase.from("employees").select("employee_code,full_name,designation,department").eq("supervisor_id", sess.employee_code).eq("status", "Active"),
+        supabase.from("leave_requests").select("*").eq("status", "Pending Supervisor").order("created_at", { ascending: false }),
+        supabase.from("attendance").select("employee_code,attendance_status,check_in,check_out,work_date").eq("work_date", today),
+        supabase.from("timesheet_signoffs").select("*").eq("month", month),
+      ]);
+      setTeam(members || []);
+      setTeamLeave(lv || []);
+      setTeamAtt(att || []);
+      setTeamSignoffs(so || []);
+    } catch { /* ignore */ }
+  }
+
+  async function approveSupervisorLeave(id, empName) {
+    await supabase.from("leave_requests").update({ status: "Pending HR", approved_by: session.employee_code, approved_at: new Date().toISOString() }).eq("id", id);
+    await supabase.from("notifications").insert({ recipient_role: "HR", type: "leave_approval", title: "Leave Pending HR Approval", message: `${empName}'s leave has been approved by supervisor and is awaiting HR review.`, is_read: false });
+    setTeamMsg("Leave forwarded to HR."); loadTeam(session);
+  }
+
+  async function rejectSupervisorLeave(id, empName, reason) {
+    await supabase.from("leave_requests").update({ status: "Rejected by Supervisor", rejection_reason: reason, approved_by: session.employee_code }).eq("id", id);
+    setTeamMsg("Leave rejected."); loadTeam(session);
+  }
+
+  async function signOffTimesheet(empCode, empName) {
+    const month = new Date().toISOString().slice(0, 7);
+    const existing = teamSignoffs.find(s => s.employee_code === empCode && s.month === month);
+    if (existing) {
+      await supabase.from("timesheet_signoffs").update({ supervisor_signed_off: true, supervisor_code: session.employee_code, supervisor_name: session.name, signed_at: new Date().toISOString() }).eq("id", existing.id);
+    } else {
+      await supabase.from("timesheet_signoffs").insert({ employee_code: empCode, employee_name: empName, month, supervisor_signed_off: true, supervisor_code: session.employee_code, supervisor_name: session.name, signed_at: new Date().toISOString(), hr_reviewed: false, payroll_ready: false });
+    }
+    await supabase.from("notifications").insert({ recipient_role: "HR", type: "timesheet_signoff", title: "Timesheet Signed Off", message: `Supervisor signed off ${empName}'s ${month} timesheet.`, is_read: false });
+    setTeamMsg(`Timesheet signed off for ${empName}.`); loadTeam(session);
+  }
+
   async function submitLeave(e) {
     e.preventDefault();
     if (!leaveForm.from || !leaveForm.to) return;
@@ -163,10 +212,13 @@ export default function EmployeeSelfService() {
         start_date: leaveForm.from,
         end_date: leaveForm.to,
         reason: leaveForm.reason,
-        status: "Pending",
+        status: "Pending Supervisor",
+        from_date: leaveForm.from, to_date: leaveForm.to,
+        employee_name: session.name,
+        applied_date: new Date().toISOString().slice(0, 10),
       });
       if (error) throw error;
-      setLeaveMsg("Leave request submitted successfully. Pending HR approval.");
+      setLeaveMsg("Leave request submitted. Pending supervisor approval.");
       setLeaveForm(BLANK_LEAVE);
       const { data } = await supabase.from("leave_requests").select("*").eq("employee_code", session.employee_code).order("created_at", { ascending: false });
       setLeaveRequests(data || []);
@@ -178,6 +230,11 @@ export default function EmployeeSelfService() {
   }
 
   if (!session) return null;
+
+  const isSupervisor = profile?.is_supervisor || profile?.is_manager;
+  const TABS = isSupervisor
+    ? [...BASE_TABS, { id: "myteam", label: "My Team", icon: "👥" }]
+    : BASE_TABS;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -194,10 +251,15 @@ export default function EmployeeSelfService() {
             <div className="text-slate-400 text-xs">{session.designation || "Employee"} · {session.department} · {session.branch}</div>
           </div>
         </div>
-        <button onClick={logout}
-          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm transition text-slate-200">
-          Logout
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="text-white [&_button]:text-white [&_button:hover]:bg-slate-800">
+            <NotificationBell role="Employee" employeeCode={session.employee_code} />
+          </div>
+          <button onClick={logout}
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm transition text-slate-200">
+            Logout
+          </button>
+        </div>
       </header>
 
       <div className="max-w-6xl mx-auto p-4 md:p-6">
@@ -634,6 +696,93 @@ export default function EmployeeSelfService() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {/* ───── TAB: My Team (Supervisor only) ───── */}
+            {tab === "myteam" && isSupervisor && (
+              <div className="space-y-4">
+                {teamMsg && <div className="p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{teamMsg}</div>}
+
+                {/* Team overview */}
+                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+                  <h2 className="font-bold text-slate-800 mb-4">My Team — {team.length} Direct Reports</h2>
+                  {team.length === 0
+                    ? <p className="text-sm text-slate-400">No direct reports assigned. Ask HR to set your employee code as supervisor for your team members.</p>
+                    : (
+                      <div className="space-y-3">
+                        {team.map(m => {
+                          const todayAtt = teamAtt.find(a => a.employee_code === m.employee_code);
+                          const pendingLv = teamLeave.filter(l => l.employee_code === m.employee_code);
+                          const month = new Date().toISOString().slice(0, 7);
+                          const signoff = teamSignoffs.find(s => s.employee_code === m.employee_code && s.month === month);
+                          return (
+                            <div key={m.employee_code} className="border border-slate-100 rounded-xl p-4">
+                              <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
+                                <div>
+                                  <div className="font-semibold text-slate-900">{m.full_name}</div>
+                                  <div className="text-xs text-slate-400">{m.employee_code} · {m.designation || m.department}</div>
+                                </div>
+                                <div className="flex gap-2 flex-wrap">
+                                  <SBadge tone={todayAtt ? ({ Present: "green", Absent: "red", Late: "yellow" }[todayAtt.attendance_status] || "slate") : "slate"}>
+                                    {todayAtt ? (todayAtt.attendance_status || "Logged") : "No Record"}
+                                  </SBadge>
+                                  {pendingLv.length > 0 && <SBadge tone="yellow">{pendingLv.length} leave pending</SBadge>}
+                                  {signoff?.supervisor_signed_off ? <SBadge tone="green">Timesheet Signed</SBadge> : <SBadge tone="red">Timesheet Unsigned</SBadge>}
+                                </div>
+                              </div>
+                              <div className="flex gap-2 flex-wrap">
+                                {!signoff?.supervisor_signed_off && (
+                                  <button onClick={() => signOffTimesheet(m.employee_code, m.full_name)}
+                                    className="px-3 py-1.5 bg-slate-950 text-white rounded-xl text-xs font-medium hover:bg-slate-800 transition">
+                                    Sign Off Timesheet ({month})
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* Pending leave requests for this team member */}
+                              {pendingLv.length > 0 && (
+                                <div className="mt-3 border-t border-slate-100 pt-3">
+                                  <p className="text-xs font-semibold text-slate-500 mb-2">Pending Leave Approvals</p>
+                                  {pendingLv.map(lv => (
+                                    <div key={lv.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+                                      <div className="text-sm">
+                                        <span className="font-medium">{lv.leave_type}</span>
+                                        <span className="text-slate-400 text-xs ml-2">{lv.from_date} → {lv.to_date}</span>
+                                        {lv.reason && <span className="text-slate-400 text-xs ml-2">· {lv.reason}</span>}
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <button onClick={() => approveSupervisorLeave(lv.id, m.full_name)}
+                                          className="px-3 py-1 bg-emerald-600 text-white rounded-xl text-xs hover:bg-emerald-700 transition">Approve</button>
+                                        <button onClick={() => { const reason = prompt("Rejection reason?"); if (reason) rejectSupervisorLeave(lv.id, m.full_name, reason); }}
+                                          className="px-3 py-1 border border-slate-200 text-slate-600 rounded-xl text-xs hover:bg-slate-50 transition">Reject</button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                </div>
+
+                {/* Bulk sign-off */}
+                {team.length > 0 && (
+                  <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold text-slate-800 text-sm">Bulk Timesheet Sign-off</div>
+                      <div className="text-xs text-slate-400">Sign off all unsigned timesheets for {new Date().toISOString().slice(0, 7)} at once</div>
+                    </div>
+                    <button onClick={async () => {
+                      for (const m of team) await signOffTimesheet(m.employee_code, m.full_name);
+                      setTeamMsg("All timesheets signed off.");
+                    }} className="px-4 py-2 bg-slate-950 text-white rounded-xl text-sm font-medium hover:bg-slate-800 transition">
+                      Sign Off All
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

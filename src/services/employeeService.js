@@ -17,25 +17,35 @@ export function mapEmployeeRecord(emp) {
     cnic: emp.cnic || "",
     fathersCnic: emp.fathers_cnic || "",
     joiningDate: emp.joining_date || "",
+    // CNIC
     cnicIssueDate: emp.cnic_issue_date || "",
     cnicExpiryDate: emp.cnic_expiry_date || "",
+    // Reference & Emergency
     referencePersonName: emp.reference_person_name || "",
     referencePersonContact: emp.reference_person_contact || "",
     emergencyContactName: emp.emergency_contact_name || "",
     emergencyContactNumber: emp.emergency_contact_number || "",
     emergencyContactRelationship: emp.emergency_contact_relationship || "",
+    // Addresses
     billingAddress: emp.billing_address || "",
     permanentAddress: emp.permanent_address || "",
     currentAddress: emp.current_address || "",
+    // Contact
     personalPhone: emp.personal_phone || "",
     workPhone: emp.work_phone || "",
     email: emp.email || "",
+    // Banking
     bankName: emp.bank_name || "",
     accountNumber: emp.account_number || "",
     iban: emp.iban || "",
+    // Documents
     photoUrl: emp.photo_url || "",
     cnicCopyUrl: emp.cnic_copy_url || "",
     employmentContractUrl: emp.employment_contract_url || "",
+    // Hierarchy
+    supervisorId: emp.supervisor_id || "",
+    isSupervisor: !!emp.is_supervisor,
+    isManager: !!emp.is_manager,
   };
 }
 

@@ -109,10 +109,29 @@ export default function LeaveManagement() {
     const upd = { status, approved_by: "HR", approved_at: new Date().toISOString() };
     if (rejectionNote) upd.rejection_reason = rejectionNote;
     const { error } = await supabase.from("leave_requests").update(upd).eq("id", id);
-    if (!error) { setMsg(`Leave ${status.toLowerCase()}.`); loadAll(); }
+    if (!error) {
+      if (status === "Approved" || status === "Pending HR") {
+        const req = requests.find(r => r.id === id);
+        await supabase.from("notifications").insert({
+          recipient_role: status === "Pending HR" ? "HR" : null,
+          recipient_code: status === "Approved" ? req?.employee_code : null,
+          type: "leave_approval", is_read: false,
+          title: status === "Approved" ? "Leave Approved" : "Leave Forwarded to HR",
+          message: `${req?.employee_name}'s ${req?.leave_type} leave has been ${status === "Approved" ? "approved" : "forwarded to HR for review"}.`,
+          created_at: new Date().toISOString(),
+        }).then(() => {});
+      }
+      setMsg(`Leave ${status.toLowerCase()}.`); loadAll();
+    }
   }
 
-  const pending = requests.filter(r => r.status === "Pending");
+  function approveAction(r) {
+    if (r.status === "Pending Supervisor" || r.status === "Pending") return "Pending HR";
+    return "Approved";
+  }
+
+  const PENDING_STATUSES = ["Pending", "Pending Supervisor", "Pending HR"];
+  const pending = requests.filter(r => PENDING_STATUSES.includes(r.status));
 
   const filteredHistory = useMemo(() => requests.filter(r => {
     const typeOk = historyFilter.type === "All" || r.leave_type === historyFilter.type;
@@ -196,41 +215,49 @@ export default function LeaveManagement() {
           <div className="px-5 pt-4 pb-2 flex items-center justify-between">
             <div><h2 className="font-bold text-slate-800">Leave Approval Queue</h2><p className="text-xs text-slate-400 mt-0.5">{pending.length} pending · {requests.length} total</p></div>
           </div>
-          <table className="w-full min-w-[800px] text-sm">
+          <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Type", "From", "To", "Days", "Reason", "Applied", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Type", "From", "To", "Days", "Reason", "Stage", "Applied", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {requests.length === 0
-                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No leave requests found.</td></tr>
-                : requests.map(r => (
-                  <tr key={r.id}>
-                    <td className="px-4 py-3 font-medium">{r.employee_name || r.employee_id}</td>
-                    <td className="px-4 py-3"><Badge tone={r.leave_type === "Unpaid" ? "red" : "blue"}>{r.leave_type}</Badge></td>
-                    <td className="px-4 py-3">{r.from_date}</td>
-                    <td className="px-4 py-3">{r.to_date}</td>
-                    <td className="px-4 py-3">{r.days || "—"}</td>
-                    <td className="px-4 py-3 max-w-[140px] truncate">{r.reason || "—"}</td>
-                    <td className="px-4 py-3">{r.applied_date || r.created_at?.slice(0, 10)}</td>
-                    <td className="px-4 py-3">{statusBadge(r.status)}</td>
-                    <td className="px-4 py-3">
-                      {r.status === "Pending" && (
-                        rejectId === r.id
+              {pending.length === 0
+                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending leave requests.</td></tr>
+                : pending.map(r => {
+                  const nextStatus = approveAction(r);
+                  const isAwaitingSup = r.status === "Pending" || r.status === "Pending Supervisor";
+                  return (
+                    <tr key={r.id}>
+                      <td className="px-4 py-3 font-medium">{r.employee_name || r.employee_id}</td>
+                      <td className="px-4 py-3"><Badge tone={r.leave_type === "Unpaid" ? "red" : "blue"}>{r.leave_type}</Badge></td>
+                      <td className="px-4 py-3">{r.from_date}</td>
+                      <td className="px-4 py-3">{r.to_date}</td>
+                      <td className="px-4 py-3">{r.days || "—"}</td>
+                      <td className="px-4 py-3 max-w-[120px] truncate">{r.reason || "—"}</td>
+                      <td className="px-4 py-3">
+                        {isAwaitingSup
+                          ? <Badge tone="yellow">Awaiting Supervisor</Badge>
+                          : <Badge tone="blue">Awaiting HR</Badge>}
+                      </td>
+                      <td className="px-4 py-3">{r.applied_date || r.created_at?.slice(0, 10)}</td>
+                      <td className="px-4 py-3">
+                        {rejectId === r.id
                           ? <div className="flex flex-col gap-1">
                               <input value={rejectNote} onChange={e => setRejectNote(e.target.value)} placeholder="Rejection note..." className="px-2 py-1 rounded-xl border border-slate-200 text-xs" />
                               <div className="flex gap-1">
-                                <Button onClick={() => { updateStatus(r.id, "Rejected", rejectNote); setRejectId(null); setRejectNote(""); }} className="rounded-xl text-xs py-1 px-2">Confirm</Button>
+                                <Button onClick={() => { updateStatus(r.id, "Rejected by HR", rejectNote); setRejectId(null); setRejectNote(""); }} className="rounded-xl text-xs py-1 px-2">Confirm</Button>
                                 <Button variant="outline" onClick={() => setRejectId(null)} className="rounded-xl text-xs py-1 px-2">Cancel</Button>
                               </div>
                             </div>
                           : <div className="flex gap-1">
-                              <Button className="rounded-xl text-xs py-1 px-2" onClick={() => updateStatus(r.id, "Approved")}>Approve</Button>
+                              <Button className="rounded-xl text-xs py-1 px-2" onClick={() => updateStatus(r.id, nextStatus)}>
+                                {nextStatus === "Approved" ? "Approve" : "Fwd to HR"}
+                              </Button>
                               <Button variant="outline" className="rounded-xl text-xs py-1 px-2" onClick={() => setRejectId(r.id)}>Reject</Button>
-                            </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                            </div>}
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>

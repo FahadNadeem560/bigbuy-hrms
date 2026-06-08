@@ -3,8 +3,15 @@ import Employees from "./Employees.jsx";
 import Recruitment from "./Recruitment.jsx";
 import DocumentManagement from "./DocumentManagement.jsx";
 import StaffCredentials from "./StaffCredentials.jsx";
+import OrgChart from "./OrgChart.jsx";
 
-const TABS = [["directory","Directory"],["recruitment","Recruitment"],["documents","Documents"],["credentials","Credentials"]];
+const TABS = [
+  ["directory",   "Directory"],
+  ["recruitment", "Recruitment"],
+  ["documents",   "Documents"],
+  ["credentials", "Credentials"],
+  ["orgchart",    "Org Chart"],
+];
 
 export default function EmployeesHub(props) {
   const [tab, setTab] = useState("directory");
@@ -22,6 +29,7 @@ export default function EmployeesHub(props) {
       {tab === "recruitment" && <Recruitment />}
       {tab === "documents"   && <DocumentManagement />}
       {tab === "credentials" && <StaffCredentials />}
+      {tab === "orgchart"    && <OrgChart />}
     </div>
   );
 }

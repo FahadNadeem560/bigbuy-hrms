@@ -4,6 +4,86 @@ Run these SQL statements in the Supabase SQL editor to create all tables require
 
 ---
 
+## 0. Supervisor / Hierarchy System (Part 1 — New)
+
+```sql
+-- Employee hierarchy columns
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS supervisor_id text;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_supervisor boolean DEFAULT false;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_manager boolean DEFAULT false;
+
+-- Notifications table
+CREATE TABLE IF NOT EXISTS notifications (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  recipient_code text,
+  recipient_role text,
+  type text NOT NULL DEFAULT 'general',
+  title text NOT NULL,
+  message text,
+  reference_id uuid,
+  reference_type text,
+  is_read boolean DEFAULT false,
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_code, recipient_role, is_read);
+
+-- Timesheet sign-offs
+CREATE TABLE IF NOT EXISTS timesheet_signoffs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_code text NOT NULL,
+  employee_name text,
+  month text NOT NULL,
+  supervisor_signed_off boolean DEFAULT false,
+  supervisor_code text,
+  supervisor_name text,
+  signed_at timestamptz,
+  hr_reviewed boolean DEFAULT false,
+  payroll_ready boolean DEFAULT false,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE(employee_code, month)
+);
+
+-- Settlement requests (for approval queue)
+CREATE TABLE IF NOT EXISTS settlement_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_code text NOT NULL,
+  employee_name text,
+  branch text,
+  resign_date date,
+  last_working_day date,
+  net_settlement numeric DEFAULT 0,
+  status text DEFAULT 'Pending Supervisor',
+  submitted_by text,
+  approved_by text,
+  rejection_reason text,
+  approved_at timestamptz,
+  created_at timestamptz DEFAULT now()
+);
+
+-- Add status to attendance_adjustments for approval workflow
+ALTER TABLE attendance_adjustments ADD COLUMN IF NOT EXISTS status text DEFAULT 'Completed';
+ALTER TABLE attendance_adjustments ADD COLUMN IF NOT EXISTS rejection_reason text;
+
+-- Add salary_increments table if not exists
+CREATE TABLE IF NOT EXISTS salary_increments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  employee_code text NOT NULL,
+  employee_name text,
+  old_salary numeric DEFAULT 0,
+  new_salary numeric DEFAULT 0,
+  effective_from date,
+  reason text,
+  submitted_by text,
+  approved_by text,
+  rejection_reason text,
+  status text DEFAULT 'Pending',
+  approved_at timestamptz,
+  created_at timestamptz DEFAULT now()
+);
+```
+
+---
+
 ## 1. Employee Table Extensions
 
 ```sql

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Badge, Button, PageTitle, Table } from "../components/ui";
 import { BRANCH_CODE_MAP } from "../constants/branches";
@@ -35,6 +35,61 @@ function Section({ title, children }) {
 
 function Field({ label, children }) {
   return <div><p className="text-xs text-slate-500 mb-1">{label}</p>{children}</div>;
+}
+
+function SupervisorPicker({ value, onChange }) {
+  const [supervisors, setSupervisors] = useState([]);
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    supabase.from("employees")
+      .select("employee_code,full_name,designation,department")
+      .or("is_supervisor.eq.true,is_manager.eq.true")
+      .eq("status", "Active").order("full_name")
+      .then(({ data }) => setSupervisors(data || []));
+  }, []);
+
+  useEffect(() => {
+    function h(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  const hits = useMemo(() => {
+    if (!q.trim()) return supervisors.slice(0, 10);
+    const lq = q.toLowerCase();
+    return supervisors.filter(e => e.full_name?.toLowerCase().includes(lq) || e.employee_code?.toLowerCase().includes(lq)).slice(0, 10);
+  }, [supervisors, q]);
+
+  const selected = supervisors.find(s => s.employee_code === value);
+
+  return (
+    <div className="relative" ref={ref}>
+      <input
+        value={selected ? `${selected.employee_code} — ${selected.full_name}` : q}
+        onChange={e => { if (value) onChange(""); setQ(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder="Search supervisor…"
+        className="px-4 py-2 border rounded-xl w-full text-sm" />
+      {open && (
+        <div className="absolute z-20 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-48 overflow-y-auto">
+          <button onMouseDown={e => e.preventDefault()} onClick={() => { onChange(""); setQ(""); setOpen(false); }}
+            className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm text-slate-400">— None —</button>
+          {hits.map(e => (
+            <button key={e.employee_code} onMouseDown={ev => ev.preventDefault()}
+              onClick={() => { onChange(e.employee_code); setQ(""); setOpen(false); }}
+              className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm">
+              <span className="font-semibold">{e.employee_code}</span> — {e.full_name}
+              <span className="text-xs text-slate-400 ml-2">{e.designation || e.department}</span>
+            </button>
+          ))}
+          {hits.length === 0 && <div className="px-4 py-2 text-sm text-slate-400">No supervisors / managers found</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function EmployeeAdd({ employee, setEmployee, save, close }) {
@@ -81,6 +136,24 @@ export function EmployeeAdd({ employee, setEmployee, save, close }) {
         </Field>
         <Field label="Salary">{inp("salary", "Monthly Salary", "number")}</Field>
         <Field label="Joining Date">{inp("joiningDate", "", "date")}</Field>
+      </Section>
+
+      <Section title="Hierarchy & Role">
+        <Field label="Direct Supervisor">
+          <SupervisorPicker value={employee.supervisorId || ""} onChange={code => setEmployee(v => ({ ...v, supervisorId: code }))} />
+        </Field>
+        <Field label="Role Flags">
+          <div className="flex gap-4 mt-2">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={!!employee.isSupervisor} onChange={e => setEmployee(v => ({ ...v, isSupervisor: e.target.checked }))} className="rounded" />
+              <span>Is Supervisor</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={!!employee.isManager} onChange={e => setEmployee(v => ({ ...v, isManager: e.target.checked }))} className="rounded" />
+              <span>Is Manager</span>
+            </label>
+          </div>
+        </Field>
       </Section>
 
       <Section title="Identity & CNIC">
@@ -173,6 +246,24 @@ export function EmployeeEdit({ employee, setEmployee, save, close }) {
         </Field>
       </Section>
 
+      <Section title="Hierarchy & Role">
+        <Field label="Direct Supervisor">
+          <SupervisorPicker value={employee.supervisorId || ""} onChange={code => setEmployee(v => ({ ...v, supervisorId: code }))} />
+        </Field>
+        <Field label="Role Flags">
+          <div className="flex gap-4 mt-2">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={!!employee.isSupervisor} onChange={e => setEmployee(v => ({ ...v, isSupervisor: e.target.checked }))} className="rounded" />
+              <span>Is Supervisor</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={!!employee.isManager} onChange={e => setEmployee(v => ({ ...v, isManager: e.target.checked }))} className="rounded" />
+              <span>Is Manager</span>
+            </label>
+          </div>
+        </Field>
+      </Section>
+
       <Section title="Identity & CNIC">
         <Field label="CNIC">{inp("cnic", "CNIC")}</Field>
         <Field label="CNIC Issue Date">{inp("cnicIssueDate", "", "date")}</Field>
@@ -211,7 +302,12 @@ export function EmployeeEdit({ employee, setEmployee, save, close }) {
   );
 }
 
-export default function Employees({ query, setQuery, branch, setBranch, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus }) {
+export default function Employees({ query, setQuery, branch, setBranch, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees }) {
+  const supervisorMap = useMemo(() =>
+    Object.fromEntries((employees || []).map(e => [e.id, e.name])),
+    [employees]
+  );
+
   return (
     <div>
       <PageTitle title="Employee Master" subtitle="Add, edit and manage staff records."
@@ -229,15 +325,16 @@ export default function Employees({ query, setQuery, branch, setBranch, showEmpl
       {loadingEmployees && <p className="text-slate-400 text-sm mb-2">Loading employees...</p>}
 
       <Table
-        headers={["ID", "Name", "Level", "Branch", "Department", "Salary", "CNIC Expiry", "Status", "Action"]}
+        headers={["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Salary", "CNIC Expiry", "Status", "Action"]}
         rows={filteredEmployees}
         renderRow={e => {
           const cnicStatus = cnicExpiryStatus(e.cnicExpiryDate);
           return (
             <tr key={e.id}>
               <td className="px-4 py-3 font-medium">{e.id}</td>
-              <td className="px-4 py-3">{e.name}</td>
+              <td className="px-4 py-3">{e.name} {e.isSupervisor && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 rounded ml-1">SUP</span>}{e.isManager && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded ml-1">MGR</span>}</td>
               <td className="px-4 py-3">{e.level}</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{supervisorMap[e.supervisorId] || e.supervisorId || "—"}</td>
               <td className="px-4 py-3">{e.branch}</td>
               <td className="px-4 py-3">{e.dept}</td>
               <td className="px-4 py-3">{money(e.salary)}</td>
