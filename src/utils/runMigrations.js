@@ -22,13 +22,18 @@ export async function runMigrations() {
   } catch (err) {
     console.warn("[HRMS] Migration check skipped:", err.message);
   }
+
+  // Always wait for DB to be ready before returning, regardless of migration outcome.
+  // Ensures App.jsx never starts loading data while PostgREST is mid-rebuild.
+  await waitForDB();
 }
 
-async function waitForDB(maxWait = 12000) {
+async function waitForDB(maxWait = 15000) {
   for (let elapsed = 0; elapsed < maxWait; elapsed += 500) {
     await new Promise(r => setTimeout(r, 500));
     try {
-      const { error } = await supabase.from("employees").select("employee_code").limit(1);
+      // Poll attendance specifically — it's the table that fails during PostgREST rebuilds
+      const { error } = await supabase.from("attendance").select("employee_code").limit(1);
       if (!error) return;
     } catch {}
   }

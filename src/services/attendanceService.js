@@ -7,11 +7,24 @@ export async function fetchRecentAttendance(limit = 25000) {
   for (let from = 0; from < limit; from += pageSize) {
     const to = Math.min(from + pageSize - 1, limit - 1);
 
-    const { data, error } = await supabase
-      .from("attendance")
-      .select("*")
-      .order("work_date", { ascending: false })
-      .range(from, to);
+    let data, error;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      ({ data, error } = await supabase
+        .from("attendance")
+        .select("*")
+        .order("work_date", { ascending: false })
+        .range(from, to));
+
+      if (!error) break;
+      // Retry if PostgREST schema cache is still rebuilding
+      const isSchemaError = error.message?.includes("Invalid path") ||
+        error.code === "PGRST100" || error.code === "PGRST205";
+      if (isSchemaError && attempt < 3) {
+        await new Promise(r => setTimeout(r, 2000));
+      } else {
+        break;
+      }
+    }
 
     if (error) throw error;
     if (!data || data.length === 0) break;
