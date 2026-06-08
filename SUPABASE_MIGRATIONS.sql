@@ -397,6 +397,31 @@ CREATE TABLE IF NOT EXISTS employee_tax_settings (
 );
 
 
+-- ─────────────────────────────────────────────────────────────
+-- loan_changes  (LoanManagement.jsx)
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS loan_changes (
+  id            UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  loan_id       UUID,
+  employee_code TEXT,
+  change_type   TEXT,
+  old_balance   NUMERIC,
+  new_balance   NUMERIC,
+  old_monthly   NUMERIC,
+  new_monthly   NUMERIC,
+  reason        TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ─────────────────────────────────────────────────────────────
+-- grants: tables that exist but were missing anon access
+-- ─────────────────────────────────────────────────────────────
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.leaves      TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.audit_logs  TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.payroll     TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.users       TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.loan_changes TO anon, authenticated;
+
 -- =============================================================
 -- run_migrations() — callable from the app via supabase.rpc()
 -- SECURITY DEFINER: runs with owner privileges to execute DDL
@@ -726,6 +751,27 @@ BEGIN
     created_at        TIMESTAMPTZ DEFAULT NOW(),
     updated_at        TIMESTAMPTZ DEFAULT NOW()
   );
+
+  -- ── loan_changes ───────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS loan_changes (
+    id            UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+    loan_id       UUID,
+    employee_code TEXT,
+    change_type   TEXT,
+    old_balance   NUMERIC,
+    new_balance   NUMERIC,
+    old_monthly   NUMERIC,
+    new_monthly   NUMERIC,
+    reason        TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  -- ── grants: tables that exist but lack anon access ─────────
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.leaves     TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.audit_logs TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.payroll    TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.users      TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.loan_changes TO anon, authenticated;
 
 END;
 $$;

@@ -34,20 +34,9 @@ export default function PolicySettings() {
 
   async function save(s) {
     setErr("");
-    const newVal = editing.value;
-    if (s.id) {
-      const { error } = await supabase.from("hrms_policy_settings").update({ value: newVal }).eq("id", s.id);
-      if (error) return setErr(error.message);
-    } else {
-      const { data: existing } = await supabase.from("hrms_policy_settings").select("id").eq("key", s.key).maybeSingle();
-      if (existing) {
-        const { error } = await supabase.from("hrms_policy_settings").update({ value: newVal }).eq("id", existing.id);
-        if (error) return setErr(error.message);
-      } else {
-        const { error } = await supabase.from("hrms_policy_settings").insert({ key: s.key, value: newVal, description: s.description, branch: "Global" });
-        if (error) return setErr(error.message);
-      }
-    }
+    const { error } = await supabase.from("hrms_policy_settings")
+      .upsert({ key: s.key, value: editing.value, description: s.description, branch: s.branch || "Global" }, { onConflict: "key" });
+    if (error) return setErr(error.message);
     setMsg("Policy setting saved.");
     setEditing(null);
     load();
