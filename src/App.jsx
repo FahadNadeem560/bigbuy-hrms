@@ -25,7 +25,6 @@ import { readImportFile, validateEmployeeImportRows } from "./utils/importHelper
 import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
 import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch } from "./services/employeeService.js";
 import { fetchRecentAttendance } from "./services/attendanceService.js";
-import { runMigrations } from "./utils/runMigrations.js";
 
 const demoUser = { name: "Fahad Nadeem", email: "fahad-nadeem@hotmail.com", role: "Master" };
 const demoLoans = [];
@@ -99,7 +98,7 @@ export default function BigBuyHRMS() {
     } catch (err) { setError(`Attendance load failed: ${err.message}`); }
   }
 
-  useEffect(() => { runMigrations().then(() => { loadEmployees(); loadAttendance(); }); }, []);
+  useEffect(() => { loadEmployees(); loadAttendance(); }, []);
 
   async function saveEmployee() {
     const code = `EMP-${String(Date.now()).slice(-6)}`;
