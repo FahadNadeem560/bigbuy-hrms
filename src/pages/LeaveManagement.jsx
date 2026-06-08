@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
+import LeaveLiability from "./LeaveLiability.jsx";
 
 const LEAVE_TYPES = ["Casual", "Annual", "Sick", "Half Day", "Emergency", "Maternity", "Paternity", "Unpaid"];
 const BALANCE_TYPES = ["Annual", "Casual", "Sick", "Unpaid"];
@@ -158,7 +159,7 @@ export default function LeaveManagement() {
     <div>
       <PageTitle title="Leave Management" subtitle="Apply, approve and track employee leave requests with per-type balance tracking." />
       <div className="flex flex-wrap gap-2 mb-4">
-        {[["apply", "Apply Leave"], ["queue", `Approval Queue (${pending.length})`], ["balances", "Balances"], ["history", "History"], ["calendar", "Calendar"]].map(([k, l]) => (
+        {[["apply", "Apply Leave"], ["queue", `Approval Queue (${pending.length})`], ["balances", "Balances"], ["history", "History"], ["calendar", "Calendar"], ["liability", "Leave Liability"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{l}</button>
         ))}
@@ -314,6 +315,8 @@ export default function LeaveManagement() {
           </div>
         </div>
       )}
+
+      {tab === "liability" && <LeaveLiability />}
 
       {tab === "calendar" && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">

@@ -1,43 +1,23 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Layout from "./components/Layout.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
-import Employees from "./pages/Employees.jsx";
+import EmployeesHub from "./pages/EmployeesHub.jsx";
 import Attendance from "./pages/Attendance.jsx";
 import Payroll from "./pages/Payroll.jsx";
 import DataManagement from "./pages/DataManagement.jsx";
-import Policies from "./pages/Policies.jsx";
 import ZKTSync from "./pages/ZKTSync.jsx";
-import Timesheet from "./pages/Timesheet.jsx";
 import LeaveManagement from "./pages/LeaveManagement.jsx";
-import AttendanceAdjustment from "./pages/AttendanceAdjustment.jsx";
-import MissingPunch from "./pages/MissingPunch.jsx";
-import ManpowerDashboard from "./pages/ManpowerDashboard.jsx";
 import PayrollAutomation from "./pages/PayrollAutomation.jsx";
-import LoanManagement from "./pages/LoanManagement.jsx";
-import FinalSettlement from "./pages/FinalSettlement.jsx";
 import EmployeeProfile from "./pages/EmployeeProfile.jsx";
-import DocumentManagement from "./pages/DocumentManagement.jsx";
-import Warnings from "./pages/Warnings.jsx";
-import Recruitment from "./pages/Recruitment.jsx";
-import BranchDashboard from "./pages/BranchDashboard.jsx";
-import ExecutiveDashboard from "./pages/ExecutiveDashboard.jsx";
-import AssetTracking from "./pages/AssetTracking.jsx";
-import Performance from "./pages/Performance.jsx";
-import AttendanceAlerts from "./pages/AttendanceAlerts.jsx";
-import LeaveLiability from "./pages/LeaveLiability.jsx";
-import IncrementHistory from "./pages/IncrementHistory.jsx";
-import BranchTransfer from "./pages/BranchTransfer.jsx";
-import AIAssistant from "./pages/AIAssistant.jsx";
-import StaffCredentials from "./pages/StaffCredentials.jsx";
 import DepartmentManagement from "./pages/DepartmentManagement.jsx";
 import RosterManagement from "./pages/RosterManagement.jsx";
-import OneTimeAdjustments from "./pages/OneTimeAdjustments.jsx";
-import TaxManagement from "./pages/TaxManagement.jsx";
-import FuelAllowance from "./pages/FuelAllowance.jsx";
-import FixedAllowances from "./pages/FixedAllowances.jsx";
-import CompensationManagement from "./pages/CompensationManagement.jsx";
-import PolicySettings from "./pages/PolicySettings.jsx";
-import SalaryComparison from "./pages/SalaryComparison.jsx";
+import WorkforceHub from "./pages/WorkforceHub.jsx";
+import SalaryReports from "./pages/SalaryReports.jsx";
+import AllowancesHub from "./pages/AllowancesHub.jsx";
+import PayrollExtras from "./pages/PayrollExtras.jsx";
+import LoanHub from "./pages/LoanHub.jsx";
+import SettingsHub from "./pages/SettingsHub.jsx";
+import AIAssistant from "./pages/AIAssistant.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
@@ -94,16 +74,18 @@ export default function BigBuyHRMS() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [selectedPayslip, setSelectedPayslip] = useState(null);
-  const visibleMenu = useMemo(() => MENU_ITEMS.filter((item) => item.roles.includes(role)), [role]);
-  const filteredEmployees = useMemo(() => employees.filter((employee) => (branch === "All" || employee.branch === branch) && `${employee.name} ${employee.id} ${employee.dept} ${employee.phone}`.toLowerCase().includes(query.toLowerCase())), [employees, branch, query]);
-  const activeEmployees = useMemo(() => employees.filter((employee) => employee.status === "Active"), [employees]);
-  const payrollRows = useMemo(() => activeEmployees.map((employee) => calculatePayrollForEmployee(employee, demoAdjustments[employee.id] || {}, demoLoans)), [activeEmployees]);
+  const visibleMenu = useMemo(() => MENU_ITEMS.filter(item => item.roles.includes(role)), [role]);
+  const filteredEmployees = useMemo(() => employees.filter(emp =>
+    (branch === "All" || emp.branch === branch) &&
+    `${emp.name} ${emp.id} ${emp.dept} ${emp.phone}`.toLowerCase().includes(query.toLowerCase())
+  ), [employees, branch, query]);
+  const activeEmployees = useMemo(() => employees.filter(emp => emp.status === "Active"), [employees]);
+  const payrollRows = useMemo(() => activeEmployees.map(emp => calculatePayrollForEmployee(emp, demoAdjustments[emp.id] || {}, demoLoans)), [activeEmployees]);
 
   async function loadEmployees() {
     setLoadingEmployees(true);
     try {
-      const rows = await fetchEmployees();
-      setEmployees(rows);
+      setEmployees(await fetchEmployees());
     } catch (err) {
       setError(`Employee load failed: ${err.message}`);
     } finally {
@@ -198,13 +180,13 @@ export default function BigBuyHRMS() {
   async function onImport() {
     setImporting(true); setError("");
     try {
-      const rows = preview.filter((row) => row.valid).map((row) => ({
-        employee_code: row.employee_code, full_name: row.name, designation: row.designation,
-        department: row.department, category_department: row.category_department,
-        branch: row.branch, staff_level: row.level, employee_type: row.employee_type,
-        salary: row.salary === "" ? 0 : Number(row.salary), phone: row.phone,
-        whatsapp_number: row.whatsapp_number, cnic: row.cnic, fathers_cnic: row.fathers_cnic,
-        joining_date: row.joining_date, eobi_status: row.eobi_status, status: row.status, shift: row.shift,
+      const rows = preview.filter(r => r.valid).map(r => ({
+        employee_code: r.employee_code, full_name: r.name, designation: r.designation,
+        department: r.department, category_department: r.category_department,
+        branch: r.branch, staff_level: r.level, employee_type: r.employee_type,
+        salary: r.salary === "" ? 0 : Number(r.salary), phone: r.phone,
+        whatsapp_number: r.whatsapp_number, cnic: r.cnic, fathers_cnic: r.fathers_cnic,
+        joining_date: r.joining_date, eobi_status: r.eobi_status, status: r.status, shift: r.shift,
       }));
       const result = await importEmployeeMasterBatch(rows, selectedFile?.name || "Employee Master Upload");
       setMessage(`${Number(result?.imported_or_updated || 0)} employees imported/updated successfully.`);
@@ -216,59 +198,47 @@ export default function BigBuyHRMS() {
     }
   }
 
+  const employeeProps = {
+    query, setQuery, branch, setBranch,
+    showEmployeeForm, setShowEmployeeForm,
+    newEmployee, setNewEmployee, saveEmployee,
+    editingEmployee, setEditingEmployee, updateEmployee,
+    loadingEmployees, filteredEmployees, updateEmployeeStatus,
+  };
+
   return (
     <Layout user={demoUser} role={role} setRole={setRole} active={active} setActive={setActive} visibleMenu={visibleMenu}>
       {error && <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}
 
-      {/* Core */}
-      {active === "dashboard" && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
-      {active === "employees" && <Employees query={query} setQuery={setQuery} branch={branch} setBranch={setBranch} showEmployeeForm={showEmployeeForm} setShowEmployeeForm={setShowEmployeeForm} newEmployee={newEmployee} setNewEmployee={setNewEmployee} saveEmployee={saveEmployee} editingEmployee={editingEmployee} setEditingEmployee={setEditingEmployee} updateEmployee={updateEmployee} loadingEmployees={loadingEmployees} filteredEmployees={filteredEmployees} updateEmployeeStatus={updateEmployeeStatus} />}
+      {/* Core HR */}
+      {active === "dashboard"   && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
+      {active === "employees"   && <EmployeesHub {...employeeProps} />}
       {active === "departments" && <DepartmentManagement />}
-      {active === "profile" && <EmployeeProfile />}
-      {active === "recruitment" && <Recruitment />}
-      {active === "documents" && <DocumentManagement />}
+      {active === "profile"     && <EmployeeProfile />}
 
       {/* Attendance */}
-      {active === "attendance" && <Attendance rows={attendanceRows} />}
-      {active === "timesheet" && <Timesheet />}
-      {active === "roster" && <RosterManagement />}
-      {active === "adjustments" && <AttendanceAdjustment />}
-      {active === "missing-punch" && <MissingPunch />}
-      {active === "alerts" && <AttendanceAlerts />}
-      {active === "zkt" && <ZKTSync />}
+      {active === "attendance"  && <Attendance rows={attendanceRows} />}
+      {active === "roster"      && <RosterManagement />}
+      {active === "zkt"         && <ZKTSync />}
 
       {/* Leave */}
-      {active === "leave" && <LeaveManagement />}
-      {active === "leave-liability" && <LeaveLiability />}
+      {active === "leave"       && <LeaveManagement />}
 
       {/* Workforce */}
-      {active === "manpower" && <ManpowerDashboard />}
-      {active === "branch-dashboard" && <BranchDashboard />}
-      {active === "executive" && <ExecutiveDashboard />}
-      {active === "transfers" && <BranchTransfer />}
-      {active === "warnings" && <Warnings />}
-      {active === "performance" && <Performance />}
-      {active === "assets" && <AssetTracking />}
+      {active === "workforce"   && <WorkforceHub />}
 
       {/* Payroll & Finance */}
       {active === "payroll-automation" && <PayrollAutomation role={role} />}
-      {active === "payroll" && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
-      {active === "salary-comparison" && <SalaryComparison />}
-      {active === "compensation" && <CompensationManagement />}
-      {active === "tax" && <TaxManagement role={role} />}
-      {active === "fuel" && <FuelAllowance role={role} />}
-      {active === "fixed-allowances" && <FixedAllowances />}
-      {active === "adjustments-pay" && <OneTimeAdjustments role={role} />}
-      {active === "loans" && <LoanManagement />}
-      {active === "increments" && <IncrementHistory />}
-      {active === "settlement" && <FinalSettlement role={role} />}
+      {active === "payroll"            && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
+      {active === "salary-reports"     && <SalaryReports />}
+      {active === "allowances"         && <AllowancesHub role={role} />}
+      {active === "payroll-extras"     && <PayrollExtras role={role} />}
+      {active === "loans"              && <LoanHub role={role} />}
 
       {/* System */}
-      {active === "imports" && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
-      {active === "policy-settings" && <PolicySettings />}
-      {active === "policies" && <Policies />}
-      {active === "credentials" && <StaffCredentials />}
-      {active === "ai-assistant" && <AIAssistant />}
+      {active === "imports"     && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
+      {active === "settings"    && <SettingsHub />}
+      {active === "ai-assistant"&& <AIAssistant />}
     </Layout>
   );
 }

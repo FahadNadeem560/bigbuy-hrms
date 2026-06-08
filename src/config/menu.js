@@ -1,50 +1,29 @@
 export const MENU_ITEMS = [
   // Core HR
-  { key: "dashboard",    label: "Dashboard",                icon: "🏢", section: "Core HR",          roles: ["Master", "HR", "Finance"] },
-  { key: "employees",    label: "Employees",                icon: "👥", section: "Core HR",          roles: ["Master", "HR"] },
-  { key: "departments",  label: "Departments & Designations", icon: "🏗️", section: "Core HR",        roles: ["Master", "HR"] },
-  { key: "recruitment",  label: "Recruitment",              icon: "🎯", section: "Core HR",          roles: ["Master", "HR"] },
-  { key: "documents",    label: "Documents",                icon: "🗂️", section: "Core HR",          roles: ["Master", "HR"] },
-  { key: "credentials",  label: "Staff Credentials",        icon: "🔑", section: "Core HR",          roles: ["Master", "HR"] },
+  { key: "dashboard",   label: "Dashboard",           icon: "🏢", section: "Core HR",          roles: ["Master","HR","Finance"] },
+  { key: "employees",   label: "Employees",            icon: "👥", section: "Core HR",          roles: ["Master","HR"] },
+  { key: "departments", label: "Departments",          icon: "🏗️", section: "Core HR",          roles: ["Master","HR"] },
 
   // Attendance
-  { key: "attendance",      label: "Attendance",        icon: "⏱️", section: "Attendance", roles: ["Master", "HR", "Finance", "Employee"] },
-  { key: "timesheet",       label: "Timesheet",         icon: "📋", section: "Attendance", roles: ["Master", "HR", "Finance", "Employee"] },
-  { key: "roster",          label: "Roster Management", icon: "📅", section: "Attendance", roles: ["Master", "HR"] },
-  { key: "adjustments",     label: "Adjustments",       icon: "✏️", section: "Attendance", roles: ["Master", "HR"] },
-  { key: "missing-punch",   label: "Missing Punch",     icon: "🔍", section: "Attendance", roles: ["Master", "HR"] },
-  { key: "alerts",          label: "Attendance Alerts", icon: "🔔", section: "Attendance", roles: ["Master", "HR"] },
-  { key: "zkt",             label: "ZKT Live Sync",     icon: "🛰️", section: "Attendance", roles: ["Master", "HR"] },
+  { key: "attendance",  label: "Attendance",           icon: "⏱️", section: "Attendance",       roles: ["Master","HR","Finance","Employee"] },
+  { key: "roster",      label: "Roster",               icon: "📅", section: "Attendance",       roles: ["Master","HR"] },
+  { key: "zkt",         label: "ZKT Sync",             icon: "🛰️", section: "Attendance",       roles: ["Master","HR"] },
 
   // Leave
-  { key: "leave",           label: "Leave Management", icon: "🌴", section: "Leave", roles: ["Master", "HR", "Employee"] },
-  { key: "leave-liability", label: "Leave Liability",  icon: "📉", section: "Leave", roles: ["Master", "HR", "Finance"] },
+  { key: "leave",       label: "Leave",                icon: "🌴", section: "Leave",             roles: ["Master","HR","Employee"] },
 
   // Workforce
-  { key: "branch-dashboard", label: "Branch Dashboard",   icon: "🏬", section: "Workforce", roles: ["Master", "HR", "Finance"] },
-  { key: "transfers",        label: "Branch Transfers",   icon: "🔄", section: "Workforce", roles: ["Master", "HR"] },
-  { key: "warnings",         label: "Warnings & Notices", icon: "⚠️", section: "Workforce", roles: ["Master", "HR"] },
-  { key: "performance",      label: "Performance & KPI",  icon: "⭐", section: "Workforce", roles: ["Master", "HR"] },
-  { key: "assets",           label: "Uniform & Assets",   icon: "👕", section: "Workforce", roles: ["Master", "HR"] },
+  { key: "workforce",   label: "Workforce",            icon: "🏬", section: "Workforce",         roles: ["Master","HR","Finance"] },
 
   // Payroll & Finance
-  { key: "payroll-automation",  label: "Payroll",               icon: "💰", section: "Payroll & Finance", roles: ["Master", "Finance"] },
-  { key: "salary-comparison",   label: "Salary Comparison",     icon: "📊", section: "Payroll & Finance", roles: ["Master", "HR", "Finance"] },
-  { key: "compensation",        label: "Compensation",          icon: "💼", section: "Payroll & Finance", roles: ["Master", "Finance"] },
-  { key: "tax",                 label: "Tax Management",        icon: "🧾", section: "Payroll & Finance", roles: ["Master", "Finance"] },
-  { key: "fuel",                label: "Fuel Allowance",        icon: "⛽", section: "Payroll & Finance", roles: ["Master", "HR", "Finance"] },
-  { key: "fixed-allowances",    label: "Fixed Allowances",      icon: "📌", section: "Payroll & Finance", roles: ["Master", "HR", "Finance"] },
-  { key: "adjustments-pay",     label: "One-Time Adjustments",  icon: "⚙️", section: "Payroll & Finance", roles: ["Master", "HR"] },
-  { key: "loans",               label: "Loans",                 icon: "💳", section: "Payroll & Finance", roles: ["Master", "HR", "Finance", "Employee"] },
-  { key: "increments",          label: "Salary Increments",     icon: "📈", section: "Payroll & Finance", roles: ["Master", "HR", "Finance"] },
-  { key: "settlement",          label: "Final Settlement",      icon: "🤝", section: "Payroll & Finance", roles: ["Master", "HR", "Finance"] },
+  { key: "payroll-automation", label: "Payroll",       icon: "💰", section: "Payroll & Finance", roles: ["Master","Finance"] },
+  { key: "salary-reports",     label: "Salary Reports",icon: "📊", section: "Payroll & Finance", roles: ["Master","HR","Finance"] },
+  { key: "allowances",         label: "Allowances",    icon: "📌", section: "Payroll & Finance", roles: ["Master","HR","Finance"] },
+  { key: "payroll-extras",     label: "Adjustments & Tax", icon: "🧾", section: "Payroll & Finance", roles: ["Master","HR","Finance"] },
+  { key: "loans",              label: "Loans & Settlement", icon: "💳", section: "Payroll & Finance", roles: ["Master","HR","Finance","Employee"] },
 
   // System
-  { key: "imports",          label: "Data Management", icon: "🗄️", section: "System", roles: ["Master", "HR", "Finance"] },
-  { key: "reports",          label: "Reports",         icon: "📄", section: "System", roles: ["Master", "HR", "Finance"] },
-  { key: "policy-settings",  label: "Policy Settings", icon: "⚙️", section: "System", roles: ["Master"] },
-  { key: "policies",         label: "Policy Rules",    icon: "📋", section: "System", roles: ["Master", "HR"] },
-  { key: "portal",           label: "Employee Portal", icon: "🧑‍💼", section: "System", roles: ["Master", "Employee"] },
-  { key: "users",            label: "Users & Roles",   icon: "🔐", section: "System", roles: ["Master"] },
-  { key: "ai-assistant",     label: "AI Assistant",    icon: "🤖", section: "System", roles: ["Master", "HR", "Finance", "Employee"] },
+  { key: "imports",      label: "Data Management",     icon: "🗄️", section: "System",           roles: ["Master","HR","Finance"] },
+  { key: "settings",     label: "Settings",            icon: "⚙️", section: "System",           roles: ["Master"] },
+  { key: "ai-assistant", label: "AI Assistant",        icon: "🤖", section: "System",           roles: ["Master","HR","Finance","Employee"] },
 ];
