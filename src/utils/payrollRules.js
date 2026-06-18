@@ -9,6 +9,8 @@ const DEFAULT_TAX_SLABS = [
   { min_amount: 4100001, max_amount: 999999999, base_tax: 700000, rate_percentage: 35 },
 ];
 
+const EOBI_EMPLOYEE_CONTRIBUTION = 250;
+
 export function calculateMonthlyTax(annualSalary, slabs) {
   const s = (slabs && slabs.length > 0) ? slabs : DEFAULT_TAX_SLABS;
   const annual = Number(annualSalary || 0);
@@ -23,26 +25,140 @@ export function getPolicyForLevel(level) {
   return STAFF_LEVEL_POLICIES[level] || STAFF_LEVEL_POLICIES["Non-Management"];
 }
 
-export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows = []) {
+// Returns working days (Mon–Sat) in a given month (1-indexed month)
+export function getWorkingDaysInMonth(year, month) {
+  const daysInMonth = new Date(year, month, 0).getDate();
+  let count = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    if (new Date(year, month - 1, d).getDay() !== 0) count++;
+  }
+  return count;
+}
+
+export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows = [], taxSlabs = [], month = null) {
   const policy = getPolicyForLevel(employee.level);
   const monthlySalary = Number(employee.salary || 0);
-  const dailySalary = monthlySalary / 30;
-  const hourlySalary = dailySalary / Number(policy.requiredHours || 10.5);
-  const absentDeduction = dailySalary * Number(adjustments.absentDays || 0);
-  const latePenaltyDays = Number(adjustments.lateCount || 0) >= Number(policy.latePenaltyCount || 3) ? Number(policy.latePenaltyDays || 0) : 0;
-  const lateDeduction = dailySalary * latePenaltyDays;
-  const overtimeAmount = policy.overtimeEligible ? hourlySalary * Number(adjustments.otHours || 0) : 0;
-  const loanDeduction = loanRows.find((loan) => loan.employeeCode === employee.id)?.monthly || 0;
-  const additions = Number(adjustments.commission || 0) + Number(adjustments.fuel || 0) + Number(adjustments.arrears || 0) + Number(adjustments.leaveAdjustment || 0) + overtimeAmount;
-  const deductions = absentDeduction + lateDeduction + loanDeduction;
-  return { employeeCode: employee.id, name: employee.name, branch: employee.branch, department: employee.dept, level: employee.level, gross: monthlySalary, presentDays: Number(adjustments.presentDays || 0), absentDays: Number(adjustments.absentDays || 0), lateCount: Number(adjustments.lateCount || 0), otHours: policy.overtimeEligible ? Number(adjustments.otHours || 0) : 0, absentDeduction, lateDeduction, overtimeAmount, commission: Number(adjustments.commission || 0), fuel: Number(adjustments.fuel || 0), arrears: Number(adjustments.arrears || 0), leaveAdjustment: Number(adjustments.leaveAdjustment || 0), loanDeduction, finalSalary: monthlySalary + additions - deductions, noticeDays: policy.noticeDays };
+
+  // OT rate: basic salary / 26 working days / 8 hours
+  const dailyRate = monthlySalary / 26;
+  const hourlyRate = dailyRate / 8;
+
+  const otHours = policy.overtimeEligible ? Number(adjustments.otHours || 0) : 0;
+  const overtimeAmount = policy.overtimeEligible ? Math.round(hourlyRate * otHours) : 0;
+
+  const extraWorkingDays = Number(adjustments.extraWorkingDays || 0);
+  const extraWorkingDaysAmount = Math.round(dailyRate * extraWorkingDays);
+
+  // Working days in month
+  let numberOfWorkingDays = Number(adjustments.numberOfWorkingDays || 0);
+  if (!numberOfWorkingDays && month) {
+    const [y, m] = String(month).split("-").map(Number);
+    numberOfWorkingDays = getWorkingDaysInMonth(y, m);
+  }
+
+  // ── Earnings ──────────────────────────────────────────────
+  const commissionAddOn   = Number(adjustments.commissionAddOn || 0);
+  const arrears           = Number(adjustments.arrears || 0);
+  const absentAdjustment  = Number(adjustments.absentAdjustment || 0);
+  const fuelAllowance     = Number(adjustments.fuel || 0);
+  const otherAmount       = Number(adjustments.otherAmount || 0);
+
+  const totalEarnings =
+    monthlySalary +
+    overtimeAmount +
+    commissionAddOn +
+    arrears +
+    absentAdjustment +
+    fuelAllowance +
+    otherAmount +
+    extraWorkingDaysAmount;
+
+  // ── Deductions ────────────────────────────────────────────
+  const absentDeduction = Math.round(dailyRate * Number(adjustments.absentDays || 0));
+  const latePenaltyDays = Number(adjustments.lateCount || 0) >= Number(policy.latePenaltyCount || 3)
+    ? Number(policy.latePenaltyDays || 0)
+    : 0;
+  const lateDeduction = Math.round(dailyRate * latePenaltyDays);
+  const shortHourDeduction = Number(adjustments.shortHourDeduction || 0);
+  const halfDayDeduction   = adjustments.halfDays !== undefined
+    ? Math.round((dailyRate / 2) * Number(adjustments.halfDays || 0))
+    : Number(adjustments.halfDayDeduction || 0);
+  const fines              = Number(adjustments.fines || 0);
+  const advance            = Number(adjustments.advance || 0);
+  const loanDeduction      = loanRows.find(l => l.employeeCode === employee.id)?.monthly || 0;
+  const taxDeduction       = calculateMonthlyTax(monthlySalary * 12, taxSlabs);
+  const eobiDeduction      = EOBI_EMPLOYEE_CONTRIBUTION;
+  const otherDeductions    = Number(adjustments.otherDeductions || 0);
+
+  const totalDeductions =
+    lateDeduction +
+    shortHourDeduction +
+    absentDeduction +
+    halfDayDeduction +
+    fines +
+    advance +
+    loanDeduction +
+    taxDeduction +
+    eobiDeduction +
+    otherDeductions;
+
+  return {
+    employeeCode: employee.id,
+    name: employee.name,
+    branch: employee.branch,
+    department: employee.dept,
+    level: employee.level,
+    // Info
+    gross: monthlySalary,
+    numberOfWorkingDays,
+    presentDays:   Number(adjustments.presentDays || 0),
+    absentDays:    Number(adjustments.absentDays || 0),
+    lateCount:     Number(adjustments.lateCount || 0),
+    otHours,
+    leaveDaysUsed: Number(adjustments.leaveDaysUsed || 0),
+    extraWorkingDays,
+    // Earnings
+    overtimeAmount,
+    commissionAddOn,
+    arrears,
+    absentAdjustment,
+    fuelAllowance,
+    otherAmount,
+    extraWorkingDaysAmount,
+    totalEarnings,
+    // Deductions
+    lateDeduction,
+    shortHourDeduction,
+    absentDeduction,
+    halfDayDeduction,
+    fines,
+    advance,
+    loanDeduction,
+    taxDeduction,
+    eobiDeduction,
+    otherDeductions,
+    totalDeductions,
+    // Summary
+    finalSalary: totalEarnings - totalDeductions,
+    // Legacy compat
+    commission: Number(adjustments.commission || 0),
+    fuel: fuelAllowance,
+    noticeDays: policy.noticeDays,
+  };
 }
 
 export function checkLoanEligibility(employee, existingLoans = []) {
   const joiningDate = employee.joiningDate ? new Date(employee.joiningDate) : null;
   const today = new Date();
   const serviceYears = joiningDate ? (today - joiningDate) / (1000 * 60 * 60 * 24 * 365.25) : 0;
-  const activeLoan = existingLoans.some((loan) => loan.employeeCode === employee.id && loan.status === "Active");
+  const activeLoan = existingLoans.some(l => l.employeeCode === employee.id && l.status === "Active");
   const maximumLoan = Number(employee.salary || 0) * (LOAN_POLICY.maximumSalaryPercent / 100);
-  return { eligible: serviceYears >= LOAN_POLICY.minimumServiceYears && !activeLoan, serviceYears: Math.floor(serviceYears * 10) / 10, maximumLoan, reason: serviceYears < LOAN_POLICY.minimumServiceYears ? "Service below 2 years" : activeLoan ? "Active loan already exists" : "Eligible" };
+  return {
+    eligible: serviceYears >= LOAN_POLICY.minimumServiceYears && !activeLoan,
+    serviceYears: Math.floor(serviceYears * 10) / 10,
+    maximumLoan,
+    reason: serviceYears < LOAN_POLICY.minimumServiceYears
+      ? "Service below 2 years"
+      : activeLoan ? "Active loan already exists" : "Eligible",
+  };
 }
