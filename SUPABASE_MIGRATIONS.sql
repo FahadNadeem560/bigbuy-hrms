@@ -798,3 +798,36 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION run_migrations() TO anon, authenticated;
+
+
+-- =============================================================
+-- Migration: add_payroll_extended_columns
+-- Applied: 2026-06-18
+-- Adds attendance info, earnings breakdown, and deductions
+-- breakdown columns to the payroll table.
+-- =============================================================
+ALTER TABLE payroll
+  ADD COLUMN IF NOT EXISTS number_of_working_days    INTEGER        DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS present_days              INTEGER        DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS absent_days               INTEGER        DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS ot_hours                  NUMERIC(8,2)   DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS late_count                INTEGER        DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS leave_days_used           INTEGER        DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS extra_working_days        INTEGER        DEFAULT 0,
+  -- Earnings
+  ADD COLUMN IF NOT EXISTS commission_addon          NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS arrears                   NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS absent_adjustment         NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS fuel_allowance            NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS other_amount              NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS extra_working_days_amount NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_earnings            NUMERIC(12,2)  DEFAULT 0,
+  -- Deductions
+  ADD COLUMN IF NOT EXISTS short_hour_deduction      NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS half_day_deduction        NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS fines                     NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS advance                   NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS tax_deduction             NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS eobi_deduction            NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS other_deductions          NUMERIC(12,2)  DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS total_deductions          NUMERIC(12,2)  DEFAULT 0;
