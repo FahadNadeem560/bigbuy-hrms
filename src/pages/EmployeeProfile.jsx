@@ -41,7 +41,7 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-export default function EmployeeProfile() {
+export default function EmployeeProfile({ role }) {
   const [employees, setEmployees] = useState([]);
   const [selEmp, setSelEmp] = useState(null);
   const [attendance30, setAttendance30] = useState([]);
@@ -50,14 +50,45 @@ export default function EmployeeProfile() {
   const [payrollData, setPayrollData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [exemptMsg, setExemptMsg] = useState("");
+  const [exemptionReason, setExemptionReason] = useState("");
 
   useEffect(() => {
     supabase.from("employees").select("*").order("full_name").then(({ data }) => setEmployees(data || []));
   }, []);
 
   useEffect(() => {
-    if (selEmp) loadProfile(selEmp);
+    if (selEmp) {
+      loadProfile(selEmp);
+      setExemptionReason(selEmp.exemption_reason || "");
+    }
   }, [selEmp]);
+
+  async function toggleExemption(newVal) {
+    if (role !== "Master") return;
+    if (newVal && !exemptionReason.trim()) {
+      setErr("Exemption reason is required.");
+      return;
+    }
+    setErr("");
+    const { error } = await supabase.from("employees").update({
+      is_attendance_exempt: newVal,
+      exemption_reason: newVal ? exemptionReason : null,
+    }).eq("employee_code", selEmp.employee_code);
+    if (error) return setErr(error.message);
+    // Log to audit_logs
+    await supabase.from("audit_logs").insert({
+      action: newVal ? "exemption_granted" : "exemption_removed",
+      entity: "employees", entity_id: selEmp.employee_code,
+      performed_by: role,
+      details: newVal ? `Attendance exemption granted. Reason: ${exemptionReason}` : "Attendance exemption removed.",
+      created_at: new Date().toISOString(),
+    }).then(() => {});
+    setExemptMsg(newVal ? "Attendance exemption enabled." : "Attendance exemption removed.");
+    // Refresh employee data
+    const { data } = await supabase.from("employees").select("*").eq("employee_code", selEmp.employee_code).maybeSingle();
+    if (data) setSelEmp(data);
+  }
 
   async function loadProfile(emp) {
     setLoading(true); setErr("");
@@ -106,6 +137,7 @@ export default function EmployeeProfile() {
       </div>
 
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
+      {exemptMsg && <div className="mb-3 p-3 rounded-xl bg-purple-50 text-purple-700 text-sm">{exemptMsg}</div>}
       {loading && <div className="bg-white border border-slate-100 rounded-2xl p-12 text-center text-slate-400 shadow-sm">Loading profile...</div>}
 
       {!loading && !selEmp && (
@@ -125,11 +157,17 @@ export default function EmployeeProfile() {
                 <div className="flex flex-wrap items-start gap-2 mb-1">
                   <h2 className="text-xl font-bold text-slate-900">{selEmp.full_name}</h2>
                   <Badge tone={selEmp.status === "Active" ? "green" : "red"}>{selEmp.status}</Badge>
+                  {selEmp.is_attendance_exempt && (
+                    <span className="px-3 py-1 rounded-full text-xs border bg-purple-50 text-purple-700 border-purple-100 font-semibold">EXEMPTED</span>
+                  )}
                 </div>
                 <p className="text-slate-500 text-sm">{selEmp.designation || "—"} · {selEmp.department} · {selEmp.branch}</p>
+                {selEmp.is_attendance_exempt && selEmp.exemption_reason && (
+                  <p className="text-xs text-purple-600 mt-1">Exemption reason: {selEmp.exemption_reason}</p>
+                )}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-sm">
                   {[
-                    ["Employee Code", selEmp.employee_code],
+                    ["Employee ID", selEmp.employee_code],
                     ["Staff Level", selEmp.staff_level],
                     ["Salary", money(selEmp.salary)],
                     ["Joining Date", selEmp.joining_date || "—"],
@@ -163,6 +201,44 @@ export default function EmployeeProfile() {
               </div>
             ))}
           </div>
+
+          {/* Attendance Exemption — Master only */}
+          {role === "Master" && (
+            <div className="bg-white border border-purple-100 rounded-2xl p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-slate-800">Attendance Exemption</h3>
+                {selEmp.is_attendance_exempt && (
+                  <span className="text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-semibold">ACTIVE</span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mb-3">
+                When enabled, this employee is excluded from late marks, short hour deductions, OT calculations, and all timing-based penalties.
+                Attendance is still recorded.
+              </p>
+              {!selEmp.is_attendance_exempt ? (
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">Exemption Reason (required) *</p>
+                    <textarea value={exemptionReason} onChange={e => setExemptionReason(e.target.value)}
+                      rows={2} placeholder="Enter reason for attendance exemption..."
+                      className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+                  </div>
+                  <Button onClick={() => toggleExemption(true)} className="rounded-2xl bg-purple-600 hover:bg-purple-700 text-white">
+                    Enable Exemption
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-sm text-purple-700 bg-purple-50 rounded-xl p-3">
+                    <strong>Reason:</strong> {selEmp.exemption_reason || "—"}
+                  </p>
+                  <Button onClick={() => toggleExemption(false)} variant="outline" className="rounded-2xl text-red-600 border-red-200">
+                    Remove Exemption
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Leave Balance */}

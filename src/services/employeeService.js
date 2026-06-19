@@ -1,5 +1,15 @@
 import { supabase } from "../lib/supabaseClient.js";
 
+export async function getNextEmployeeId() {
+  const { data } = await supabase.from("employees").select("employee_code");
+  let max = 4000;
+  (data || []).forEach(row => {
+    const n = parseInt(row.employee_code, 10);
+    if (!isNaN(n) && n > max) max = n;
+  });
+  return String(max + 1);
+}
+
 export function mapEmployeeRecord(emp) {
   return {
     id: emp.employee_code,
@@ -46,6 +56,9 @@ export function mapEmployeeRecord(emp) {
     supervisorId: emp.supervisor_id || "",
     isSupervisor: !!emp.is_supervisor,
     isManager: !!emp.is_manager,
+    // Attendance exemption
+    isAttendanceExempt: !!emp.is_attendance_exempt,
+    exemptionReason: emp.exemption_reason || "",
   };
 }
 

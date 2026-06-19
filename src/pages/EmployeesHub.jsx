@@ -13,21 +13,28 @@ const TABS = [
   ["orgchart",    "Org Chart"],
 ];
 
-export default function EmployeesHub(props) {
+export default function EmployeesHub({ role, ...props }) {
   const [tab, setTab] = useState("directory");
+
+  // Finance cannot see recruitment or documents
+  const visibleTabs = TABS.filter(([k]) => {
+    if (role === "Finance") return false; // Finance has no access to Employees hub
+    return true;
+  });
+
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-5">
-        {TABS.map(([k, l]) => (
+        {visibleTabs.map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
             {l}
           </button>
         ))}
       </div>
-      {tab === "directory"   && <Employees {...props} />}
-      {tab === "recruitment" && <Recruitment />}
-      {tab === "documents"   && <DocumentManagement />}
+      {tab === "directory"   && <Employees {...props} role={role} />}
+      {tab === "recruitment" && role !== "Finance" && <Recruitment />}
+      {tab === "documents"   && role !== "Finance" && <DocumentManagement />}
       {tab === "credentials" && <StaffCredentials />}
       {tab === "orgchart"    && <OrgChart />}
     </div>

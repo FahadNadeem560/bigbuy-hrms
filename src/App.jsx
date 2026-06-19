@@ -19,11 +19,13 @@ import LoanHub from "./pages/LoanHub.jsx";
 import SettingsHub from "./pages/SettingsHub.jsx";
 import ApprovalQueue from "./pages/ApprovalQueue.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
+import Fines from "./pages/Fines.jsx";
+import Shortages from "./pages/Shortages.jsx";
 import { MENU_ITEMS } from "./config/menu.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
 import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
-import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch } from "./services/employeeService.js";
+import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch, getNextEmployeeId } from "./services/employeeService.js";
 import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
 
@@ -104,7 +106,7 @@ export default function BigBuyHRMS() {
   }, []);
 
   async function saveEmployee() {
-    const code = `EMP-${String(Date.now()).slice(-6)}`;
+    const code = await getNextEmployeeId();
     const payload = {
       employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation,
       department: newEmployee.department, branch: newEmployee.branch, staff_level: newEmployee.level,
@@ -186,13 +188,20 @@ export default function BigBuyHRMS() {
     finally { setImporting(false); }
   }
 
+  async function openNewEmployeeForm() {
+    const nextId = await getNextEmployeeId();
+    setNewEmployee({ ...BLANK_EMPLOYEE, _nextId: nextId });
+    setShowEmployeeForm(true);
+  }
+
   const employeeProps = {
     query, setQuery, branch, setBranch,
-    showEmployeeForm, setShowEmployeeForm,
+    showEmployeeForm,
+    setShowEmployeeForm: (v) => { if (v) openNewEmployeeForm(); else setShowEmployeeForm(false); },
     newEmployee, setNewEmployee, saveEmployee,
     editingEmployee, setEditingEmployee, updateEmployee,
     loadingEmployees, filteredEmployees, updateEmployeeStatus,
-    employees,
+    employees, role,
   };
 
   return (
@@ -201,9 +210,9 @@ export default function BigBuyHRMS() {
 
       {/* Core HR */}
       {active === "dashboard"   && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
-      {active === "employees"   && <EmployeesHub {...employeeProps} />}
+      {active === "employees"   && <EmployeesHub {...employeeProps} role={role} />}
       {active === "departments" && <DepartmentManagement />}
-      {active === "profile"     && <EmployeeProfile />}
+      {active === "profile"     && <EmployeeProfile role={role} />}
 
       {/* Attendance */}
       {active === "attendance"  && <Attendance rows={attendanceRows} />}
@@ -223,6 +232,10 @@ export default function BigBuyHRMS() {
       {active === "allowances"         && <AllowancesHub role={role} />}
       {active === "payroll-extras"     && <PayrollExtras role={role} />}
       {active === "loans"              && <LoanHub role={role} />}
+
+      {/* HR Tools */}
+      {active === "fines"     && <Fines role={role} />}
+      {active === "shortages" && <Shortages role={role} />}
 
       {/* Approvals */}
       {active === "approval-queue" && <ApprovalQueue role={role} />}

@@ -92,7 +92,7 @@ function SupervisorPicker({ value, onChange }) {
   );
 }
 
-export function EmployeeAdd({ employee, setEmployee, save, close }) {
+export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }) {
   const [uploading, setUploading] = useState(false);
 
   async function handleUpload(field, file) {
@@ -114,6 +114,15 @@ export function EmployeeAdd({ employee, setEmployee, save, close }) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 mb-4 p-5">
       <div className="flex justify-between mb-4"><h2 className="text-lg font-bold">Add New Employee</h2><Button variant="outline" onClick={close}>Close</Button></div>
+
+      {/* Auto-generated ID display */}
+      <div className="mb-4 p-3 bg-slate-50 rounded-xl flex items-center gap-3">
+        <div>
+          <p className="text-xs text-slate-500">Employee ID (Auto-Generated)</p>
+          <p className="font-bold text-slate-800 text-lg font-mono">{nextId || "Loading..."}</p>
+        </div>
+        <span className="text-xs text-slate-400 ml-2">ID is assigned automatically and cannot be changed.</span>
+      </div>
 
       <Section title="Basic Information">
         <Field label="Full Name *">{inp("fullName", "Full Name")}</Field>
@@ -184,11 +193,18 @@ export function EmployeeAdd({ employee, setEmployee, save, close }) {
         <Field label="Reference Contact">{inp("referencePersonContact", "Reference Phone")}</Field>
       </Section>
 
-      <Section title="Banking Details">
-        <Field label="Bank Name">{inp("bankName", "Bank Name")}</Field>
-        <Field label="Account Number">{inp("accountNumber", "Account Number")}</Field>
-        <Field label="IBAN">{inp("iban", "PK00XXXX0000000000000000")}</Field>
-      </Section>
+      {role !== "HR" && (
+        <Section title="Banking Details">
+          <Field label="Bank Name">{inp("bankName", "Bank Name")}</Field>
+          <Field label="Account Number">{inp("accountNumber", "Account Number")}</Field>
+          <Field label="IBAN">{inp("iban", "PK00XXXX0000000000000000")}</Field>
+        </Section>
+      )}
+      {role === "HR" && (
+        <div className="mb-5 p-3 bg-amber-50 text-amber-700 text-xs rounded-xl">
+          Banking details are restricted to Finance and Master roles.
+        </div>
+      )}
 
       <Section title="Documents & Photo">
         <Field label="Photo URL">
@@ -219,7 +235,7 @@ export function EmployeeAdd({ employee, setEmployee, save, close }) {
   );
 }
 
-export function EmployeeEdit({ employee, setEmployee, save, close }) {
+export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
   const inp = (field, placeholder, type = "text") => (
     <input type={type} placeholder={placeholder} value={employee[field] || ""}
       onChange={e => setEmployee(v => ({ ...v, [field]: e.target.value }))}
@@ -291,18 +307,25 @@ export function EmployeeEdit({ employee, setEmployee, save, close }) {
         <Field label="Reference Contact">{inp("referencePersonContact", "Phone")}</Field>
       </Section>
 
-      <Section title="Banking Details">
-        <Field label="Bank Name">{inp("bankName", "Bank")}</Field>
-        <Field label="Account Number">{inp("accountNumber", "Account No.")}</Field>
-        <Field label="IBAN">{inp("iban", "IBAN")}</Field>
-      </Section>
+      {role !== "HR" && (
+        <Section title="Banking Details">
+          <Field label="Bank Name">{inp("bankName", "Bank")}</Field>
+          <Field label="Account Number">{inp("accountNumber", "Account No.")}</Field>
+          <Field label="IBAN">{inp("iban", "IBAN")}</Field>
+        </Section>
+      )}
+      {role === "HR" && (
+        <div className="mb-5 p-3 bg-amber-50 text-amber-700 text-xs rounded-xl">
+          Banking details are restricted to Finance and Master roles.
+        </div>
+      )}
 
       <div className="mt-4 flex gap-2"><Button onClick={save}>Save Changes</Button><Button variant="outline" onClick={close}>Cancel</Button></div>
     </div>
   );
 }
 
-export default function Employees({ query, setQuery, branch, setBranch, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees }) {
+export default function Employees({ query, setQuery, branch, setBranch, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees, role }) {
   const supervisorMap = useMemo(() =>
     Object.fromEntries((employees || []).map(e => [e.id, e.name])),
     [employees]
@@ -320,8 +343,8 @@ export default function Employees({ query, setQuery, branch, setBranch, showEmpl
         </select>
       </div>
 
-      {showEmployeeForm && <EmployeeAdd employee={newEmployee} setEmployee={setNewEmployee} save={saveEmployee} close={() => setShowEmployeeForm(false)} />}
-      {editingEmployee && <EmployeeEdit employee={editingEmployee} setEmployee={setEditingEmployee} save={updateEmployee} close={() => setEditingEmployee(null)} />}
+      {showEmployeeForm && <EmployeeAdd employee={newEmployee} setEmployee={setNewEmployee} save={saveEmployee} close={() => setShowEmployeeForm(false)} role={role} nextId={newEmployee._nextId} />}
+      {editingEmployee && <EmployeeEdit employee={editingEmployee} setEmployee={setEditingEmployee} save={updateEmployee} close={() => setEditingEmployee(null)} role={role} />}
       {loadingEmployees && <p className="text-slate-400 text-sm mb-2">Loading employees...</p>}
 
       <Table
@@ -331,8 +354,13 @@ export default function Employees({ query, setQuery, branch, setBranch, showEmpl
           const cnicStatus = cnicExpiryStatus(e.cnicExpiryDate);
           return (
             <tr key={e.id}>
-              <td className="px-4 py-3 font-medium">{e.id}</td>
-              <td className="px-4 py-3">{e.name} {e.isSupervisor && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 rounded ml-1">SUP</span>}{e.isManager && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded ml-1">MGR</span>}</td>
+              <td className="px-4 py-3 font-medium font-mono">{e.id}</td>
+              <td className="px-4 py-3">
+                {e.name}
+                {e.isSupervisor && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 rounded ml-1">SUP</span>}
+                {e.isManager && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded ml-1">MGR</span>}
+                {e.isAttendanceExempt && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 rounded ml-1">EXEMPTED</span>}
+              </td>
               <td className="px-4 py-3">{e.level}</td>
               <td className="px-4 py-3 text-slate-500 text-xs">{supervisorMap[e.supervisorId] || e.supervisorId || "—"}</td>
               <td className="px-4 py-3">{e.branch}</td>

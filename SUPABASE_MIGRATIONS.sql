@@ -794,6 +794,81 @@ BEGIN
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.users      TO anon, authenticated;
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.loan_changes TO anon, authenticated;
 
+  -- ── employees: attendance exemption ───────────────────────
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_attendance_exempt BOOLEAN DEFAULT FALSE;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS exemption_reason TEXT;
+
+  -- ── payroll: publish columns + new deductions ─────────────
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Draft';
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS published_by TEXT;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS fine_deduction NUMERIC DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS shortage_deduction NUMERIC DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS advance_deduction NUMERIC DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS commission NUMERIC DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS other_earnings NUMERIC DEFAULT 0;
+
+  -- ── fines ─────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS fines (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    employee_id UUID,
+    employee_code TEXT,
+    employee_name TEXT,
+    fine_type TEXT,
+    amount NUMERIC DEFAULT 0,
+    reason TEXT,
+    issued_by TEXT,
+    issued_by_role TEXT,
+    status TEXT DEFAULT 'Pending',
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+    payroll_month TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.fines TO anon, authenticated;
+
+  -- ── shortages ─────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS shortages (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    employee_id UUID,
+    employee_code TEXT,
+    employee_name TEXT,
+    amount NUMERIC DEFAULT 0,
+    description TEXT,
+    shortage_date DATE,
+    entered_by TEXT,
+    entered_by_role TEXT,
+    status TEXT DEFAULT 'Pending',
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+    payroll_month TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.shortages TO anon, authenticated;
+
+  -- ── advances ──────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS advances (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    employee_id UUID,
+    employee_code TEXT,
+    employee_name TEXT,
+    requested_amount NUMERIC DEFAULT 0,
+    approved_amount NUMERIC DEFAULT 0,
+    max_eligible NUMERIC DEFAULT 0,
+    days_worked_so_far INTEGER,
+    salary_at_request NUMERIC,
+    request_date DATE,
+    payroll_month TEXT,
+    status TEXT DEFAULT 'Pending',
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.advances TO anon, authenticated;
+
 END;
 $$;
 
@@ -831,3 +906,88 @@ ALTER TABLE payroll
   ADD COLUMN IF NOT EXISTS eobi_deduction            NUMERIC(12,2)  DEFAULT 0,
   ADD COLUMN IF NOT EXISTS other_deductions          NUMERIC(12,2)  DEFAULT 0,
   ADD COLUMN IF NOT EXISTS total_deductions          NUMERIC(12,2)  DEFAULT 0;
+
+-- =============================================================
+-- Migration: fines_shortages_advances_payroll_publish
+-- Applied: 2026-06-20
+-- Adds fines, shortages, advances tables; payroll publish columns;
+-- attendance exemption; and updated payroll deduction columns.
+-- =============================================================
+
+-- ── employees: attendance exemption ───────────────────────────
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS is_attendance_exempt BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS exemption_reason     TEXT;
+
+-- ── payroll: publish/lock + new deduction columns ─────────────
+ALTER TABLE payroll
+  ADD COLUMN IF NOT EXISTS status              TEXT    DEFAULT 'Draft',
+  ADD COLUMN IF NOT EXISTS published_at        TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS published_by        TEXT,
+  ADD COLUMN IF NOT EXISTS fine_deduction      NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS shortage_deduction  NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS advance_deduction   NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS commission          NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS commission_add_on   NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS other_earnings      NUMERIC(12,2) DEFAULT 0;
+
+-- ── fines ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS fines (
+  id               UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  employee_id      UUID        REFERENCES employees(id),
+  employee_code    TEXT,
+  employee_name    TEXT,
+  fine_type        TEXT,
+  amount           NUMERIC     DEFAULT 0,
+  reason           TEXT,
+  issued_by        TEXT,
+  issued_by_role   TEXT,
+  status           TEXT        DEFAULT 'Pending',
+  approved_by      TEXT,
+  approved_at      TIMESTAMPTZ,
+  rejection_reason TEXT,
+  payroll_month    TEXT,
+  created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.fines TO anon, authenticated;
+
+-- ── shortages ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS shortages (
+  id               UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  employee_id      UUID        REFERENCES employees(id),
+  employee_code    TEXT,
+  employee_name    TEXT,
+  amount           NUMERIC     DEFAULT 0,
+  description      TEXT,
+  shortage_date    DATE,
+  entered_by       TEXT,
+  entered_by_role  TEXT,
+  status           TEXT        DEFAULT 'Pending',
+  approved_by      TEXT,
+  approved_at      TIMESTAMPTZ,
+  rejection_reason TEXT,
+  payroll_month    TEXT,
+  created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.shortages TO anon, authenticated;
+
+-- ── advances ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS advances (
+  id                 UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  employee_id        UUID        REFERENCES employees(id),
+  employee_code      TEXT,
+  employee_name      TEXT,
+  requested_amount   NUMERIC     DEFAULT 0,
+  approved_amount    NUMERIC     DEFAULT 0,
+  max_eligible       NUMERIC     DEFAULT 0,
+  days_worked_so_far INTEGER,
+  salary_at_request  NUMERIC,
+  request_date       DATE,
+  payroll_month      TEXT,
+  status             TEXT        DEFAULT 'Pending',
+  approved_by        TEXT,
+  approved_at        TIMESTAMPTZ,
+  rejection_reason   TEXT,
+  created_at         TIMESTAMPTZ DEFAULT NOW()
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.advances TO anon, authenticated;

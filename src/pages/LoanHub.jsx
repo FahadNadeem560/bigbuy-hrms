@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import LoanManagement from "./LoanManagement.jsx";
 import FinalSettlement from "./FinalSettlement.jsx";
+import Advances from "./Advances.jsx";
 
 const TABS = [
   ["loans",      "Loans"],
+  ["advances",   "Salary Advances"],
   ["settlement", "Final Settlement"],
 ];
 
@@ -20,6 +22,7 @@ export default function LoanHub({ role }) {
         ))}
       </div>
       {tab === "loans"      && <LoanManagement />}
+      {tab === "advances"   && <Advances role={role} />}
       {tab === "settlement" && <FinalSettlement role={role} />}
     </div>
   );
