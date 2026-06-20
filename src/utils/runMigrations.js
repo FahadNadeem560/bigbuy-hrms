@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-06-20-v5";
+const MIGRATION_VERSION = "2026-06-20-v6";
 let ran = false;
 
 export async function runMigrations() {
@@ -129,6 +129,11 @@ async function applyIncrementalMigrations() {
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.leaves TO anon, authenticated`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.leave_requests TO anon, authenticated`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.hrms_policy_settings TO anon, authenticated`,
+    // v3: rate divisor policy seeds
+    `INSERT INTO hrms_policy_settings (key, value, description) VALUES ('daily_rate_divisor', '30', 'Daily rate divisor (salary / this)') ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO hrms_policy_settings (key, value, description) VALUES ('hourly_rate_divisor_non_management', '10.5', 'Hourly rate divisor for Non-Management staff') ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO hrms_policy_settings (key, value, description) VALUES ('hourly_rate_divisor_floor_management', '10.5', 'Hourly rate divisor for Floor Management staff') ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO hrms_policy_settings (key, value, description) VALUES ('hourly_rate_divisor_management', '9', 'Hourly rate divisor for Management staff') ON CONFLICT (key) DO NOTHING`,
   ];
 
   for (const sql of stmts) {

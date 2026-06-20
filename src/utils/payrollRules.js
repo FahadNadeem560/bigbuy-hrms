@@ -40,9 +40,9 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const monthlySalary = Number(employee.salary || 0);
   const isExempt = !!employee.isAttendanceExempt;
 
-  // Daily rate = Basic / 26; Hourly rate = Daily / 10.5
-  const dailyRate  = monthlySalary / 26;
-  const hourlyRate = dailyRate / 10.5;
+  // Daily rate = Salary / 30; Hourly rate varies by staff level
+  const dailyRate  = monthlySalary / 30;
+  const hourlyRate = dailyRate / (employee.level === "Management" ? 9 : 10.5);
 
   // OT — skip for exempt employees
   const otHours = (!isExempt && policy.overtimeEligible) ? Number(adjustments.otHours || 0) : 0;

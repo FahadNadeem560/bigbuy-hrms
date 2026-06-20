@@ -11,8 +11,12 @@ const POLICY_DEFAULTS = [
   { key: "eobi_employer_rate",          value: "5",   description: "EOBI employer contribution as % of minimum wage" },
   { key: "eobi_employee_rate",          value: "1",   description: "EOBI employee deduction as % of minimum wage" },
   { key: "overtime_multiplier",         value: "1.5", description: "Overtime pay multiplier (1.5 = 150% of hourly rate)" },
-  { key: "friday_hours_management",     value: "6.5", description: "Friday required hours for Management staff (hours)" },
-  { key: "friday_hours_non_management", value: "9",   description: "Friday required hours for Non-Management / Floor Management staff (hours)" },
+  { key: "friday_hours_management",              value: "6.5",  description: "Friday required hours for Management staff (hours)" },
+  { key: "friday_hours_non_management",          value: "9",    description: "Friday required hours for Non-Management / Floor Management staff (hours)" },
+  { key: "daily_rate_divisor",                   value: "30",   description: "Daily rate divisor (salary / this)" },
+  { key: "hourly_rate_divisor_non_management",   value: "10.5", description: "Hourly rate divisor for Non-Management staff" },
+  { key: "hourly_rate_divisor_floor_management", value: "10.5", description: "Hourly rate divisor for Floor Management staff" },
+  { key: "hourly_rate_divisor_management",       value: "9",    description: "Hourly rate divisor for Management staff" },
 ];
 
 export default function PolicySettings() {
@@ -37,7 +41,7 @@ export default function PolicySettings() {
   async function save(s) {
     setErr("");
     const { error } = await supabase.from("hrms_policy_settings")
-      .upsert({ key: s.key, value: editing.value, description: s.description, branch: s.branch || "Global" }, { onConflict: "key" });
+      .upsert({ key: s.key, value: editing.value, description: s.description }, { onConflict: "key" });
     if (error) return setErr(error.message);
     setMsg("Policy setting saved.");
     setEditing(null);

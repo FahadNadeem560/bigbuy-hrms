@@ -15,8 +15,8 @@ export const STAFF_LEVEL_POLICIES = {
     overtimeAfterHours: 0,
     overtimeNeedsApproval: true,
     adjustShortHoursAgainstOT: false,
-    // Working days notice required
-    noticeDays: 78,
+    // Calendar days notice required
+    noticeDays: 45,
     weeklyOffDay: 0, // 0 = Sunday
     halfDayMinHours: 5,
     absentMinHours: 5,
@@ -37,7 +37,7 @@ export const STAFF_LEVEL_POLICIES = {
     overtimeAfterHours: 0,
     overtimeNeedsApproval: true,
     adjustShortHoursAgainstOT: true,
-    noticeDays: 26,
+    noticeDays: 30,
     weeklyOffDay: -1, // rotating
     halfDayMinHours: 6,
     absentMinHours: 6,
@@ -58,7 +58,7 @@ export const STAFF_LEVEL_POLICIES = {
     overtimeAfterHours: 10.5,
     overtimeNeedsApproval: true,
     adjustShortHoursAgainstOT: true,
-    noticeDays: 13,
+    noticeDays: 15,
     weeklyOffDay: -1, // rotating
     halfDayMinHours: 6,
     absentMinHours: 6,
