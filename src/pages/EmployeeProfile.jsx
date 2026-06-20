@@ -90,6 +90,26 @@ export default function EmployeeProfile({ role }) {
     if (data) setSelEmp(data);
   }
 
+  const [fieldMsg, setFieldMsg] = useState("");
+  const [taxSetting, setTaxSetting] = useState(null);
+
+  async function toggleFieldEmployee(newVal) {
+    if (role !== "Master") return;
+    setErr("");
+    const { error } = await supabase.from("employees").update({ is_field_employee: newVal }).eq("employee_code", selEmp.employee_code);
+    if (error) return setErr(error.message);
+    await supabase.from("audit_logs").insert({
+      action: newVal ? "field_employee_enabled" : "field_employee_disabled",
+      entity: "employees", entity_id: selEmp.employee_code,
+      performed_by: "Master",
+      details: `Field employee ${newVal ? "enabled" : "disabled"}.`,
+      created_at: new Date().toISOString(),
+    }).then(() => {});
+    setFieldMsg(newVal ? "Field employee status enabled." : "Field employee status disabled.");
+    const { data } = await supabase.from("employees").select("*").eq("employee_code", selEmp.employee_code).maybeSingle();
+    if (data) setSelEmp(data);
+  }
+
   async function loadProfile(emp) {
     setLoading(true); setErr("");
     const from30 = new Date(); from30.setDate(from30.getDate() - 30);
@@ -97,17 +117,19 @@ export default function EmployeeProfile({ role }) {
     const now = new Date();
     const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     try {
-      const [{ data: att }, { data: lv }, { data: ln }, { data: pay }] = await Promise.all([
+      const [{ data: att }, { data: lv }, { data: ln }, { data: pay }, { data: tx }] = await Promise.all([
         supabase.from("attendance").select("*").eq("employee_code", emp.employee_code)
           .gte("work_date", fromStr).order("work_date", { ascending: false }),
         supabase.from("leaves").select("*").eq("employee_id", emp.employee_code).maybeSingle(),
         supabase.from("loans").select("*").eq("employee_code", emp.employee_code).eq("status", "Active"),
         supabase.from("payroll").select("*").eq("employee_code", emp.employee_code).eq("payroll_month", monthStr).maybeSingle(),
+        supabase.from("employee_tax_settings").select("*").eq("employee_code", emp.employee_code).maybeSingle(),
       ]);
       setAttendance30(att || []);
       setLeaveData(lv);
       setLoanData(ln || []);
       setPayrollData(pay);
+      setTaxSetting(tx);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -157,8 +179,28 @@ export default function EmployeeProfile({ role }) {
                 <div className="flex flex-wrap items-start gap-2 mb-1">
                   <h2 className="text-xl font-bold text-slate-900">{selEmp.full_name}</h2>
                   <Badge tone={selEmp.status === "Active" ? "green" : "red"}>{selEmp.status}</Badge>
+                  {/* Employment status badge */}
+                  {selEmp.employment_status === "Temporary" && (
+                    <span className="px-3 py-1 rounded-full text-xs border bg-red-50 text-red-700 border-red-100 font-semibold">TEMPORARY</span>
+                  )}
+                  {selEmp.employment_status === "Probation" && (
+                    <span className="px-3 py-1 rounded-full text-xs border bg-amber-50 text-amber-700 border-amber-100 font-semibold">PROBATION</span>
+                  )}
+                  {selEmp.is_field_employee && (
+                    <span className="px-3 py-1 rounded-full text-xs border bg-blue-50 text-blue-700 border-blue-100 font-semibold">FIELD</span>
+                  )}
                   {selEmp.is_attendance_exempt && (
                     <span className="px-3 py-1 rounded-full text-xs border bg-purple-50 text-purple-700 border-purple-100 font-semibold">EXEMPTED</span>
+                  )}
+                  {/* Tax mode badge */}
+                  {taxSetting && (
+                    <span className={`px-3 py-1 rounded-full text-xs border font-semibold ${
+                      taxSetting.tax_mode === "exempt" ? "bg-green-50 text-green-700 border-green-100"
+                      : taxSetting.tax_mode === "manual" ? "bg-yellow-50 text-yellow-700 border-yellow-100"
+                      : "bg-slate-50 text-slate-600 border-slate-200"
+                    }`}>
+                      TAX: {(taxSetting.tax_mode || "auto").toUpperCase()}
+                    </span>
                   )}
                 </div>
                 <p className="text-slate-500 text-sm">{selEmp.designation || "—"} · {selEmp.department} · {selEmp.branch}</p>
@@ -201,6 +243,34 @@ export default function EmployeeProfile({ role }) {
               </div>
             ))}
           </div>
+
+          {/* Employment Status Info */}
+          {(selEmp.employment_status === "Temporary" || selEmp.employment_status === "Probation") && (
+            <div className={`border rounded-2xl p-4 shadow-sm ${selEmp.employment_status === "Temporary" ? "border-red-100 bg-red-50/30" : "border-amber-100 bg-amber-50/30"}`}>
+              <div className="flex flex-wrap items-center gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-800">{selEmp.employment_status === "Temporary" ? "Temporary Employee" : "Probation Period"}</h3>
+                  {selEmp.temp_id && <p className="text-xs text-slate-500 mt-0.5">Temp ID: {selEmp.temp_id}</p>}
+                  {selEmp.probation_start_date && <p className="text-xs text-slate-500 mt-0.5">Probation Start: {selEmp.probation_start_date} · End: {selEmp.probation_end_date || "—"}</p>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Field Employee Toggle — Master only */}
+          {role === "Master" && (
+            <div className="bg-white border border-blue-100 rounded-2xl p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-bold text-slate-800">Field / Market Employee</h3>
+                {selEmp.is_field_employee && <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-semibold">ACTIVE</span>}
+              </div>
+              <p className="text-xs text-slate-500 mb-3">Field employees can log their time manually via the self-service portal. Each entry requires HR approval.</p>
+              {fieldMsg && <p className="text-xs text-blue-600 mb-2">{fieldMsg}</p>}
+              {selEmp.is_field_employee
+                ? <Button onClick={() => toggleFieldEmployee(false)} variant="outline" className="rounded-2xl text-red-600 border-red-200">Remove Field Status</Button>
+                : <Button onClick={() => toggleFieldEmployee(true)} className="rounded-2xl bg-blue-600 hover:bg-blue-700 text-white">Enable Field Employee</Button>}
+            </div>
+          )}
 
           {/* Attendance Exemption — Master only */}
           {role === "Master" && (

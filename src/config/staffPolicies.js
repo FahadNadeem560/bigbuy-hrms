@@ -4,6 +4,7 @@ export const STAFF_LEVEL_POLICIES = {
     defaultShiftStart: "00:00",
     defaultShiftEnd: "00:00",
     requiredHours: 9,
+    fridayHours: 6.5,
     breakMinutes: 60,
     graceMinutes: 0,
     halfDayLateMinutes: 0,
@@ -14,13 +15,18 @@ export const STAFF_LEVEL_POLICIES = {
     overtimeAfterHours: 0,
     overtimeNeedsApproval: true,
     adjustShortHoursAgainstOT: false,
-    noticeDays: 90,
+    // Working days notice required
+    noticeDays: 78,
+    weeklyOffDay: 0, // 0 = Sunday
+    halfDayMinHours: 5,
+    absentMinHours: 5,
   },
   "Floor Management": {
     label: "Floor Management",
     defaultShiftStart: "11:00",
     defaultShiftEnd: "21:30",
     requiredHours: 10.5,
+    fridayHours: 9,
     breakMinutes: 45,
     graceMinutes: 15,
     halfDayLateMinutes: 90,
@@ -31,13 +37,17 @@ export const STAFF_LEVEL_POLICIES = {
     overtimeAfterHours: 0,
     overtimeNeedsApproval: true,
     adjustShortHoursAgainstOT: true,
-    noticeDays: 45,
+    noticeDays: 26,
+    weeklyOffDay: -1, // rotating
+    halfDayMinHours: 6,
+    absentMinHours: 6,
   },
   "Non-Management": {
     label: "Non-Management",
     defaultShiftStart: "11:00",
     defaultShiftEnd: "21:30",
     requiredHours: 10.5,
+    fridayHours: 9,
     breakMinutes: 45,
     graceMinutes: 15,
     halfDayLateMinutes: 90,
@@ -48,7 +58,10 @@ export const STAFF_LEVEL_POLICIES = {
     overtimeAfterHours: 10.5,
     overtimeNeedsApproval: true,
     adjustShortHoursAgainstOT: true,
-    noticeDays: 15,
+    noticeDays: 13,
+    weeklyOffDay: -1, // rotating
+    halfDayMinHours: 6,
+    absentMinHours: 6,
   },
 };
 
@@ -59,4 +72,10 @@ export const LOAN_POLICY = {
   cooldownAfterRepaymentMonths: 12,
   requiresTwoGuarantors: true,
   requiresSurety: true,
+};
+
+export const LEAVE_QUOTA = {
+  Management: 24,
+  "Floor Management": 14,
+  "Non-Management": 14,
 };

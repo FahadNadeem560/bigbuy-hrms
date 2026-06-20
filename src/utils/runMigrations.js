@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-06-20-v4";
+const MIGRATION_VERSION = "2026-06-20-v5";
 let ran = false;
 
 export async function runMigrations() {
@@ -10,12 +10,8 @@ export async function runMigrations() {
   if (localStorage.getItem("hrms_db_version") === MIGRATION_VERSION) return;
 
   try {
-    // Run the base migration RPC first
     await supabase.rpc("run_migrations");
-
-    // Then apply incremental DDL that may not yet be in the stored function
     await applyIncrementalMigrations();
-
     await waitForDB();
     localStorage.setItem("hrms_db_version", MIGRATION_VERSION);
     console.log("[HRMS] Database schema is up to date.");
@@ -98,6 +94,41 @@ async function applyIncrementalMigrations() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.advances TO anon, authenticated`,
+    // v2: attendance new columns
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS detected_shift TEXT`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS half_day_exempt BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS late_exempt BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS is_gazetted_holiday BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS adjustment_status TEXT`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS adjustment_approved_by TEXT`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS is_manual_entry BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS manual_entry_by TEXT`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS manual_entry_approved_by TEXT`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS manual_entry_status TEXT`,
+    // v2: employees new columns
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_field_employee BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_temporary BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS temp_id TEXT`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS probation_start_date DATE`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS probation_end_date DATE`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS probation_status TEXT DEFAULT 'Active'`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_status TEXT DEFAULT 'Permanent'`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS permanent_id_assigned TEXT`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE`,
+    // v2: employee_tax_settings tax mode
+    `ALTER TABLE employee_tax_settings ADD COLUMN IF NOT EXISTS tax_mode TEXT DEFAULT 'auto'`,
+    `ALTER TABLE employee_tax_settings ADD COLUMN IF NOT EXISTS exempt_reason TEXT`,
+    // v2: Friday hours policy seeds
+    `INSERT INTO hrms_policy_settings (key, value, description, branch) VALUES ('friday_hours_management', '6.5', 'Friday required hours for Management (hours)', 'Global') ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO hrms_policy_settings (key, value, description, branch) VALUES ('friday_hours_non_management', '9', 'Friday required hours for Non-Management (hours)', 'Global') ON CONFLICT (key) DO NOTHING`,
+    // v2: grants
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.attendance TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.employees TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.employee_tax_settings TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.leaves TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.leave_requests TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.hrms_policy_settings TO anon, authenticated`,
   ];
 
   for (const sql of stmts) {

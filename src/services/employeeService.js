@@ -10,6 +10,18 @@ export async function getNextEmployeeId() {
   return String(max + 1);
 }
 
+export async function getNextTempId() {
+  const { data } = await supabase.from("employees").select("temp_id").not("temp_id", "is", null);
+  let max = 0;
+  (data || []).forEach(row => {
+    if (row.temp_id) {
+      const m = String(row.temp_id).match(/^TEMP-(\d+)$/);
+      if (m) { const n = parseInt(m[1]); if (n > max) max = n; }
+    }
+  });
+  return `TEMP-${String(max + 1).padStart(3, "0")}`;
+}
+
 export function mapEmployeeRecord(emp) {
   return {
     id: emp.employee_code,
@@ -59,6 +71,18 @@ export function mapEmployeeRecord(emp) {
     // Attendance exemption
     isAttendanceExempt: !!emp.is_attendance_exempt,
     exemptionReason: emp.exemption_reason || "",
+    // Field employee
+    isFieldEmployee: !!emp.is_field_employee,
+    // Temporary / Probation
+    isTemporary: !!emp.is_temporary,
+    tempId: emp.temp_id || "",
+    employmentStatus: emp.employment_status || "Permanent",
+    probationStartDate: emp.probation_start_date || "",
+    probationEndDate: emp.probation_end_date || "",
+    probationStatus: emp.probation_status || "Active",
+    archivedAt: emp.archived_at || "",
+    permanentIdAssigned: emp.permanent_id_assigned || "",
+    isDeleted: !!emp.is_deleted,
   };
 }
 

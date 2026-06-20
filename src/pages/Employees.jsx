@@ -152,7 +152,7 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
           <SupervisorPicker value={employee.supervisorId || ""} onChange={code => setEmployee(v => ({ ...v, supervisorId: code }))} />
         </Field>
         <Field label="Role Flags">
-          <div className="flex gap-4 mt-2">
+          <div className="flex flex-wrap gap-4 mt-2">
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input type="checkbox" checked={!!employee.isSupervisor} onChange={e => setEmployee(v => ({ ...v, isSupervisor: e.target.checked }))} className="rounded" />
               <span>Is Supervisor</span>
@@ -161,7 +161,16 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
               <input type="checkbox" checked={!!employee.isManager} onChange={e => setEmployee(v => ({ ...v, isManager: e.target.checked }))} className="rounded" />
               <span>Is Manager</span>
             </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={!!employee.isTemporary} onChange={e => setEmployee(v => ({ ...v, isTemporary: e.target.checked }))} className="rounded" />
+              <span className="text-red-700 font-medium">Temporary Employee</span>
+            </label>
           </div>
+          {employee.isTemporary && (
+            <p className="text-xs text-red-600 mt-1.5 bg-red-50 px-3 py-1.5 rounded-xl">
+              A TEMP-xxx ID will be auto-assigned. HR will be notified after 7 days to enroll permanently or reject.
+            </p>
+          )}
         </Field>
       </Section>
 
@@ -360,6 +369,9 @@ export default function Employees({ query, setQuery, branch, setBranch, showEmpl
                 {e.isSupervisor && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 rounded ml-1">SUP</span>}
                 {e.isManager && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded ml-1">MGR</span>}
                 {e.isAttendanceExempt && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 rounded ml-1">EXEMPTED</span>}
+                {e.isTemporary && <span className="text-[10px] bg-red-100 text-red-700 px-1.5 rounded ml-1 font-semibold">TEMP</span>}
+                {e.employmentStatus === "Probation" && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 rounded ml-1 font-semibold">PROBATION</span>}
+                {e.isFieldEmployee && <span className="text-[10px] bg-sky-100 text-sky-700 px-1.5 rounded ml-1">FIELD</span>}
               </td>
               <td className="px-4 py-3">{e.level}</td>
               <td className="px-4 py-3 text-slate-500 text-xs">{supervisorMap[e.supervisorId] || e.supervisorId || "—"}</td>

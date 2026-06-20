@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { supabase } from "./lib/supabaseClient.js";
 import Layout from "./components/Layout.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import EmployeesHub from "./pages/EmployeesHub.jsx";
@@ -25,7 +26,7 @@ import { MENU_ITEMS } from "./config/menu.js";
 import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
 import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
-import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch, getNextEmployeeId } from "./services/employeeService.js";
+import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch, getNextEmployeeId, getNextTempId } from "./services/employeeService.js";
 import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
 
@@ -35,6 +36,7 @@ const demoAdjustments = {};
 
 function mapAttendanceRow(row) {
   return {
+    id: row.id || null,
     employeeCode: row.employee_code || "",
     name: row.employee_code || "",
     level: row.eligibility_group || "",
@@ -45,6 +47,14 @@ function mapAttendanceRow(row) {
     lateMinutes: Number(row.late_minutes || 0),
     overtimeHours: Number(row.overtime_hours || 0),
     status: row.attendance_status || "Pending",
+    detectedShift: row.detected_shift || null,
+    halfDayExempt: !!row.half_day_exempt,
+    lateExempt: !!row.late_exempt,
+    isGazettedHoliday: !!row.is_gazetted_holiday,
+    adjustmentStatus: row.adjustment_status || null,
+    adjustmentApprovedBy: row.adjustment_approved_by || null,
+    isManualEntry: !!row.is_manual_entry,
+    manualEntryStatus: row.manual_entry_status || null,
   };
 }
 
@@ -60,6 +70,7 @@ const BLANK_EMPLOYEE = {
   bankName: "", accountNumber: "", iban: "",
   photoUrl: "", cnicCopyUrl: "", employmentContractUrl: "",
   supervisorId: "", isSupervisor: false, isManager: false,
+  isTemporary: false, isFieldEmployee: false, employmentStatus: "Permanent",
 };
 
 export default function BigBuyHRMS() {
@@ -101,19 +112,80 @@ export default function BigBuyHRMS() {
     } catch (err) { setError(`Attendance load failed: ${err.message}`); }
   }
 
+  const [tempAlerts, setTempAlerts] = useState([]);
+  const [tempActionMsg, setTempActionMsg] = useState("");
+
+  async function checkTemporaryEmployees() {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400e3).toISOString().slice(0, 10);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400e3).toISOString();
+    // Auto soft-delete rejected temporaries archived > 30 days ago
+    const { data: toDelete } = await supabase.from("employees")
+      .select("employee_code").eq("is_temporary", true).eq("status", "Inactive")
+      .lt("archived_at", thirtyDaysAgo).eq("is_deleted", false);
+    if (toDelete && toDelete.length > 0) {
+      const codes = toDelete.map(e => e.employee_code);
+      await supabase.from("employees").update({ is_deleted: true }).in("employee_code", codes);
+    }
+    // Find temporaries active > 7 days — show alert
+    const { data: alerts } = await supabase.from("employees")
+      .select("employee_code, full_name, department, branch, joining_date, temp_id")
+      .eq("is_temporary", true).eq("status", "Active")
+      .lt("joining_date", sevenDaysAgo);
+    setTempAlerts(alerts || []);
+  }
+
+  async function enrollTemporary(empCode) {
+    // Get next permanent ID (4001+)
+    const { data: existing } = await supabase.from("employees").select("employee_code");
+    let max = 4000;
+    (existing || []).forEach(r => { const n = parseInt(r.employee_code, 10); if (!isNaN(n) && n > max) max = n; });
+    const permanentCode = String(max + 1);
+    const probationStart = new Date().toISOString().slice(0, 10);
+    const probationEnd = new Date(Date.now() + 180 * 86400e3).toISOString().slice(0, 10);
+    await supabase.from("employees").update({
+      employee_code: permanentCode, employment_status: "Probation", is_temporary: false,
+      probation_start_date: probationStart, probation_end_date: probationEnd,
+      probation_status: "Active", permanent_id_assigned: permanentCode,
+      updated_at: new Date().toISOString(),
+    }).eq("employee_code", empCode);
+    // Mark probation-period attendance as Present
+    await supabase.from("attendance").update({ attendance_status: "Present" })
+      .eq("employee_code", empCode).eq("attendance_status", "Pending");
+    setTempActionMsg(`Employee enrolled permanently. New ID: ${permanentCode}. Probation until ${probationEnd}.`);
+    checkTemporaryEmployees(); loadEmployees();
+  }
+
+  async function rejectTemporary(empCode) {
+    await supabase.from("employees").update({
+      status: "Inactive", employment_status: "Rejected",
+      archived_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq("employee_code", empCode);
+    setTempActionMsg("Temporary employee rejected and archived. Will be soft-deleted after 30 days.");
+    checkTemporaryEmployees(); loadEmployees();
+  }
+
   useEffect(() => {
-    runMigrations().then(() => { loadEmployees(); loadAttendance(); });
+    runMigrations().then(() => { loadEmployees(); loadAttendance(); checkTemporaryEmployees(); });
   }, []);
 
   async function saveEmployee() {
-    const code = await getNextEmployeeId();
+    let code, tempId = null, employmentStatus = "Permanent";
+    const isTemp = !!newEmployee.isTemporary;
+    if (isTemp) {
+      tempId = await getNextTempId();
+      code = tempId;
+      employmentStatus = "Temporary";
+    } else {
+      code = await getNextEmployeeId();
+    }
+    const joiningDate = newEmployee.joiningDate || new Date().toISOString().slice(0, 10);
     const payload = {
       employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation,
       department: newEmployee.department, branch: newEmployee.branch, staff_level: newEmployee.level,
       employee_type: newEmployee.employeeType || "Permanent", salary: Number(newEmployee.salary || 0),
       phone: newEmployee.phone, whatsapp_number: newEmployee.phone,
       cnic: newEmployee.cnic, fathers_cnic: newEmployee.fathersCnic,
-      joining_date: newEmployee.joiningDate || null, eobi_status: "Pending", status: "Active",
+      joining_date: joiningDate, eobi_status: "Pending", status: "Active",
       cnic_issue_date: newEmployee.cnicIssueDate || null, cnic_expiry_date: newEmployee.cnicExpiryDate || null,
       reference_person_name: newEmployee.referencePersonName, reference_person_contact: newEmployee.referencePersonContact,
       emergency_contact_name: newEmployee.emergencyContactName, emergency_contact_number: newEmployee.emergencyContactNumber,
@@ -125,6 +197,10 @@ export default function BigBuyHRMS() {
       supervisor_id: newEmployee.supervisorId || null,
       is_supervisor: !!newEmployee.isSupervisor,
       is_manager: !!newEmployee.isManager,
+      is_temporary: isTemp,
+      temp_id: tempId,
+      employment_status: employmentStatus,
+      is_field_employee: !!newEmployee.isFieldEmployee,
     };
     try {
       await createEmployee(payload); await loadEmployees();
@@ -207,6 +283,37 @@ export default function BigBuyHRMS() {
   return (
     <Layout user={demoUser} role={role} setRole={setRole} active={active} setActive={setActive} visibleMenu={visibleMenu}>
       {error && <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}
+      {/* Temporary Employee Notification Banner (HR/Master only) */}
+      {(role === "HR" || role === "Master") && tempAlerts.length > 0 && (
+        <div className="mb-4 p-4 rounded-2xl bg-red-50 border border-red-200">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-bold text-red-800 text-sm">Temporary Employee Action Required ({tempAlerts.length})</h3>
+            {tempActionMsg && <span className="text-xs text-green-700 bg-green-50 px-2 py-1 rounded-lg">{tempActionMsg}</span>}
+          </div>
+          <p className="text-xs text-red-600 mb-3">The following temporary employees have been active for more than 7 days. Please enroll them permanently or reject their temporary status.</p>
+          <div className="space-y-2">
+            {tempAlerts.map(emp => (
+              <div key={emp.employee_code} className="flex flex-wrap items-center justify-between gap-2 bg-white rounded-xl p-3 border border-red-100">
+                <div>
+                  <span className="font-semibold text-slate-800 text-sm">{emp.full_name}</span>
+                  <span className="text-xs text-slate-500 ml-2">{emp.temp_id || emp.employee_code} · {emp.department} · {emp.branch}</span>
+                  <span className="text-xs text-red-500 ml-2">Since {emp.joining_date}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => enrollTemporary(emp.employee_code)}
+                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-medium hover:bg-emerald-700 transition">
+                    Enroll Permanently
+                  </button>
+                  <button onClick={() => rejectTemporary(emp.employee_code)}
+                    className="px-3 py-1.5 border border-red-300 text-red-700 rounded-xl text-xs font-medium hover:bg-red-50 transition">
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Core HR */}
       {active === "dashboard"   && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
@@ -215,7 +322,7 @@ export default function BigBuyHRMS() {
       {active === "profile"     && <EmployeeProfile role={role} />}
 
       {/* Attendance */}
-      {active === "attendance"  && <Attendance rows={attendanceRows} />}
+      {active === "attendance"  && <Attendance rows={attendanceRows} role={role} />}
       {active === "roster"      && <RosterManagement />}
       {active === "zkt"         && <ZKTSync />}
 

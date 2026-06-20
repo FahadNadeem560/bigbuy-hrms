@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import LeaveLiability from "./LeaveLiability.jsx";
+import { LEAVE_QUOTA } from "../config/staffPolicies.js";
 
-const LEAVE_TYPES = ["Casual", "Annual", "Sick", "Half Day", "Emergency", "Maternity", "Paternity", "Unpaid"];
-const BALANCE_TYPES = ["Annual", "Casual", "Sick", "Unpaid"];
+// Annual leave is the only quota-tracked type; Casual and Sick removed per spec
+const LEAVE_TYPES = ["Annual", "Half Day", "Emergency", "Maternity", "Paternity", "Unpaid"];
 
 function statusBadge(s) {
   const t = { Approved: "green", Rejected: "red", Pending: "yellow" };
@@ -50,7 +52,19 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-export default function LeaveManagement() {
+// Calculate earned leave for current month (proportional)
+function calcEarned(staffLevel, joiningDate) {
+  const quota = LEAVE_QUOTA[staffLevel] || LEAVE_QUOTA["Non-Management"];
+  const now = new Date();
+  const monthsElapsed = (now.getFullYear() - 2025) * 12 + now.getMonth() + 1;
+  const joiningMonths = joiningDate
+    ? Math.max(0, (now.getFullYear() - new Date(joiningDate).getFullYear()) * 12 + (now.getMonth() - new Date(joiningDate).getMonth()) + 1)
+    : monthsElapsed;
+  const months = Math.min(monthsElapsed, joiningMonths);
+  return Math.round((quota / 12) * months * 10) / 10;
+}
+
+export default function LeaveManagement({ role }) {
   const [tab, setTab] = useState("apply");
   const [employees, setEmployees] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -60,7 +74,7 @@ export default function LeaveManagement() {
   const [err, setErr] = useState("");
 
   const [selEmp, setSelEmp] = useState(null);
-  const [leaveType, setLeaveType] = useState("Casual");
+  const [leaveType, setLeaveType] = useState("Annual");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [reason, setReason] = useState("");
@@ -68,13 +82,21 @@ export default function LeaveManagement() {
   const [historyFilter, setHistoryFilter] = useState({ type: "All", branch: "All", dept: "", from: "", to: "" });
   const [calMonth, setCalMonth] = useState(() => new Date().toISOString().slice(0, 7));
 
+  const [rejectId, setRejectId] = useState(null);
+  const [rejectNote, setRejectNote] = useState("");
+
+  // Import state
+  const [importFile, setImportFile] = useState(null);
+  const [importSummary, setImportSummary] = useState(null);
+  const [importing, setImporting] = useState(false);
+
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
     try {
       const [{ data: emps }, { data: reqs }, { data: bals }] = await Promise.all([
-        supabase.from("employees").select("employee_code, full_name, department, branch").order("full_name"),
+        supabase.from("employees").select("employee_code, full_name, department, branch, staff_level, joining_date").order("full_name"),
         supabase.from("leave_requests").select("*").order("created_at", { ascending: false }).limit(500),
         supabase.from("leaves").select("*").limit(500),
       ]);
@@ -145,14 +167,21 @@ export default function LeaveManagement() {
 
   const branches = useMemo(() => ["All", ...new Set(employees.map(e => e.branch).filter(Boolean))], [employees]);
 
-  const typedBalances = useMemo(() => employees.map(emp => {
-    const empReqs = requests.filter(r => r.employee_code === emp.employee_code && r.status === "Approved");
+  // Enriched balance rows for the Balances tab
+  const enrichedBalances = useMemo(() => employees.map(emp => {
+    const approvedAnnual = requests.filter(r =>
+      r.employee_code === emp.employee_code && r.status === "Approved" && r.leave_type === "Annual"
+    ).reduce((s, r) => s + Number(r.days || 1), 0);
+    const approvedHalfDay = requests.filter(r =>
+      r.employee_code === emp.employee_code && r.status === "Approved" && r.leave_type === "Half Day"
+    ).reduce((s, r) => s + Number(r.days || 1), 0);
     const bal = balances.find(b => b.employee_code === emp.employee_code || b.employee_id === emp.employee_code);
-    const typeMap = {};
-    BALANCE_TYPES.forEach(t => {
-      typeMap[t] = empReqs.filter(r => r.leave_type === t).reduce((s, r) => s + Number(r.days || 1), 0);
-    });
-    return { ...emp, bal, ...typeMap, total: Object.values(typeMap).reduce((s, v) => s + v, 0) };
+    const opening = Number(bal?.opening_balance || 0);
+    const earnedToDate = calcEarned(emp.staff_level, emp.joining_date);
+    const used = approvedAnnual;
+    const halfUsed = approvedHalfDay;
+    const remaining = (opening + earnedToDate) - used - (halfUsed * 0.5);
+    return { ...emp, opening, earnedToDate, used, halfUsed, remaining };
   }), [employees, requests, balances]);
 
   const calLeaves = useMemo(() =>
@@ -171,14 +200,62 @@ export default function LeaveManagement() {
     return calLeaves.filter(r => r.from_date <= d && r.to_date >= d);
   }
 
-  const [rejectId, setRejectId] = useState(null);
-  const [rejectNote, setRejectNote] = useState("");
+  // Import Leave Balances
+  function downloadImportTemplate() {
+    const ws = XLSX.utils.json_to_sheet([
+      { "Employee Code": "", "Employee Name": "", "Opening Balance": "", "Already Used": "", "Remaining Balance": "" },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Leave Balances");
+    XLSX.writeFile(wb, "leave_balance_import_template.xlsx");
+  }
+
+  async function handleLeaveImport() {
+    if (!importFile) return setErr("Select an Excel file first.");
+    setImporting(true); setErr(""); setImportSummary(null);
+    try {
+      const data = await importFile.arrayBuffer();
+      const wb = XLSX.read(data);
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      let updated = 0, failed = 0;
+      const errors = [];
+      for (const row of rows) {
+        const code = String(row["Employee Code"] || "").trim();
+        if (!code) { failed++; errors.push("Missing employee code in row."); continue; }
+        const emp = employees.find(e => e.employee_code === code);
+        if (!emp) { failed++; errors.push(`${code}: employee not found.`); continue; }
+        const opening = Number(row["Opening Balance"] || 0);
+        const used = Number(row["Already Used"] || 0);
+        const remaining = Number(row["Remaining Balance"] || opening - used);
+        const { error } = await supabase.from("leaves").upsert({
+          employee_id: code, employee_code: code,
+          opening_balance: opening, used, remaining, remaining_balance: remaining,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "employee_id" });
+        if (error) { failed++; errors.push(`${code}: ${error.message}`); }
+        else updated++;
+      }
+      setImportSummary({ updated, failed, errors });
+      loadAll();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setImporting(false);
+    }
+  }
 
   return (
     <div>
-      <PageTitle title="Leave Management" subtitle="Apply, approve and track employee leave requests with per-type balance tracking." />
+      <PageTitle title="Leave Management" subtitle="Apply, approve and track employee annual leave with quota management." />
       <div className="flex flex-wrap gap-2 mb-4">
-        {[["apply", "Apply Leave"], ["queue", `Approval Queue (${pending.length})`], ["balances", "Balances"], ["history", "History"], ["calendar", "Calendar"], ["liability", "Leave Liability"]].map(([k, l]) => (
+        {[
+          ["apply", "Apply Leave"],
+          ["queue", `Approval Queue (${pending.length})`],
+          ["balances", "Balances"],
+          ["history", "History"],
+          ["calendar", "Calendar"],
+          ["liability", "Leave Liability"],
+        ].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{l}</button>
         ))}
@@ -189,6 +266,9 @@ export default function LeaveManagement() {
       {tab === "apply" && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
           <h2 className="font-bold text-slate-800 mb-4">New Leave Application</h2>
+          <div className="bg-blue-50 rounded-xl p-3 text-xs text-blue-700 mb-4">
+            Annual leave quota: Non-Management / Floor Management = 14 days/year · Management = 24 days/year. Earned proportionally each month.
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div><p className="text-xs text-slate-500 mb-1">Employee</p><EmpPicker employees={employees} value={selEmp} onChange={setSelEmp} /></div>
             <div>
@@ -234,9 +314,7 @@ export default function LeaveManagement() {
                       <td className="px-4 py-3">{r.days || "—"}</td>
                       <td className="px-4 py-3 max-w-[120px] truncate">{r.reason || "—"}</td>
                       <td className="px-4 py-3">
-                        {isAwaitingSup
-                          ? <Badge tone="yellow">Awaiting Supervisor</Badge>
-                          : <Badge tone="blue">Awaiting HR</Badge>}
+                        {isAwaitingSup ? <Badge tone="yellow">Awaiting Supervisor</Badge> : <Badge tone="blue">Awaiting HR</Badge>}
                       </td>
                       <td className="px-4 py-3">{r.applied_date || r.created_at?.slice(0, 10)}</td>
                       <td className="px-4 py-3">
@@ -264,31 +342,74 @@ export default function LeaveManagement() {
       )}
 
       {tab === "balances" && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
-          <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Leave Balances by Type</h2><p className="text-xs text-slate-400">Days used per type (approved requests)</p></div>
-          <table className="w-full min-w-[700px] text-sm">
-            <thead className="bg-slate-50 text-slate-500">
-              <tr><th className="text-left px-4 py-3 font-medium">Employee</th><th className="text-left px-4 py-3 font-medium">Department</th>{BALANCE_TYPES.map(t => <th key={t} className="text-center px-4 py-3 font-medium">{t}</th>)}<th className="text-center px-4 py-3 font-medium">Total Used</th></tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {typedBalances.filter(e => e.total > 0 || balances.find(b => b.employee_code === e.employee_code)).length === 0
-                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No leave balance data found.</td></tr>
-                : typedBalances.filter(e => e.total > 0 || balances.find(b => b.employee_code === e.employee_code)).map((e, i) => (
-                  <tr key={i}>
-                    <td className="px-4 py-3 font-medium">{e.full_name}</td>
-                    <td className="px-4 py-3 text-slate-500">{e.department}</td>
-                    {BALANCE_TYPES.map(t => (
-                      <td key={t} className="px-4 py-3 text-center">
-                        {e[t] > 0 ? <Badge tone={t === "Unpaid" ? "red" : "blue"}>{e[t]}</Badge> : <span className="text-slate-300">0</span>}
-                      </td>
-                    ))}
-                    <td className="px-4 py-3 text-center">
-                      <Badge tone={e.total > 10 ? "red" : "green"}>{e.total}</Badge>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+        <div>
+          {/* Import panel */}
+          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <h3 className="font-semibold text-slate-800 text-sm">Import Leave Balances</h3>
+              <Button variant="outline" onClick={downloadImportTemplate} className="rounded-xl text-xs py-1.5 px-3">
+                Download Template
+              </Button>
+              <input type="file" accept=".xlsx,.xls,.csv" id="leave-import-file"
+                onChange={e => setImportFile(e.target.files?.[0] || null)}
+                className="hidden" />
+              <label htmlFor="leave-import-file" className="cursor-pointer inline-flex items-center gap-2 px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 hover:bg-slate-50">
+                {importFile ? importFile.name : "Choose File"}
+              </label>
+              {importFile && (
+                <Button onClick={handleLeaveImport} disabled={importing} className="rounded-xl text-xs py-1.5 px-3">
+                  {importing ? "Importing..." : "Upload & Import"}
+                </Button>
+              )}
+            </div>
+            {importSummary && (
+              <div className="mt-3 p-3 bg-slate-50 rounded-xl text-xs text-slate-700">
+                <span className="text-emerald-600 font-semibold">{importSummary.updated} updated</span>
+                {importSummary.failed > 0 && <span className="text-red-500 font-semibold ml-3">{importSummary.failed} failed</span>}
+                {importSummary.errors.length > 0 && (
+                  <div className="mt-2 space-y-0.5 text-red-500">{importSummary.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+            <div className="px-5 pt-4 pb-2">
+              <h2 className="font-bold text-slate-800">Annual Leave Balances</h2>
+              <p className="text-xs text-slate-400">Quota: Non-Mgmt/Floor Mgmt = 14 days/yr · Management = 24 days/yr · Earned proportionally per month</p>
+            </div>
+            <table className="w-full min-w-[860px] text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  {["Code", "Name", "Branch", "Department", "Opening", "Earned to Date", "Used (Annual)", "Half Leaves Used", "Remaining"].map(h => (
+                    <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {enrichedBalances.length === 0
+                  ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No employee data found.</td></tr>
+                  : enrichedBalances.map((e, i) => {
+                    const isLow = e.remaining <= 0;
+                    return (
+                      <tr key={i} className={isLow ? "bg-red-50/40" : ""}>
+                        <td className="px-4 py-3 font-mono text-xs text-slate-500">{e.employee_code}</td>
+                        <td className="px-4 py-3 font-medium">{e.full_name}</td>
+                        <td className="px-4 py-3 text-slate-500">{e.branch}</td>
+                        <td className="px-4 py-3 text-slate-500">{e.department}</td>
+                        <td className="px-4 py-3 text-center">{e.opening}</td>
+                        <td className="px-4 py-3 text-center">{e.earnedToDate}</td>
+                        <td className="px-4 py-3 text-center">{e.used}</td>
+                        <td className="px-4 py-3 text-center">{e.halfUsed}</td>
+                        <td className="px-4 py-3 text-center">
+                          <Badge tone={isLow ? "red" : "green"}>{e.remaining}</Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

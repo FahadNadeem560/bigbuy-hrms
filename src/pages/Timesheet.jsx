@@ -326,80 +326,108 @@ export default function Timesheet() {
 
       {!loading && selectedEmp && (
         <>
-          {/* Print-only header */}
-          <div className="hidden print:block mb-6">
-            <h1 className="text-2xl font-bold">Employee Timesheet — Big Buy HRMS</h1>
-            <p className="text-sm mt-1">
-              <strong>{selectedEmp.employee_code}</strong> — {selectedEmp.full_name} &nbsp;|&nbsp;
-              {selectedEmp.department} · {selectedEmp.branch} · {selectedEmp.staff_level}
-            </p>
-            <p className="text-sm text-gray-500">Period: {fromDate} to {toDate}</p>
-          </div>
+          {/* Print CSS */}
+          <style>{`
+            @media print {
+              @page { size: A4 portrait; margin: 15mm; }
+              body * { visibility: hidden; }
+              #timesheet-print-root, #timesheet-print-root * { visibility: visible; }
+              #timesheet-print-root { position: absolute; top: 0; left: 0; width: 100%; }
+            }
+          `}</style>
 
-          {/* Attendance Ledger */}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm mb-4 overflow-x-auto">
-            <div className="px-5 pt-4 pb-2">
-              <h2 className="font-bold text-slate-800">Attendance Ledger</h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {fromDate} — {toDate} · {attendance.length} record{attendance.length !== 1 ? "s" : ""}
-              </p>
+          <div id="timesheet-print-root">
+            {/* Print-only A4 header */}
+            <div className="hidden print:block mb-4">
+              <div className="flex justify-between items-start border-b-2 border-slate-800 pb-3 mb-4">
+                <div>
+                  <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">The Big Buy</h1>
+                  <p className="text-xs text-slate-500">Attendance Timesheet Report</p>
+                </div>
+                <div className="text-right text-xs text-slate-500">
+                  <p>Period: {fromDate} — {toDate}</p>
+                  <p>Generated: {new Date().toLocaleDateString()}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm mb-4">
+                {[
+                  ["Employee Code", selectedEmp.employee_code],
+                  ["Full Name", selectedEmp.full_name],
+                  ["Department", selectedEmp.department],
+                  ["Branch", selectedEmp.branch],
+                  ["Staff Level", selectedEmp.staff_level],
+                  ["OT Eligible", isOtEligible ? "Yes" : "No"],
+                ].map(([l, v]) => (
+                  <div key={l} className="flex gap-2">
+                    <span className="font-semibold text-slate-700 w-32 shrink-0">{l}:</span>
+                    <span className="text-slate-600">{v || "—"}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <table className="w-full min-w-[760px] text-sm">
-              <thead className="bg-slate-50 text-slate-500">
-                <tr>
-                  {["Date", "Day", "In", "Out", "Hours", "Late (mins)", "Short (hrs)", "OT (hrs)", "Status"].map(
-                    (h) => (
-                      <th key={h} className="text-left px-4 py-3 font-medium">
-                        {h}
-                      </th>
-                    )
-                  )}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {attendance.length === 0 ? (
+
+            {/* Attendance Ledger */}
+            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm mb-4 overflow-x-auto print:rounded-none print:border-0 print:shadow-none">
+              <div className="px-5 pt-4 pb-2 print:px-0 print:pt-0">
+                <h2 className="font-bold text-slate-800 print:text-base">Attendance Ledger</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {fromDate} — {toDate} · {attendance.length} record{attendance.length !== 1 ? "s" : ""}
+                </p>
+              </div>
+              <table className="w-full min-w-[820px] text-sm print:min-w-0 print:text-xs">
+                <thead className="bg-slate-50 text-slate-500 print:bg-slate-200">
                   <tr>
-                    <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
-                      No attendance records found for this period.
-                    </td>
+                    {["Date", "Day", "Shift", "In", "Out", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status"].map((h) => (
+                      <th key={h} className="text-left px-4 py-3 font-medium print:px-2 print:py-2">{h}</th>
+                    ))}
                   </tr>
-                ) : (
-                  attendance.map((row, i) => {
-                    const status = row.attendance_status || row.status || "Pending";
-                    return (
-                      <tr key={i} className={status === "Absent" ? "bg-red-50/40" : ""}>
-                        <td className="px-4 py-3 font-medium text-slate-800">{row.work_date}</td>
-                        <td className="px-4 py-3 text-slate-400 text-xs">{getDayName(row.work_date)}</td>
-                        <td className="px-4 py-3">{formatTime(row.check_in || row.time_in)}</td>
-                        <td className="px-4 py-3">{formatTime(row.check_out || row.time_out)}</td>
-                        <td className="px-4 py-3">{row.actual_hours ?? row.hours_worked ?? 0}</td>
-                        <td className="px-4 py-3">
-                          {Number(row.late_minutes || 0) > 0 ? (
-                            <span className="text-amber-600 font-medium">{row.late_minutes}</span>
-                          ) : "0"}
-                        </td>
-                        <td className="px-4 py-3">
-                          {Number(row.short_hours || 0) > 0 ? (
-                            <span className="text-red-500 font-medium">{row.short_hours}</span>
-                          ) : "0"}
-                        </td>
-                        <td className="px-4 py-3">
-                          {Number(row.ot_hours || row.overtime_hours || 0) > 0 ? (
-                            <span className="text-blue-600 font-medium">
-                              {row.ot_hours ?? row.overtime_hours}
-                            </span>
-                          ) : "0"}
-                        </td>
-                        <td className="px-4 py-3">
-                          <StatusBadge status={status} />
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {attendance.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="px-4 py-10 text-center text-slate-400">
+                        No attendance records found for this period.
+                      </td>
+                    </tr>
+                  ) : (
+                    attendance.map((row, i) => {
+                      const status = row.attendance_status || row.status || "Pending";
+                      const shift = row.detected_shift;
+                      return (
+                        <tr key={i} className={status === "Absent" ? "bg-red-50/40" : ""}>
+                          <td className="px-4 py-3 font-medium text-slate-800 print:px-2 print:py-1.5">{row.work_date}</td>
+                          <td className="px-4 py-3 text-slate-400 text-xs print:px-2 print:py-1.5">{getDayName(row.work_date)}</td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                            {shift ? (
+                              <span className={`font-medium ${shift === "A" ? "text-blue-600" : shift === "B" ? "text-purple-600" : "text-amber-600"}`}>
+                                {shift === "HalfDay" ? "HD" : `Sh.${shift}`}
+                              </span>
+                            ) : "—"}
+                          </td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">{formatTime(row.check_in || row.time_in)}</td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">{formatTime(row.check_out || row.time_out)}</td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">{row.actual_hours ?? row.hours_worked ?? 0}</td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                            {Number(row.late_minutes || 0) > 0 ? <span className="text-amber-600 font-medium">{row.late_minutes}</span> : "0"}
+                          </td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                            {Number(row.short_hours || 0) > 0 ? <span className="text-red-500 font-medium">{row.short_hours}</span> : "0"}
+                          </td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                            {Number(row.ot_hours || row.overtime_hours || 0) > 0 ? (
+                              <span className="text-blue-600 font-medium">{row.ot_hours ?? row.overtime_hours}</span>
+                            ) : "0"}
+                          </td>
+                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                            <StatusBadge status={status} />
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
 
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -490,38 +518,24 @@ export default function Timesheet() {
           </div>
 
           {/* Leave Balance */}
-          <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
-            <div className="flex items-center gap-2 mb-4">
+          <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4 print:rounded-none print:border-0 print:shadow-none print:mb-2">
+            <div className="flex items-center gap-2 mb-4 print:hidden">
               <span className="h-9 w-9 rounded-xl bg-emerald-50 flex items-center justify-center text-lg shrink-0">🌴</span>
               <h3 className="font-bold text-slate-800">Leave Balance</h3>
             </div>
+            <h3 className="hidden print:block font-bold text-slate-800 mb-2 text-sm">Annual Leave Balance</h3>
             {leaveData ? (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 print:gap-2">
                 {[
                   { label: "Opening Balance", value: leaveData.opening_balance },
                   { label: "Earned", value: leaveData.earned },
                   { label: "Used", value: leaveData.used },
                   { label: "Half Leaves", value: leaveData.half_leaves },
-                  {
-                    label: "Remaining Balance",
-                    value: leaveData.remaining ?? leaveData.remaining_balance,
-                    highlight: true,
-                  },
+                  { label: "Remaining Balance", value: leaveData.remaining ?? leaveData.remaining_balance, highlight: true },
                 ].map(({ label, value, highlight }) => (
-                  <div
-                    key={label}
-                    className={`text-center rounded-xl p-4 ${
-                      highlight ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50"
-                    }`}
-                  >
+                  <div key={label} className={`text-center rounded-xl p-4 print:p-2 print:border print:border-slate-300 ${highlight ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50"}`}>
                     <div className="text-xs text-slate-500 mb-1">{label}</div>
-                    <div
-                      className={`text-2xl font-bold ${
-                        highlight ? "text-emerald-700" : "text-slate-900"
-                      }`}
-                    >
-                      {value ?? "—"}
-                    </div>
+                    <div className={`text-2xl font-bold print:text-lg ${highlight ? "text-emerald-700" : "text-slate-900"}`}>{value ?? "—"}</div>
                   </div>
                 ))}
               </div>
@@ -529,6 +543,21 @@ export default function Timesheet() {
               <p className="text-sm text-slate-400">No leave balance data found for this employee.</p>
             )}
           </div>
+
+          {/* Print Signature Footer */}
+          <div className="hidden print:flex justify-between mt-12 pt-4 border-t border-slate-300">
+            {[["HR Manager", "Human Resources"], ["Supervisor", "Direct Supervisor"], ["Employee", selectedEmp.full_name]].map(([title, name]) => (
+              <div key={title} className="text-center w-1/3">
+                <div className="border-t border-slate-600 mt-12 pt-2 mx-4">
+                  <p className="font-semibold text-xs">{title}</p>
+                  <p className="text-xs text-slate-500">{name}</p>
+                  <p className="text-xs text-slate-400 mt-1">Date: _______________</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          </div>{/* end timesheet-print-root */}
         </>
       )}
     </div>

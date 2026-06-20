@@ -869,10 +869,98 @@ BEGIN
   );
   GRANT SELECT, INSERT, UPDATE, DELETE ON public.advances TO anon, authenticated;
 
+  -- ── attendance: new operational columns (v2) ───────────────
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS detected_shift           TEXT;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS half_day_exempt          BOOLEAN DEFAULT FALSE;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS late_exempt              BOOLEAN DEFAULT FALSE;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS is_gazetted_holiday      BOOLEAN DEFAULT FALSE;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS adjustment_status        TEXT;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS adjustment_approved_by   TEXT;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS is_manual_entry          BOOLEAN DEFAULT FALSE;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS manual_entry_by          TEXT;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS manual_entry_approved_by TEXT;
+  ALTER TABLE attendance ADD COLUMN IF NOT EXISTS manual_entry_status      TEXT;
+
+  -- ── employees: field + temporary + probation columns ────────
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_field_employee     BOOLEAN DEFAULT FALSE;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_temporary          BOOLEAN DEFAULT FALSE;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS temp_id               TEXT;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS probation_start_date  DATE;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS probation_end_date    DATE;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS probation_status      TEXT    DEFAULT 'Active';
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_status     TEXT    DEFAULT 'Permanent';
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS archived_at           TIMESTAMPTZ;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS permanent_id_assigned TEXT;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_deleted            BOOLEAN DEFAULT FALSE;
+
+  -- ── employee_tax_settings: tax mode ─────────────────────────
+  ALTER TABLE employee_tax_settings ADD COLUMN IF NOT EXISTS tax_mode      TEXT DEFAULT 'auto';
+  ALTER TABLE employee_tax_settings ADD COLUMN IF NOT EXISTS exempt_reason TEXT;
+
+  -- ── hrms_policy_settings: Friday hours ──────────────────────
+  INSERT INTO hrms_policy_settings (key, value, description, branch) VALUES
+    ('friday_hours_management',     '6.5', 'Friday required hours for Management (hours)',     'Global'),
+    ('friday_hours_non_management', '9',   'Friday required hours for Non-Management (hours)', 'Global')
+  ON CONFLICT (key) DO NOTHING;
+
+  -- ── grants v2 ────────────────────────────────────────────────
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.attendance            TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.employees             TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.employee_tax_settings TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.leave_requests        TO anon, authenticated;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON public.hrms_policy_settings  TO anon, authenticated;
+
 END;
 $$;
 
 GRANT EXECUTE ON FUNCTION run_migrations() TO anon, authenticated;
+
+-- =============================================================
+-- Migration: feature-2026-06-20-v2 (standalone)
+-- Friday shifts, shift auto-detection, leave quota, settlement
+-- fix, weekly off rules, A4 timesheet, manual tax, field
+-- employees, temporary enrollment with probation workflow.
+-- =============================================================
+
+ALTER TABLE attendance
+  ADD COLUMN IF NOT EXISTS detected_shift           TEXT,
+  ADD COLUMN IF NOT EXISTS half_day_exempt          BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS late_exempt              BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS is_gazetted_holiday      BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS adjustment_status        TEXT,
+  ADD COLUMN IF NOT EXISTS adjustment_approved_by   TEXT,
+  ADD COLUMN IF NOT EXISTS is_manual_entry          BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS manual_entry_by          TEXT,
+  ADD COLUMN IF NOT EXISTS manual_entry_approved_by TEXT,
+  ADD COLUMN IF NOT EXISTS manual_entry_status      TEXT;
+
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS is_field_employee     BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS is_temporary          BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS temp_id               TEXT,
+  ADD COLUMN IF NOT EXISTS probation_start_date  DATE,
+  ADD COLUMN IF NOT EXISTS probation_end_date    DATE,
+  ADD COLUMN IF NOT EXISTS probation_status      TEXT    DEFAULT 'Active',
+  ADD COLUMN IF NOT EXISTS employment_status     TEXT    DEFAULT 'Permanent',
+  ADD COLUMN IF NOT EXISTS archived_at           TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS permanent_id_assigned TEXT,
+  ADD COLUMN IF NOT EXISTS is_deleted            BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE employee_tax_settings
+  ADD COLUMN IF NOT EXISTS tax_mode      TEXT DEFAULT 'auto',
+  ADD COLUMN IF NOT EXISTS exempt_reason TEXT;
+
+INSERT INTO hrms_policy_settings (key, value, description, branch) VALUES
+  ('friday_hours_management',     '6.5', 'Friday required hours for Management (hours)',     'Global'),
+  ('friday_hours_non_management', '9',   'Friday required hours for Non-Management (hours)', 'Global')
+ON CONFLICT (key) DO NOTHING;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.attendance             TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.employees              TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.employee_tax_settings  TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.leaves                 TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.leave_requests         TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.hrms_policy_settings   TO anon, authenticated;
 
 
 -- =============================================================

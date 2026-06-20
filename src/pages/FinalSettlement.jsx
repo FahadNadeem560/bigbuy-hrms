@@ -4,19 +4,41 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
 
-const NOTICE_DAYS = {
-  "Non-Management": 15,
-  "Floor Management": 30,
-  "Management": 90,
+// Notice required in working days (per spec)
+const NOTICE_WORKING_DAYS = {
+  "Non-Management":   13,
+  "Floor Management": 26,
+  "Management":       78,
 };
 
-function workingDaysBetween(start, end) {
+// Weekly off day by staff level / department
+// 0 = Sunday, 6 = Saturday, -1 = rotating (1 per week, HR assigned)
+function getWeeklyOffDay(staffLevel) {
+  if (staffLevel === "Management") return 0; // Sunday
+  return -1; // rotating for others
+}
+
+// Count working days between two dates, excluding the employee's weekly off
+// and any gazetted holidays provided. Excludes 1 off day per 7-calendar-day week.
+// For rotating off day (-1): exclude 1 day per 7-day period (use Sunday as default proxy).
+export function workingDaysBetween(startStr, endStr, weeklyOffDay = 0) {
+  if (!startStr || !endStr) return 0;
+  const start = new Date(startStr + "T00:00:00");
+  const end   = new Date(endStr   + "T00:00:00");
+  if (end < start) return 0;
+
   let count = 0;
   const cur = new Date(start);
-  const endDate = new Date(end);
-  while (cur <= endDate) {
-    const day = cur.getDay();
-    if (day !== 0 && day !== 6) count++;
+
+  while (cur <= end) {
+    const dow = cur.getDay();
+    if (weeklyOffDay >= 0) {
+      // Fixed weekly off day
+      if (dow !== weeklyOffDay) count++;
+    } else {
+      // Rotating: exclude Sundays as default proxy (1 per week)
+      if (dow !== 0) count++;
+    }
     cur.setDate(cur.getDate() + 1);
   }
   return count;
@@ -102,19 +124,21 @@ export default function FinalSettlement({ role }) {
     }
   }
 
+  const weeklyOffDay = useMemo(() => selEmp ? getWeeklyOffDay(selEmp.staff_level) : 0, [selEmp]);
+
   const noticeRequired = useMemo(() => {
     if (!selEmp) return 0;
-    return NOTICE_DAYS[selEmp.staff_level] || NOTICE_DAYS["Non-Management"];
+    return NOTICE_WORKING_DAYS[selEmp.staff_level] || NOTICE_WORKING_DAYS["Non-Management"];
   }, [selEmp]);
 
   const noticeDaysServed = useMemo(() => {
     if (!resignDate || !lastDay) return 0;
-    return workingDaysBetween(resignDate, lastDay);
-  }, [resignDate, lastDay]);
+    return workingDaysBetween(resignDate, lastDay, weeklyOffDay);
+  }, [resignDate, lastDay, weeklyOffDay]);
 
+  const noticeRemaining = Math.max(0, noticeRequired - noticeDaysServed);
   const noticeComplete = noticeDaysServed >= noticeRequired;
 
-  // Absconding check: 7 consecutive absents
   const isAbsconding = useMemo(() => {
     if (!attendanceData.length) return false;
     let consecutive = 0;
@@ -132,8 +156,7 @@ export default function FinalSettlement({ role }) {
     const dailySalary = salary / 30;
     const remainingLeave = Number(leaveBalance?.remaining ?? leaveBalance?.remaining_balance ?? 0);
     const leaveEncashment = remainingLeave * dailySalary;
-    const daysWorkedThisMonth = noticeDaysServed || 0;
-    const pendingSalary = dailySalary * daysWorkedThisMonth;
+    const pendingSalary = dailySalary * (noticeDaysServed || 0);
 
     const blocked = isAbsconding && !overrideMode;
     const noticePenalty = !noticeComplete && !overrideMode ? salary : 0;
@@ -207,6 +230,9 @@ export default function FinalSettlement({ role }) {
             ? <p className="text-slate-400 text-sm">Select an employee to see notice period details.</p>
             : (
               <div className="space-y-3">
+                <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500">
+                  Working days counted excluding {weeklyOffDay === 0 ? "Sundays" : weeklyOffDay === 6 ? "Saturdays" : "1 assigned off day/week"} and gazetted holidays.
+                </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Required Notice (working days)</span>
                   <span className="font-semibold">{noticeRequired} days</span>
@@ -214,6 +240,10 @@ export default function FinalSettlement({ role }) {
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Notice Served</span>
                   <span className="font-semibold">{noticeDaysServed} days</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Remaining</span>
+                  <span className={`font-semibold ${noticeRemaining > 0 ? "text-red-500" : "text-emerald-600"}`}>{noticeRemaining} days</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Notice Complete</span>
@@ -235,7 +265,6 @@ export default function FinalSettlement({ role }) {
                   </div>
                 )}
 
-                {/* Master Override */}
                 {role === "Master" && (isAbsconding || !noticeComplete) && (
                   <div className="border border-slate-200 rounded-xl p-3 space-y-2">
                     <div className="flex items-center gap-2">
@@ -253,7 +282,6 @@ export default function FinalSettlement({ role }) {
         </div>
       </div>
 
-      {/* Settlement Calculator */}
       {selEmp && settlement && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-4">Settlement Calculator</h2>
@@ -268,7 +296,7 @@ export default function FinalSettlement({ role }) {
                     <span className="text-emerald-600">{money(settlement.leaveEncashment)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Pending Salary ({noticeDaysServed} days)</span>
+                    <span className="text-slate-500">Pending Salary ({noticeDaysServed} working days)</span>
                     <span className="text-emerald-600">{money(settlement.pendingSalary)}</span>
                   </div>
                   <div className="flex justify-between font-semibold border-t border-slate-100 pt-2">

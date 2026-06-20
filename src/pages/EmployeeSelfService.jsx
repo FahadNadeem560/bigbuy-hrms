@@ -13,11 +13,13 @@ const BASE_TABS = [
   { id: "profile",     label: "My Profile",      icon: "🧑" },
 ];
 
+const BLANK_TIME_LOG = { date: "", timeIn: "", timeOut: "", location: "", remarks: "" };
+
 const SHORT_TOLERANCE = 1.5;
 const OT_TOLERANCE = 1.5;
 const LATE_WARNING_COUNT = 2;
 
-const LEAVE_TYPES = ["Annual Leave", "Sick Leave", "Casual Leave", "Emergency Leave", "Unpaid Leave"];
+const LEAVE_TYPES = ["Annual Leave", "Half Day", "Emergency Leave", "Maternity Leave", "Paternity Leave", "Unpaid Leave"];
 
 function formatTime(t) {
   if (!t) return "—";
@@ -231,10 +233,71 @@ export default function EmployeeSelfService() {
 
   if (!session) return null;
 
+  const [timeLogForm, setTimeLogForm] = useState(BLANK_TIME_LOG);
+  const [timeLogSubmitting, setTimeLogSubmitting] = useState(false);
+  const [timeLogMsg, setTimeLogMsg] = useState("");
+  const [myTimeEntries, setMyTimeEntries] = useState([]);
+
+  useEffect(() => {
+    if (session) {
+      supabase.from("attendance").select("*")
+        .eq("employee_code", session.employee_code)
+        .eq("is_manual_entry", true)
+        .order("work_date", { ascending: false }).limit(50)
+        .then(({ data }) => setMyTimeEntries(data || []));
+    }
+  }, [session, timeLogMsg]);
+
+  async function submitTimeLog(e) {
+    e.preventDefault();
+    if (!timeLogForm.date || !timeLogForm.timeIn || !timeLogForm.timeOut) {
+      setTimeLogMsg("Date, time-in and time-out are required."); return;
+    }
+    // Enforce 48-hour window
+    const entryDate = new Date(timeLogForm.date + "T00:00:00");
+    const cutoff = new Date(Date.now() - 48 * 3600e3);
+    if (entryDate < cutoff) { setTimeLogMsg("Date must be within the last 48 hours."); return; }
+    setTimeLogSubmitting(true); setTimeLogMsg("");
+    try {
+      const inTime = timeLogForm.date + "T" + timeLogForm.timeIn + ":00";
+      const outTime = timeLogForm.date + "T" + timeLogForm.timeOut + ":00";
+      const inMin = timeLogForm.timeIn.split(":").reduce((h, m) => h * 60 + parseInt(m), 0);
+      const outMin = timeLogForm.timeOut.split(":").reduce((h, m) => h * 60 + parseInt(m), 0);
+      const actualHours = Math.max(0, Math.round((outMin - inMin) / 60 * 100) / 100);
+      const { error } = await supabase.from("attendance").insert({
+        employee_code: session.employee_code,
+        work_date: timeLogForm.date,
+        check_in: inTime, check_out: outTime,
+        actual_hours: actualHours,
+        attendance_status: "Pending",
+        is_manual_entry: true,
+        manual_entry_by: session.employee_code,
+        manual_entry_status: "Pending",
+        created_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      await supabase.from("notifications").insert({
+        recipient_role: "HR", type: "manual_time_entry",
+        title: "Manual Time Entry Submitted",
+        message: `${session.name} submitted time entry for ${timeLogForm.date}: ${timeLogForm.timeIn} – ${timeLogForm.timeOut}. ${timeLogForm.location ? "Location: " + timeLogForm.location : ""}`,
+        is_read: false, created_at: new Date().toISOString(),
+      }).then(() => {});
+      setTimeLogMsg("Time entry submitted. HR will review and approve.");
+      setTimeLogForm(BLANK_TIME_LOG);
+    } catch (ex) {
+      setTimeLogMsg(`Error: ${ex.message}`);
+    } finally {
+      setTimeLogSubmitting(false);
+    }
+  }
+
+  const isFieldEmployee = profile?.is_field_employee;
   const isSupervisor = profile?.is_supervisor || profile?.is_manager;
-  const TABS = isSupervisor
-    ? [...BASE_TABS, { id: "myteam", label: "My Team", icon: "👥" }]
-    : BASE_TABS;
+  const TABS = [
+    ...BASE_TABS,
+    ...(isFieldEmployee ? [{ id: "logtime", label: "Log My Time", icon: "📍" }] : []),
+    ...(isSupervisor ? [{ id: "myteam", label: "My Team", icon: "👥" }] : []),
+  ];
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -691,6 +754,91 @@ export default function EmployeeSelfService() {
                             <td className="px-4 py-3">
                               <SBadge tone={["Cleared", "Paid", "Completed"].includes(l.status) ? "green" : "yellow"}>{l.status || "Active"}</SBadge>
                             </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* ───── TAB: Log My Time (Field Employees only) ───── */}
+            {tab === "logtime" && isFieldEmployee && (
+              <div className="space-y-4">
+                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
+                  <h2 className="font-bold text-slate-800 mb-1">Log My Time</h2>
+                  <p className="text-xs text-slate-400 mb-4">Submit your daily work hours. Entries within the last 48 hours are accepted. HR will review and approve.</p>
+                  {timeLogMsg && (
+                    <div className={`mb-4 p-3 rounded-xl text-sm ${timeLogMsg.startsWith("Error") || timeLogMsg.includes("required") || timeLogMsg.includes("hours") ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>
+                      {timeLogMsg}
+                    </div>
+                  )}
+                  <form onSubmit={submitTimeLog} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-xs text-slate-500 mb-1">Date *</p>
+                      <input type="date"
+                        min={new Date(Date.now() - 48 * 3600e3).toISOString().slice(0, 10)}
+                        max={new Date().toISOString().slice(0, 10)}
+                        value={timeLogForm.date}
+                        onChange={e => setTimeLogForm(f => ({ ...f, date: e.target.value }))} required
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+                    </div>
+                    <div />
+                    <div>
+                      <p className="text-xs text-slate-500 mb-1">Time In *</p>
+                      <input type="time" value={timeLogForm.timeIn} onChange={e => setTimeLogForm(f => ({ ...f, timeIn: e.target.value }))} required
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 mb-1">Time Out *</p>
+                      <input type="time" value={timeLogForm.timeOut} onChange={e => setTimeLogForm(f => ({ ...f, timeOut: e.target.value }))} required
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 mb-1">Location / Site</p>
+                      <input value={timeLogForm.location} onChange={e => setTimeLogForm(f => ({ ...f, location: e.target.value }))}
+                        placeholder="e.g. Client site, warehouse..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500 mb-1">Remarks</p>
+                      <input value={timeLogForm.remarks} onChange={e => setTimeLogForm(f => ({ ...f, remarks: e.target.value }))}
+                        placeholder="Optional notes..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <button type="submit" disabled={timeLogSubmitting}
+                        className="px-6 py-2.5 bg-slate-950 text-white rounded-xl text-sm font-medium hover:bg-slate-800 disabled:opacity-50 transition">
+                        {timeLogSubmitting ? "Submitting…" : "Submit Time Entry"}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+                  <div className="px-5 pt-4 pb-2">
+                    <h2 className="font-bold text-slate-800">My Submitted Entries</h2>
+                    <p className="text-xs text-slate-400 mt-0.5">{myTimeEntries.length} entries</p>
+                  </div>
+                  <table className="w-full min-w-[600px] text-sm">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>{["Date","Time In","Time Out","Hours","Status","Approved By"].map(h => (
+                        <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {myTimeEntries.length === 0
+                        ? <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No manual time entries submitted yet.</td></tr>
+                        : myTimeEntries.map((r, i) => (
+                          <tr key={i}>
+                            <td className="px-4 py-3 font-medium">{r.work_date}</td>
+                            <td className="px-4 py-3">{r.check_in ? String(r.check_in).slice(11, 16) : "—"}</td>
+                            <td className="px-4 py-3">{r.check_out ? String(r.check_out).slice(11, 16) : "—"}</td>
+                            <td className="px-4 py-3">{r.actual_hours ?? "—"}</td>
+                            <td className="px-4 py-3">
+                              <SBadge tone={r.manual_entry_status === "Approved" ? "green" : r.manual_entry_status === "Rejected" ? "red" : "yellow"}>
+                                {r.manual_entry_status || "Pending"}
+                              </SBadge>
+                            </td>
+                            <td className="px-4 py-3 text-slate-400">{r.manual_entry_approved_by || "—"}</td>
                           </tr>
                         ))}
                     </tbody>

@@ -3,14 +3,16 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 
 const POLICY_DEFAULTS = [
-  { key: "grace_minutes", value: "15", description: "Grace period before marking Late (minutes)" },
-  { key: "half_day_hours", value: "4", description: "Hours below which attendance counts as Half Day" },
-  { key: "late_per_deduction_cycle", value: "3", description: "Number of late marks that trigger 1 salary deduction day" },
-  { key: "deduction_days_per_breach", value: "1", description: "Salary days deducted per late breach" },
-  { key: "half_day_salary_factor", value: "0.5", description: "Salary fraction for half-day attendance (0.5 = 50%)" },
-  { key: "eobi_employer_rate", value: "5", description: "EOBI employer contribution as % of minimum wage" },
-  { key: "eobi_employee_rate", value: "1", description: "EOBI employee deduction as % of minimum wage" },
-  { key: "overtime_multiplier", value: "1.5", description: "Overtime pay multiplier (1.5 = 150% of hourly rate)" },
+  { key: "grace_minutes",               value: "15",  description: "Grace period before marking Late (minutes)" },
+  { key: "half_day_hours",              value: "4",   description: "Hours below which attendance counts as Half Day" },
+  { key: "late_per_deduction_cycle",    value: "3",   description: "Number of late marks that trigger 1 salary deduction day" },
+  { key: "deduction_days_per_breach",   value: "1",   description: "Salary days deducted per late breach" },
+  { key: "half_day_salary_factor",      value: "0.5", description: "Salary fraction for half-day attendance (0.5 = 50%)" },
+  { key: "eobi_employer_rate",          value: "5",   description: "EOBI employer contribution as % of minimum wage" },
+  { key: "eobi_employee_rate",          value: "1",   description: "EOBI employee deduction as % of minimum wage" },
+  { key: "overtime_multiplier",         value: "1.5", description: "Overtime pay multiplier (1.5 = 150% of hourly rate)" },
+  { key: "friday_hours_management",     value: "6.5", description: "Friday required hours for Management staff (hours)" },
+  { key: "friday_hours_non_management", value: "9",   description: "Friday required hours for Non-Management / Floor Management staff (hours)" },
 ];
 
 export default function PolicySettings() {
