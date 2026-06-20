@@ -5,7 +5,6 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import LeaveLiability from "./LeaveLiability.jsx";
 import { LEAVE_QUOTA } from "../config/staffPolicies.js";
 
-// Annual leave is the only quota-tracked type; Casual and Sick removed per spec
 const LEAVE_TYPES = ["Annual", "Half Day", "Emergency", "Maternity", "Paternity", "Unpaid"];
 
 function statusBadge(s) {
@@ -52,7 +51,6 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-// Calculate earned leave for current month (proportional)
 function calcEarned(staffLevel, joiningDate) {
   const quota = LEAVE_QUOTA[staffLevel] || LEAVE_QUOTA["Non-Management"];
   const now = new Date();
@@ -62,6 +60,12 @@ function calcEarned(staffLevel, joiningDate) {
     : monthsElapsed;
   const months = Math.min(monthsElapsed, joiningMonths);
   return Math.round((quota / 12) * months * 10) / 10;
+}
+
+function previewRowColor(status) {
+  if (status.startsWith("error")) return "bg-red-50 text-red-700";
+  if (status.startsWith("warning")) return "bg-yellow-50 text-yellow-700";
+  return "text-slate-600";
 }
 
 export default function LeaveManagement({ role }) {
@@ -81,14 +85,18 @@ export default function LeaveManagement({ role }) {
 
   const [historyFilter, setHistoryFilter] = useState({ type: "All", branch: "All", dept: "", from: "", to: "" });
   const [calMonth, setCalMonth] = useState(() => new Date().toISOString().slice(0, 7));
-
   const [rejectId, setRejectId] = useState(null);
   const [rejectNote, setRejectNote] = useState("");
 
   // Import state
   const [importFile, setImportFile] = useState(null);
+  const [importPreview, setImportPreview] = useState(null);
   const [importSummary, setImportSummary] = useState(null);
   const [importing, setImporting] = useState(false);
+
+  // Manual edit state
+  const [editBalance, setEditBalance] = useState(null);
+  const [editForm, setEditForm] = useState({ opening: 0, used: 0, halfLeaves: 0, effectiveFrom: "" });
 
   useEffect(() => { loadAll(); }, []);
 
@@ -152,6 +160,122 @@ export default function LeaveManagement({ role }) {
     return "Approved";
   }
 
+  // ─── Import Template ──────────────────────────────────────────────────────
+  function downloadImportTemplate() {
+    const instructions =
+      "INSTRUCTIONS: Fill Opening Balance = total annual entitlement. " +
+      "Already Used = leaves taken before importing into system. " +
+      "Remaining Balance will be auto-calculated (Opening - Already Used - Half Leaves×0.5). " +
+      "Do not leave Employee Code blank.";
+    const aoa = [
+      [instructions],
+      ["Employee Code", "Employee Name", "Opening Balance", "Already Used", "Remaining Balance", "Half Leaves Used", "Effective From"],
+      ["EMP001", "Sample Employee", 14, 0, 14, 0, "2026-01-01"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
+    ws["!cols"] = [{ wch: 15 }, { wch: 25 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 15 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Leave Balances");
+    XLSX.writeFile(wb, "leave_balance_import_template.xlsx");
+  }
+
+  async function handlePreview() {
+    if (!importFile) return setErr("Select an Excel file first.");
+    setErr(""); setImportSummary(null); setImportPreview(null);
+    try {
+      const data = await importFile.arrayBuffer();
+      const wb = XLSX.read(data);
+      const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+
+      // Find the header row (first row where cell 0 equals "Employee Code")
+      const headerIdx = rawRows.findIndex(r => String(r[0] || "").trim() === "Employee Code");
+      if (headerIdx === -1) throw new Error("Header row not found. Ensure you're using the downloaded template.");
+      const headers = rawRows[headerIdx];
+      const dataRows = rawRows.slice(headerIdx + 1).filter(r => r.some(c => c !== ""));
+
+      const preview = dataRows.map(row => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[String(h)] = row[i] ?? ""; });
+        const code = String(obj["Employee Code"] || "").trim();
+        const emp = employees.find(e => e.employee_code === code);
+        const opening = Number(obj["Opening Balance"] || 0);
+        const used = Number(obj["Already Used"] || 0);
+        const halfLeaves = Number(obj["Half Leaves Used"] || 0);
+        const remaining = opening - used - halfLeaves * 0.5;
+        const effectiveFrom = String(obj["Effective From"] || "").trim();
+        const earned = calcEarned(emp?.staff_level, emp?.joining_date);
+        let status = "ok";
+        if (!code) status = "error: missing employee code";
+        else if (!emp) status = `error: ${code} not found`;
+        else if (remaining < 0) status = "warning: negative balance";
+        return { code, empName: String(obj["Employee Name"] || "").trim(), emp, opening, used, halfLeaves, remaining, effectiveFrom, earned, status };
+      });
+      setImportPreview(preview);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  async function handleConfirm() {
+    if (!importPreview) return;
+    setImporting(true); setErr("");
+    let updated = 0, failed = 0;
+    const errors = [];
+    for (const row of importPreview) {
+      if (!row.emp) { failed++; errors.push(`${row.code}: employee not found`); continue; }
+      const { error } = await supabase.from("leaves").upsert({
+        employee_id: row.code, employee_code: row.code,
+        opening_balance: row.opening, used: row.used, half_leaves: row.halfLeaves,
+        remaining: row.remaining, remaining_balance: row.remaining, earned: row.earned,
+        effective_from: row.effectiveFrom || null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "employee_id" });
+      if (error) { failed++; errors.push(`${row.code}: ${error.message}`); }
+      else updated++;
+    }
+    setImportSummary({ total: importPreview.length, updated, failed, errors });
+    setImportPreview(null);
+    setImportFile(null);
+    setImporting(false);
+    loadAll();
+  }
+
+  // ─── Manual Edit ─────────────────────────────────────────────────────────
+  function openEdit(emp) {
+    if (role !== "HR" && role !== "Master") return;
+    const bal = balances.find(b => b.employee_code === emp.employee_code || b.employee_id === emp.employee_code);
+    setEditForm({
+      opening: bal?.opening_balance ?? 0,
+      used: bal?.used ?? 0,
+      halfLeaves: bal?.half_leaves ?? 0,
+      effectiveFrom: bal?.effective_from ? String(bal.effective_from).slice(0, 10) : "",
+    });
+    setEditBalance(emp);
+  }
+
+  async function saveBalanceEdit() {
+    if (!editBalance) return;
+    setErr("");
+    const opening = Number(editForm.opening);
+    const used = Number(editForm.used);
+    const halfLeaves = Number(editForm.halfLeaves);
+    const remaining = opening - used - halfLeaves * 0.5;
+    const earned = calcEarned(editBalance.staff_level, editBalance.joining_date);
+    const { error } = await supabase.from("leaves").upsert({
+      employee_id: editBalance.employee_code, employee_code: editBalance.employee_code,
+      opening_balance: opening, used, half_leaves: halfLeaves,
+      remaining, remaining_balance: remaining, earned,
+      effective_from: editForm.effectiveFrom || null,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "employee_id" });
+    if (error) return setErr(error.message);
+    setMsg(`Leave balance updated for ${editBalance.full_name}.`);
+    setEditBalance(null);
+    loadAll();
+  }
+
+  // ─── Derived data ─────────────────────────────────────────────────────────
   const PENDING_STATUSES = ["Pending", "Pending Supervisor", "Pending HR"];
   const pending = requests.filter(r => PENDING_STATUSES.includes(r.status));
 
@@ -167,7 +291,6 @@ export default function LeaveManagement({ role }) {
 
   const branches = useMemo(() => ["All", ...new Set(employees.map(e => e.branch).filter(Boolean))], [employees]);
 
-  // Enriched balance rows for the Balances tab
   const enrichedBalances = useMemo(() => employees.map(emp => {
     const approvedAnnual = requests.filter(r =>
       r.employee_code === emp.employee_code && r.status === "Approved" && r.leave_type === "Annual"
@@ -181,7 +304,8 @@ export default function LeaveManagement({ role }) {
     const used = approvedAnnual;
     const halfUsed = approvedHalfDay;
     const remaining = (opening + earnedToDate) - used - (halfUsed * 0.5);
-    return { ...emp, opening, earnedToDate, used, halfUsed, remaining };
+    const lastUpdated = bal?.updated_at ? new Date(bal.updated_at).toLocaleDateString() : "—";
+    return { ...emp, opening, earnedToDate, used, halfUsed, remaining, lastUpdated };
   }), [employees, requests, balances]);
 
   const calLeaves = useMemo(() =>
@@ -200,49 +324,8 @@ export default function LeaveManagement({ role }) {
     return calLeaves.filter(r => r.from_date <= d && r.to_date >= d);
   }
 
-  // Import Leave Balances
-  function downloadImportTemplate() {
-    const ws = XLSX.utils.json_to_sheet([
-      { "Employee Code": "", "Employee Name": "", "Opening Balance": "", "Already Used": "", "Remaining Balance": "" },
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Leave Balances");
-    XLSX.writeFile(wb, "leave_balance_import_template.xlsx");
-  }
-
-  async function handleLeaveImport() {
-    if (!importFile) return setErr("Select an Excel file first.");
-    setImporting(true); setErr(""); setImportSummary(null);
-    try {
-      const data = await importFile.arrayBuffer();
-      const wb = XLSX.read(data);
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-      let updated = 0, failed = 0;
-      const errors = [];
-      for (const row of rows) {
-        const code = String(row["Employee Code"] || "").trim();
-        if (!code) { failed++; errors.push("Missing employee code in row."); continue; }
-        const emp = employees.find(e => e.employee_code === code);
-        if (!emp) { failed++; errors.push(`${code}: employee not found.`); continue; }
-        const opening = Number(row["Opening Balance"] || 0);
-        const used = Number(row["Already Used"] || 0);
-        const remaining = Number(row["Remaining Balance"] || opening - used);
-        const { error } = await supabase.from("leaves").upsert({
-          employee_id: code, employee_code: code,
-          opening_balance: opening, used, remaining, remaining_balance: remaining,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "employee_id" });
-        if (error) { failed++; errors.push(`${code}: ${error.message}`); }
-        else updated++;
-      }
-      setImportSummary({ updated, failed, errors });
-      loadAll();
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setImporting(false);
-    }
-  }
+  // Computed remaining for edit modal preview
+  const editRemaining = Number(editForm.opening) - Number(editForm.used) - Number(editForm.halfLeaves) * 0.5;
 
   return (
     <div>
@@ -263,6 +346,7 @@ export default function LeaveManagement({ role }) {
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
+      {/* ── Apply Tab ── */}
       {tab === "apply" && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
           <h2 className="font-bold text-slate-800 mb-4">New Leave Application</h2>
@@ -290,6 +374,7 @@ export default function LeaveManagement({ role }) {
         </div>
       )}
 
+      {/* ── Queue Tab ── */}
       {tab === "queue" && (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2 flex items-center justify-between">
@@ -341,58 +426,119 @@ export default function LeaveManagement({ role }) {
         </div>
       )}
 
+      {/* ── Balances Tab ── */}
       {tab === "balances" && (
         <div>
           {/* Import panel */}
           <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <h3 className="font-semibold text-slate-800 text-sm">Import Leave Balances</h3>
+            <h3 className="font-semibold text-slate-800 text-sm mb-3">Import Leave Balances</h3>
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-3">
+              <strong>Instructions:</strong> Fill Opening Balance = total annual entitlement. Already Used = leaves taken before importing into system.
+              Remaining Balance is auto-calculated: Opening − Already Used − (Half Leaves × 0.5). Do not leave Employee Code blank.
+            </div>
+            <div className="flex flex-wrap items-center gap-3 mb-3">
               <Button variant="outline" onClick={downloadImportTemplate} className="rounded-xl text-xs py-1.5 px-3">
                 Download Template
               </Button>
               <input type="file" accept=".xlsx,.xls,.csv" id="leave-import-file"
-                onChange={e => setImportFile(e.target.files?.[0] || null)}
+                onChange={e => { setImportFile(e.target.files?.[0] || null); setImportPreview(null); setImportSummary(null); }}
                 className="hidden" />
               <label htmlFor="leave-import-file" className="cursor-pointer inline-flex items-center gap-2 px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 hover:bg-slate-50">
                 {importFile ? importFile.name : "Choose File"}
               </label>
-              {importFile && (
-                <Button onClick={handleLeaveImport} disabled={importing} className="rounded-xl text-xs py-1.5 px-3">
-                  {importing ? "Importing..." : "Upload & Import"}
+              {importFile && !importPreview && (
+                <Button onClick={handlePreview} className="rounded-xl text-xs py-1.5 px-3">
+                  Preview Import
                 </Button>
               )}
+              {importFile && (
+                <button onClick={() => { setImportFile(null); setImportPreview(null); setImportSummary(null); }}
+                  className="text-xs text-slate-400 hover:text-slate-600">Clear</button>
+              )}
             </div>
+
+            {/* Preview table */}
+            {importPreview && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-slate-700">{importPreview.length} rows parsed — review before confirming</p>
+                  <div className="flex gap-2">
+                    <Button onClick={handleConfirm} disabled={importing || importPreview.every(r => r.status.startsWith("error"))} className="rounded-xl text-xs py-1.5 px-3">
+                      {importing ? "Importing..." : "Confirm Import"}
+                    </Button>
+                    <Button variant="outline" onClick={() => setImportPreview(null)} className="rounded-xl text-xs py-1.5 px-3">Cancel</Button>
+                  </div>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-xs min-w-[700px]">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>
+                        {["Code", "Name", "Opening", "Used", "Half Leaves", "Remaining", "Effective From", "Status"].map(h => (
+                          <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {importPreview.map((row, i) => (
+                        <tr key={i} className={row.status.startsWith("error") ? "bg-red-50" : row.status.startsWith("warning") ? "bg-yellow-50" : ""}>
+                          <td className="px-3 py-2 font-mono">{row.code || "—"}</td>
+                          <td className="px-3 py-2">{row.emp?.full_name || row.empName || "—"}</td>
+                          <td className="px-3 py-2 text-center">{row.opening}</td>
+                          <td className="px-3 py-2 text-center">{row.used}</td>
+                          <td className="px-3 py-2 text-center">{row.halfLeaves}</td>
+                          <td className={`px-3 py-2 text-center font-semibold ${row.remaining < 0 ? "text-red-600" : "text-emerald-600"}`}>{row.remaining}</td>
+                          <td className="px-3 py-2">{row.effectiveFrom || "—"}</td>
+                          <td className={`px-3 py-2 font-medium ${row.status.startsWith("error") ? "text-red-600" : row.status.startsWith("warning") ? "text-yellow-700" : "text-emerald-600"}`}>
+                            {row.status}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Post-import summary */}
             {importSummary && (
               <div className="mt-3 p-3 bg-slate-50 rounded-xl text-xs text-slate-700">
-                <span className="text-emerald-600 font-semibold">{importSummary.updated} updated</span>
+                <span className="font-semibold">Total: {importSummary.total}</span>
+                <span className="text-emerald-600 font-semibold ml-4">{importSummary.updated} updated</span>
                 {importSummary.failed > 0 && <span className="text-red-500 font-semibold ml-3">{importSummary.failed} failed</span>}
                 {importSummary.errors.length > 0 && (
-                  <div className="mt-2 space-y-0.5 text-red-500">{importSummary.errors.slice(0, 5).map((e, i) => <div key={i}>{e}</div>)}</div>
+                  <div className="mt-2 space-y-0.5 text-red-500">{importSummary.errors.slice(0, 8).map((e, i) => <div key={i}>{e}</div>)}</div>
                 )}
               </div>
             )}
           </div>
 
+          {/* Balances table */}
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <div className="px-5 pt-4 pb-2">
               <h2 className="font-bold text-slate-800">Annual Leave Balances</h2>
-              <p className="text-xs text-slate-400">Quota: Non-Mgmt/Floor Mgmt = 14 days/yr · Management = 24 days/yr · Earned proportionally per month</p>
+              <p className="text-xs text-slate-400">
+                Quota: Non-Mgmt/Floor Mgmt = 14 days/yr · Management = 24 days/yr · Earned proportionally per month
+                {(role === "HR" || role === "Master") && " · Click a row to edit balance"}
+              </p>
             </div>
-            <table className="w-full min-w-[860px] text-sm">
+            <table className="w-full min-w-[1000px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
-                  {["Code", "Name", "Branch", "Department", "Opening", "Earned to Date", "Used (Annual)", "Half Leaves Used", "Remaining"].map(h => (
+                  {["Code", "Name", "Branch", "Department", "Opening Balance", "Earned to Date", "Used", "Half Leaves", "Remaining", "Last Updated"].map(h => (
                     <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {enrichedBalances.length === 0
-                  ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No employee data found.</td></tr>
+                  ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No employee data found.</td></tr>
                   : enrichedBalances.map((e, i) => {
                     const isLow = e.remaining <= 0;
+                    const canEdit = role === "HR" || role === "Master";
                     return (
-                      <tr key={i} className={isLow ? "bg-red-50/40" : ""}>
+                      <tr key={i}
+                        onClick={() => canEdit && openEdit(e)}
+                        className={`${isLow ? "bg-red-50/40" : ""} ${canEdit ? "cursor-pointer hover:bg-slate-50" : ""}`}>
                         <td className="px-4 py-3 font-mono text-xs text-slate-500">{e.employee_code}</td>
                         <td className="px-4 py-3 font-medium">{e.full_name}</td>
                         <td className="px-4 py-3 text-slate-500">{e.branch}</td>
@@ -404,6 +550,7 @@ export default function LeaveManagement({ role }) {
                         <td className="px-4 py-3 text-center">
                           <Badge tone={isLow ? "red" : "green"}>{e.remaining}</Badge>
                         </td>
+                        <td className="px-4 py-3 text-xs text-slate-400">{e.lastUpdated}</td>
                       </tr>
                     );
                   })}
@@ -413,6 +560,7 @@ export default function LeaveManagement({ role }) {
         </div>
       )}
 
+      {/* ── History Tab ── */}
       {tab === "history" && (
         <div>
           <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
@@ -466,6 +614,7 @@ export default function LeaveManagement({ role }) {
 
       {tab === "liability" && <LeaveLiability />}
 
+      {/* ── Calendar Tab ── */}
       {tab === "calendar" && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
@@ -493,6 +642,50 @@ export default function LeaveManagement({ role }) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Manual Edit Modal ── */}
+      {editBalance && (
+        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md">
+            <h3 className="font-bold text-slate-800 mb-0.5">Edit Leave Balance</h3>
+            <p className="text-sm text-slate-500 mb-4">{editBalance.employee_code} — {editBalance.full_name}</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Opening Balance (total annual entitlement)</label>
+                <input type="number" min="0" value={editForm.opening}
+                  onChange={e => setEditForm(v => ({ ...v, opening: e.target.value }))}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Already Used (full days taken before import)</label>
+                <input type="number" min="0" value={editForm.used}
+                  onChange={e => setEditForm(v => ({ ...v, used: e.target.value }))}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Half Leaves Used</label>
+                <input type="number" min="0" value={editForm.halfLeaves}
+                  onChange={e => setEditForm(v => ({ ...v, halfLeaves: e.target.value }))}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Effective From</label>
+                <input type="date" value={editForm.effectiveFrom}
+                  onChange={e => setEditForm(v => ({ ...v, effectiveFrom: e.target.value }))}
+                  className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+              </div>
+              <div className={`p-3 rounded-xl text-sm flex justify-between ${editRemaining < 0 ? "bg-red-50 text-red-700" : "bg-slate-50 text-slate-700"}`}>
+                <span>Remaining Balance</span>
+                <strong>{editRemaining} days</strong>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <Button onClick={saveBalanceEdit} className="rounded-2xl">Save Changes</Button>
+              <Button variant="outline" onClick={() => setEditBalance(null)} className="rounded-2xl">Cancel</Button>
+            </div>
           </div>
         </div>
       )}

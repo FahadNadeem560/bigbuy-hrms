@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-06-20-v6";
+const MIGRATION_VERSION = "2026-06-20-v7";
 let ran = false;
 
 export async function runMigrations() {
@@ -134,6 +134,10 @@ async function applyIncrementalMigrations() {
     `INSERT INTO hrms_policy_settings (key, value, description) VALUES ('hourly_rate_divisor_non_management', '10.5', 'Hourly rate divisor for Non-Management staff') ON CONFLICT (key) DO NOTHING`,
     `INSERT INTO hrms_policy_settings (key, value, description) VALUES ('hourly_rate_divisor_floor_management', '10.5', 'Hourly rate divisor for Floor Management staff') ON CONFLICT (key) DO NOTHING`,
     `INSERT INTO hrms_policy_settings (key, value, description) VALUES ('hourly_rate_divisor_management', '9', 'Hourly rate divisor for Management staff') ON CONFLICT (key) DO NOTHING`,
+    // v4: leaves extra columns for opening balance import
+    `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS half_leaves NUMERIC DEFAULT 0`,
+    `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS effective_from DATE`,
+    `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS earned NUMERIC DEFAULT 0`,
   ];
 
   for (const sql of stmts) {
