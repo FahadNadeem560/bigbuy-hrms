@@ -62,6 +62,13 @@ function calcEarned(staffLevel, joiningDate) {
   return Math.round((quota / 12) * months * 10) / 10;
 }
 
+function excelDateToJS(serial) {
+  if (!serial) return null;
+  if (typeof serial === "string") return serial.trim() || null;
+  const date = new Date((serial - 25569) * 86400 * 1000);
+  return date.toISOString().split("T")[0];
+}
+
 function previewRowColor(status) {
   if (status.startsWith("error")) return "bg-red-50 text-red-700";
   if (status.startsWith("warning")) return "bg-yellow-50 text-yellow-700";
@@ -203,7 +210,7 @@ export default function LeaveManagement({ role }) {
         const used = Number(obj["Already Used"] || 0);
         const halfLeaves = Number(obj["Half Leaves Used"] || 0);
         const remaining = opening - used - halfLeaves * 0.5;
-        const effectiveFrom = String(obj["Effective From"] || "").trim();
+        const effectiveFrom = excelDateToJS(obj["Effective From"]);
         const earned = calcEarned(emp?.staff_level, emp?.joining_date);
         let status = "ok";
         if (!code) status = "error: missing employee code";
