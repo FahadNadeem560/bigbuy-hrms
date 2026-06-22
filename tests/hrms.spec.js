@@ -213,10 +213,10 @@ test('TEST 05a — Attendance page loads with all tabs', async ({ page }) => {
   await assertNoErrors(page);
 
   const tabs = [
-    ['Timesheet',     '05b-timesheet'],
-    ['Adjustments',   '05c-adjustments'],
-    ['Missing Punch', '05d-missing-punch'],
-    ['Alerts',        '05e-alerts'],
+    ['Timesheet',       '05b-timesheet'],
+    ['Adjustments',     '05c-adjustments'],
+    ['Missing Punches', '05d-missing-punches'],
+    ['Alerts',          '05e-alerts'],
   ];
 
   for (const [label, screenshot] of tabs) {
@@ -258,21 +258,17 @@ test('TEST 06 — Leave Management all tabs load', async ({ page }) => {
   const applyVisible = await applyHeading.isVisible().catch(() => false);
   console.log(applyVisible ? '  ✓ Apply Leave form visible' : '  ℹ Apply Leave heading not found');
 
-  // IMPORTANT: scope all tab clicks to <main> — the sidebar also has an "Approval Queue"
-  // button that would navigate AWAY from the Leave page if clicked accidentally.
-  const mainContent = page.locator('main');
-
+  // Use data-testid attributes for precise tab targeting (avoids sidebar "Approval Queue" conflict)
   const tabs = [
-    ['Approval Queue', '06b-leave-queue'],
-    ['Balances',       '06c-leave-balances'],
-    ['History',        '06d-leave-history'],
-    ['Leave Liability','06e-leave-liability'],
-    ['Calendar',       '06f-leave-calendar'],
+    ['leave-approval-queue-tab', 'Approval Queue', '06b-leave-queue'],
+    ['leave-balances-tab',       'Balances',        '06c-leave-balances'],
+    ['leave-history-tab',        'History',         '06d-leave-history'],
+    ['leave-liability-tab',      'Leave Liability', '06e-leave-liability'],
+    ['leave-calendar-tab',       'Calendar',        '06f-leave-calendar'],
   ];
 
-  for (const [label, screenshot] of tabs) {
-    // Use regex so "Approval Queue (0)" is matched by "Approval Queue"
-    const btn = mainContent.locator('button').filter({ hasText: new RegExp(label) }).first();
+  for (const [testId, label, screenshot] of tabs) {
+    const btn = page.getByTestId(testId);
     const exists = await btn.isVisible({ timeout: 4000 }).catch(() => false);
     if (exists) {
       await btn.click();
@@ -281,12 +277,12 @@ test('TEST 06 — Leave Management all tabs load', async ({ page }) => {
       await assertNoErrors(page);
       console.log(`  ✓ Leave tab "${label}" loaded`);
     } else {
-      console.warn(`  ⚠ Leave tab "${label}" not visible`);
+      console.warn(`  ⚠ Leave tab "${label}" (${testId}) not visible`);
     }
   }
 
   // Return to Balances tab and check for Download/Template button
-  const balancesBtn = mainContent.locator('button').filter({ hasText: 'Balances' }).first();
+  const balancesBtn = page.getByTestId('leave-balances-tab');
   if (await balancesBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
     await balancesBtn.click();
     await settle(page, 1000);
@@ -560,28 +556,30 @@ test('TEST 14 — AI Assistant loads and accepts input', async ({ page }) => {
   await expect(page.locator('main')).toBeVisible();
   await assertNoErrors(page);
 
-  // Chat input
-  const chatInput = page.locator('input[type="text"], textarea').first();
-  const inputVisible = await chatInput.isVisible().catch(() => false);
+  // Chat input — targeted via data-testid="ai-chat-input"
+  const chatInput = page.getByTestId('ai-chat-input');
+  const inputVisible = await chatInput.isVisible({ timeout: 5000 }).catch(() => false);
 
   if (inputVisible) {
     console.log('  ✓ Chat input found');
+    await expect(chatInput).toHaveAttribute('placeholder', 'Ask anything about your HR data...');
     await chatInput.fill('How many employees are there?');
     await page.screenshot({ path: 'tests/results/screenshots/14b-ai-typed.png' });
 
-    const sendBtn = page.locator('button').filter({ hasText: /Send|Ask|Submit/i }).first();
+    const sendBtn = page.getByTestId('ai-chat-send');
     if (await sendBtn.isVisible().catch(() => false)) {
       await sendBtn.click();
+      console.log('  ✓ Send button clicked');
     } else {
       await chatInput.press('Enter');
     }
 
-    // AI responses may take time
-    await settle(page, 8000);
+    // AI responses may take time; API key may not be set in CI — just verify no crash
+    await settle(page, 5000);
     await page.screenshot({ path: 'tests/results/screenshots/14c-ai-response.png' });
     console.log('  ✓ Query submitted to AI Assistant');
   } else {
-    console.warn('  ⚠ Chat input not found — AI interface structure may differ');
+    console.warn('  ⚠ Chat input not found — check AIAssistant.jsx data-testid');
   }
 });
 

@@ -197,13 +197,14 @@ Answer HR questions concisely. Be factual. If you don't have enough data, say so
         {/* Input */}
         <div className="border-t border-slate-100 p-4 flex gap-2">
           <input
+            data-testid="ai-chat-input"
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder="Ask an HR question..."
+            placeholder="Ask anything about your HR data..."
             disabled={loading}
             className="flex-1 px-4 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300" />
-          <Button onClick={send} disabled={loading || !input.trim()} className="rounded-2xl">
+          <Button data-testid="ai-chat-send" onClick={send} disabled={loading || !input.trim()} className="rounded-2xl">
             {loading ? "..." : "Send"}
           </Button>
         </div>

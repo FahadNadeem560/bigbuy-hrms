@@ -12,7 +12,7 @@ const TABS = [
   ["records",    "Records"],
   ["timesheet",  "Timesheet"],
   ["adjustments","Adjustments"],
-  ["missing",    "Missing Punch"],
+  ["missing",    "Missing Punches"],
   ["alerts",     "Alerts"],
 ];
 

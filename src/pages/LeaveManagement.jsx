@@ -332,14 +332,14 @@ export default function LeaveManagement({ role }) {
       <PageTitle title="Leave Management" subtitle="Apply, approve and track employee annual leave with quota management." />
       <div className="flex flex-wrap gap-2 mb-4">
         {[
-          ["apply", "Apply Leave"],
-          ["queue", `Approval Queue (${pending.length})`],
-          ["balances", "Balances"],
-          ["history", "History"],
-          ["calendar", "Calendar"],
-          ["liability", "Leave Liability"],
-        ].map(([k, l]) => (
-          <button key={k} onClick={() => setTab(k)}
+          ["apply",     "Apply Leave",                      "leave-apply-tab"],
+          ["queue",     `Approval Queue (${pending.length})`, "leave-approval-queue-tab"],
+          ["balances",  "Balances",                         "leave-balances-tab"],
+          ["history",   "History",                          "leave-history-tab"],
+          ["calendar",  "Calendar",                         "leave-calendar-tab"],
+          ["liability", "Leave Liability",                  "leave-liability-tab"],
+        ].map(([k, l, testId]) => (
+          <button key={k} onClick={() => setTab(k)} data-testid={testId}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{l}</button>
         ))}
       </div>
