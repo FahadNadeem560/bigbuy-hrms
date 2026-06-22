@@ -22,7 +22,7 @@ async function settle(page, ms = 1500) {
   try {
     await page.waitForLoadState('networkidle', { timeout: ms });
   } catch {
-    await page.waitForTimeout(ms);
+    try { await page.waitForTimeout(ms); } catch { /* page closed between tests — ignore */ }
   }
 }
 
@@ -117,21 +117,21 @@ test('TEST 03b — Add Employee form opens with expected fields', async ({ page 
   await navTo(page, 'Employees');
   await settle(page, 2000);
 
-  const addBtn = page.locator('button').filter({ hasText: /Add Employee|New Employee/i }).first();
-  await expect(addBtn).toBeVisible();
+  // Button is in <main> — scope locator there to avoid any sidebar conflicts
+  const addBtn = page.locator('main').getByRole('button', { name: /New Employee/i });
+  await expect(addBtn).toBeVisible({ timeout: 10000 });
   await addBtn.click();
-  await page.waitForTimeout(1000);
+
+  // Form renders after an async Supabase call to get the next employee ID — wait for it
+  const formHeading = page.locator('text=Add New Employee');
+  await expect(formHeading).toBeVisible({ timeout: 10000 });
   await page.screenshot({ path: 'tests/results/screenshots/03b-add-employee-form.png' });
 
-  // Form should have appeared — look for field labels or inputs
-  const formVisible = await page.locator('input, select').filter({ has: page.locator('[class]') }).first().isVisible().catch(() => false);
-  expect(formVisible, 'Employee form should have input fields').toBe(true);
-
-  // Check for key field labels (at least some should be present)
-  const labels = ['Name', 'Branch', 'Department', 'Designation', 'Phone', 'CNIC', 'Email'];
+  // Check for key field labels from Employees.jsx (Full Name *, Designation, Department, Branch, etc.)
+  const labels = ['Full Name', 'Designation', 'Department', 'Branch', 'CNIC', 'Email'];
   let foundLabels = 0;
   for (const lbl of labels) {
-    const found = await page.locator(`text=${lbl}`).first().isVisible().catch(() => false);
+    const found = await page.locator(`p:has-text("${lbl}"), label:has-text("${lbl}")`).first().isVisible().catch(() => false);
     if (found) {
       foundLabels++;
       console.log(`  ✓ Field label "${lbl}" found`);
@@ -139,22 +139,18 @@ test('TEST 03b — Add Employee form opens with expected fields', async ({ page 
   }
   expect(foundLabels, 'At least 3 field labels should be visible').toBeGreaterThanOrEqual(3);
 
-  // Try filling Name field
-  const nameInput = page.locator('input').filter({ hasAttribute: 'placeholder' }).first();
+  // Fill the Full Name input (placeholder="Full Name")
+  const nameInput = page.locator('input[placeholder="Full Name"]');
   if (await nameInput.isVisible().catch(() => false)) {
-    const placeholder = await nameInput.getAttribute('placeholder').catch(() => '');
-    if (placeholder?.toLowerCase().includes('name') || placeholder?.toLowerCase().includes('full')) {
-      await nameInput.fill('Test Employee Playwright');
-      console.log('  ✓ Name field filled');
-    }
+    await nameInput.fill('Test Employee Playwright');
+    console.log('  ✓ Full Name field filled');
   }
 
-  // Close form
-  const cancelBtn = page.locator('button').filter({ hasText: /Cancel|Close/i }).first();
-  if (await cancelBtn.isVisible().catch(() => false)) {
-    await cancelBtn.click();
-  } else {
-    await page.keyboard.press('Escape');
+  // Close form with the "Close" button (from EmployeeAdd component)
+  const closeBtn = page.locator('main').getByRole('button', { name: 'Close' }).first();
+  if (await closeBtn.isVisible().catch(() => false)) {
+    await closeBtn.click();
+    console.log('  ✓ Form closed');
   }
   await page.waitForTimeout(500);
 });
@@ -257,10 +253,14 @@ test('TEST 06 — Leave Management all tabs load', async ({ page }) => {
   await page.screenshot({ path: 'tests/results/screenshots/06a-leave-apply.png' });
   await assertNoErrors(page);
 
-  // Apply Leave should be default (check for "New Leave Application" heading)
+  // Apply Leave should be default
   const applyHeading = page.locator('text=New Leave Application').first();
   const applyVisible = await applyHeading.isVisible().catch(() => false);
   console.log(applyVisible ? '  ✓ Apply Leave form visible' : '  ℹ Apply Leave heading not found');
+
+  // IMPORTANT: scope all tab clicks to <main> — the sidebar also has an "Approval Queue"
+  // button that would navigate AWAY from the Leave page if clicked accidentally.
+  const mainContent = page.locator('main');
 
   const tabs = [
     ['Approval Queue', '06b-leave-queue'],
@@ -271,9 +271,9 @@ test('TEST 06 — Leave Management all tabs load', async ({ page }) => {
   ];
 
   for (const [label, screenshot] of tabs) {
-    // Approval Queue tab has dynamic count in label, use startsWith match
-    const btn = page.locator('button').filter({ hasText: new RegExp(label.replace('(', '\\(').replace(')', '\\)')) }).first();
-    const exists = await btn.isVisible({ timeout: 3000 }).catch(() => false);
+    // Use regex so "Approval Queue (0)" is matched by "Approval Queue"
+    const btn = mainContent.locator('button').filter({ hasText: new RegExp(label) }).first();
+    const exists = await btn.isVisible({ timeout: 4000 }).catch(() => false);
     if (exists) {
       await btn.click();
       await settle(page, 1500);
@@ -285,13 +285,16 @@ test('TEST 06 — Leave Management all tabs load', async ({ page }) => {
     }
   }
 
-  // Check for Download Template on Balances
-  await page.locator('button').filter({ hasText: 'Balances' }).first().click();
-  await settle(page, 1000);
-  const dlBtn = page.locator('button, a').filter({ hasText: /Download|Template|Export/i }).first();
-  console.log(await dlBtn.isVisible().catch(() => false)
-    ? '  ✓ Download/Template button found on Balances tab'
-    : '  ℹ No Download/Template button visible on Balances tab');
+  // Return to Balances tab and check for Download/Template button
+  const balancesBtn = mainContent.locator('button').filter({ hasText: 'Balances' }).first();
+  if (await balancesBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+    await balancesBtn.click();
+    await settle(page, 1000);
+    const dlBtn = page.locator('button, a').filter({ hasText: /Download|Template|Export/i }).first();
+    console.log(await dlBtn.isVisible().catch(() => false)
+      ? '  ✓ Download/Template button found on Balances tab'
+      : '  ℹ No Download/Template button visible on Balances tab');
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
