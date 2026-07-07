@@ -30,6 +30,8 @@ function Toggle({ value, onChange, tone = "blue" }) {
   );
 }
 
+const PAGE_SIZE = 50;
+
 export default function Attendance({ rows, role }) {
   const [mainTab, setMainTab] = useState("records");
   const [employeeSearch, setEmployeeSearch] = useState("");
@@ -38,6 +40,7 @@ export default function Attendance({ rows, role }) {
   const [dateTo, setDateTo] = useState("");
   const [localOverrides, setLocalOverrides] = useState({});
   const [notice, setNotice] = useState("");
+  const [page, setPage] = useState(1);
 
   const canToggle = role === "HR" || role === "Master";
 
@@ -49,10 +52,22 @@ export default function Attendance({ rows, role }) {
     return matchName && matchStatus && matchFrom && matchTo;
   }), [rows, employeeSearch, statusFilter, dateFrom, dateTo]);
 
+  const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+
+  const pagedRows = useMemo(() => {
+    const start = (safePage - 1) * PAGE_SIZE;
+    return filteredRows.slice(start, start + PAGE_SIZE);
+  }, [filteredRows, safePage]);
+
   const effectiveRows = useMemo(() =>
-    filteredRows.map(r => ({ ...r, ...(localOverrides[r.id] || {}) })),
-    [filteredRows, localOverrides]
+    pagedRows.map(r => ({ ...r, ...(localOverrides[r.id] || {}) })),
+    [pagedRows, localOverrides]
   );
+
+  function updateFilter(setter) {
+    return (value) => { setter(value); setPage(1); };
+  }
 
   async function toggleFlag(row, flag, currentValue) {
     if (!row.id || !canToggle) return;
@@ -116,10 +131,10 @@ export default function Attendance({ rows, role }) {
           {notice && <div className="mb-3 p-2 rounded-xl bg-blue-50 text-blue-700 text-sm">{notice}</div>}
 
           <div className="mb-4 grid grid-cols-1 md:grid-cols-4 gap-3 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-            <input value={employeeSearch} onChange={e => setEmployeeSearch(e.target.value)} placeholder="Search employee code" className="px-4 py-2 rounded-xl border border-slate-200" />
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200" />
-            <input type="date" value={dateTo}   onChange={e => setDateTo(e.target.value)}   className="px-4 py-2 rounded-xl border border-slate-200" />
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200">
+            <input value={employeeSearch} onChange={e => updateFilter(setEmployeeSearch)(e.target.value)} placeholder="Search employee code" className="px-4 py-2 rounded-xl border border-slate-200" />
+            <input type="date" value={dateFrom} onChange={e => updateFilter(setDateFrom)(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200" />
+            <input type="date" value={dateTo}   onChange={e => updateFilter(setDateTo)(e.target.value)}   className="px-4 py-2 rounded-xl border border-slate-200" />
+            <select value={statusFilter} onChange={e => updateFilter(setStatusFilter)(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200">
               <option>All</option>
               <option>Present</option>
               <option>Short Hours</option>
@@ -129,7 +144,10 @@ export default function Attendance({ rows, role }) {
             </select>
           </div>
 
-          <p className="text-sm text-slate-500 mb-3">Showing {effectiveRows.length} of {rows.length} records.</p>
+          <p className="text-sm text-slate-500 mb-3">
+            Showing {effectiveRows.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1}–{(safePage - 1) * PAGE_SIZE + effectiveRows.length} of {filteredRows.length} records
+            {filteredRows.length !== rows.length ? ` (filtered from ${rows.length})` : ""}.
+          </p>
 
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full min-w-[1100px] text-sm">
@@ -185,6 +203,18 @@ export default function Attendance({ rows, role }) {
               </tbody>
             </table>
           </div>
+
+          {pageCount > 1 && (
+            <div className="mt-3 flex items-center justify-between text-sm">
+              <Button variant="outline" className="rounded-xl" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
+                Previous
+              </Button>
+              <span className="text-slate-500">Page {safePage} of {pageCount}</span>
+              <Button variant="outline" className="rounded-xl" disabled={safePage >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>
+                Next
+              </Button>
+            </div>
+          )}
 
           {canToggle && (
             <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-500">
