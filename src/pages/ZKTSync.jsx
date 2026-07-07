@@ -5,7 +5,7 @@ import { importPendingStorageFiles, importZKTRawPunches, runAttendanceProcessing
 
 export default function ZKTSync() {
   const [file, setFile] = useState(null);
-  const [fromDate, setFromDate] = useState("2026-01-01");
+  const [fromDate, setFromDate] = useState(new Date(Date.now() - 30 * 86400e3).toISOString().slice(0, 10));
   const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
   const [storageBusy, setStorageBusy] = useState(false);
