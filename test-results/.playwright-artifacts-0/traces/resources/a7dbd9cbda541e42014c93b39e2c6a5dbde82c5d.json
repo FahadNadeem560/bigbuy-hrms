@@ -1,0 +1,1 @@
+{"query":"GRANT SELECT, INSERT, UPDATE, DELETE ON public.fines TO anon, authenticated"}

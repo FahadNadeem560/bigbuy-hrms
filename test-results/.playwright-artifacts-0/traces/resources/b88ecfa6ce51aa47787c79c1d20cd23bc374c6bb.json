@@ -1,0 +1,1 @@
+{"query":"ALTER TABLE attendance ADD COLUMN IF NOT EXISTS is_gazetted_holiday BOOLEAN DEFAULT FALSE"}

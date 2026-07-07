@@ -1,0 +1,1 @@
+{"code":"PGRST202","details":"Searched for the function public.run_sql with parameter query or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.","hint":null,"message":"Could not find the function public.run_sql(query) in the schema cache"}
