@@ -151,7 +151,9 @@ function ImportPanel({ employees, onDone }) {
         const oldSal = Number(obj.old_salary) || null;
         const newSal = Number(obj.new_salary) || null;
         const incAmt = Number(obj.increment_amount) || (oldSal && newSal ? newSal - oldSal : null);
-        const incPct = Number(obj.increment_percentage) || (oldSal && incAmt ? Math.round((incAmt / oldSal) * 10000) / 100 : null);
+        // Always derive from old salary + amount rather than trusting the file's percentage column,
+        // which has historically contained raw ratios (0.33) instead of percentages (33.00).
+        const incPct = oldSal && incAmt ? Math.round((incAmt / oldSal) * 10000) / 100 : (Number(obj.increment_percentage) || null);
 
         toInsert.push({
           employee_code: code,
