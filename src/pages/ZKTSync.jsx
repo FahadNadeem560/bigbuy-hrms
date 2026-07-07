@@ -84,6 +84,14 @@ export default function ZKTSync() {
     return rowsFromLines(lines);
   }
 
+  // Large backlog files (thousands of rows) sent as one RPC call can exceed
+  // Postgres's statement_timeout even with the dedup fix, so split into
+  // chunks. Each chunk needs its own source filename -- the RPC keys its
+  // batch row on filename and deletes+rebuilds that batch's rows on every
+  // call, so reusing the same filename across chunks would wipe the
+  // previous chunk's imported rows.
+  const IMPORT_CHUNK_SIZE = 1000;
+
   async function importFile() {
     setMessage("");
     setError("");
@@ -92,8 +100,22 @@ export default function ZKTSync() {
     try {
       const rows = await readRows(file);
       if (!rows.length) throw new Error("The selected file has no rows.");
-      const result = await importZKTRawPunches(rows, file.name);
-      setMessage(`Imported ${Number(result?.imported_rows || 0)} punches. Rejected ${Number(result?.rejected_rows || 0)} rows.`);
+
+      const chunks = [];
+      for (let i = 0; i < rows.length; i += IMPORT_CHUNK_SIZE) {
+        chunks.push(rows.slice(i, i + IMPORT_CHUNK_SIZE));
+      }
+
+      let imported = 0;
+      let rejected = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkName = chunks.length > 1 ? `${file.name}#part${i + 1}` : file.name;
+        setMessage(`Importing part ${i + 1} of ${chunks.length}...`);
+        const result = await importZKTRawPunches(chunks[i], chunkName);
+        imported += Number(result?.imported_rows || 0);
+        rejected += Number(result?.rejected_rows || 0);
+      }
+      setMessage(`Imported ${imported} punches. Rejected ${rejected} rows.`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -115,14 +137,46 @@ export default function ZKTSync() {
     }
   }
 
+  // process_zkt_raw_punches pairs check-in/check-out via a correlated
+  // subquery per punch and rebuilds the whole date range's attendance rows
+  // in one statement, so a wide range over a large backlog can exceed
+  // Postgres's statement_timeout. Split into day windows -- the RPC is
+  // documented safe to re-run over overlapping/adjacent ranges since it
+  // deletes+rebuilds per range before inserting.
+  const PROCESS_CHUNK_DAYS = 3;
+
+  function chunkDateRange(from, to, chunkDays) {
+    const chunks = [];
+    let cursor = new Date(`${from}T00:00:00Z`);
+    const end = new Date(`${to}T00:00:00Z`);
+    while (cursor <= end) {
+      const chunkEnd = new Date(cursor);
+      chunkEnd.setUTCDate(chunkEnd.getUTCDate() + chunkDays - 1);
+      if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+      chunks.push([cursor.toISOString().slice(0, 10), chunkEnd.toISOString().slice(0, 10)]);
+      cursor = new Date(chunkEnd);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return chunks;
+  }
+
   async function processAttendance() {
     setMessage("");
     setError("");
     setProcessing(true);
     try {
-      const result = await runAttendanceProcessing(fromDate, toDate);
-      const first = Array.isArray(result) ? result[0] : result;
-      setMessage(`Processed ${Number(first?.processed_days || 0)} days. Created/updated ${Number(first?.attendance_rows || 0)} attendance rows.`);
+      const chunks = chunkDateRange(fromDate, toDate, PROCESS_CHUNK_DAYS);
+      let processedDays = 0;
+      let attendanceRows = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        const [chunkFrom, chunkTo] = chunks[i];
+        setMessage(`Processing ${chunkFrom} to ${chunkTo} (${i + 1} of ${chunks.length})...`);
+        const result = await runAttendanceProcessing(chunkFrom, chunkTo);
+        const first = Array.isArray(result) ? result[0] : result;
+        processedDays += Number(first?.processed_days || 0);
+        attendanceRows += Number(first?.attendance_rows || 0);
+      }
+      setMessage(`Processed ${processedDays} days. Created/updated ${attendanceRows} attendance rows.`);
     } catch (err) {
       setError(err.message);
     } finally {
