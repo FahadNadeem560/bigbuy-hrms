@@ -13,11 +13,75 @@ export default function ZKTSync() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  function normalizeStatus(value) {
+    const v = String(value || "").trim().toUpperCase();
+    if (["I", "IN", "C/IN", "CIN", "CHECK IN"].includes(v)) return "C/In";
+    if (["O", "OUT", "C/OUT", "COUT", "CHECK OUT"].includes(v)) return "C/Out";
+    return value;
+  }
+
+  function looksLikeHeader(cols) {
+    const joined = cols.join("|").toLowerCase();
+    return joined.includes("date") || joined.includes("time") || joined.includes("status") || joined.includes("department") || joined.includes("name") || joined.includes("location");
+  }
+
+  function rowsFromLines(lines) {
+    if (lines.length === 0) return [];
+    const first = lines[0].map((v) => String(v ?? "").trim());
+    if (!looksLikeHeader(first)) {
+      return lines.map((c) => ({
+        "No.": c[0] ?? c[1] ?? "",
+        "Date/Time": c[2] ?? "",
+        "Status": normalizeStatus(c[3] ?? ""),
+        "Location ID": c[4] ?? "",
+        "VerifyCode": c[5] ?? "",
+        "CardNo": c[6] ?? "",
+      }));
+    }
+    return lines.slice(1).map((row) => {
+      const obj = {};
+      first.forEach((h, i) => { obj[h] = row[i] ?? ""; });
+      return obj;
+    });
+  }
+
+  function parseCsvLine(line) {
+    const out = [];
+    let cur = "";
+    let q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; continue; }
+      if (ch === '"') { q = !q; continue; }
+      if (ch === ',' && !q) { out.push(cur); cur = ""; continue; }
+      cur += ch;
+    }
+    out.push(cur);
+    return out.map((v) => v.trim());
+  }
+
+  // Raw ZKT device exports have no header row and their Date/Time column
+  // (e.g. "2026-07-01 22:33:44") gets silently mangled by the xlsx library's
+  // date auto-detection when parsed as a spreadsheet cell (it reformats to a
+  // short date like "7/1/26", dropping the time and breaking every row).
+  // Parse .csv files as plain text instead — same approach the storage-sync
+  // edge function already uses successfully — and only hand real .xls/.xlsx
+  // binary files to the xlsx library.
   async function readRows(selectedFile) {
+    const isCsv = /\.csv$/i.test(selectedFile.name);
+    if (isCsv) {
+      const text = await selectedFile.text();
+      const lines = text.split(/\r?\n/)
+        .filter((line) => line.trim().length > 0)
+        .map(parseCsvLine);
+      return rowsFromLines(lines);
+    }
     const buffer = await selectedFile.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
+    const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+    const lines = raw.filter((row) => row.some((cell) => String(cell ?? "").trim() !== ""));
+    return rowsFromLines(lines);
   }
 
   async function importFile() {
