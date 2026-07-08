@@ -70,6 +70,12 @@ async function loginAs(page, username, password) {
   await page.locator('aside').waitFor({ timeout: 15000 });
 }
 
+/** Log out of whatever session is active so a subsequent loginAs() sees a fresh login form. */
+async function logout(page) {
+  await page.locator('button').filter({ hasText: 'Log Out' }).first().click();
+  await page.locator('input[autocomplete="username"]').waitFor({ timeout: 15000 });
+}
+
 /** Wait for the page to settle (no pending network) */
 async function settle(page, ms = 1500) {
   try {
@@ -664,6 +670,7 @@ test('TEST 16 — HR role shows correct sidebar items', async ({ page }) => {
   // replaced it (see file header) — needs a seeded HR account now.
   test.skip(!process.env.HR_USERNAME || !process.env.HR_PASSWORD,
     'HR_USERNAME/HR_PASSWORD not set — no seeded HR test account yet');
+  await logout(page); // beforeEach already logged in as Master
   await loginAs(page, process.env.HR_USERNAME, process.env.HR_PASSWORD);
   await page.screenshot({ path: 'tests/results/screenshots/16a-hr-sidebar.png' });
 
@@ -693,6 +700,7 @@ test('TEST 16 — HR role shows correct sidebar items', async ({ page }) => {
 test('TEST 17 — Finance role has restricted sidebar', async ({ page }) => {
   test.skip(!process.env.FINANCE_USERNAME || !process.env.FINANCE_PASSWORD,
     'FINANCE_USERNAME/FINANCE_PASSWORD not set — no seeded Finance test account yet');
+  await logout(page); // beforeEach already logged in as Master
   await loginAs(page, process.env.FINANCE_USERNAME, process.env.FINANCE_PASSWORD);
   await page.screenshot({ path: 'tests/results/screenshots/17a-finance-sidebar.png' });
 
