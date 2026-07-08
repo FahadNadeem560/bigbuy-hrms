@@ -10,12 +10,14 @@ const TABS = [
   ["executive",  "Executive View"],
 ];
 
-export default function Dashboard({ activeEmployees, attendanceRows, payrollRows, payrollStatus, setActive }) {
-  const [tab, setTab] = useState("overview");
+export default function Dashboard({ activeEmployees, attendanceRows, payrollRows, payrollStatus, setActive, role, branchFilter }) {
+  const isBranchManager = role === "Branch Manager";
+  const [tab, setTab] = useState(isBranchManager ? "branch" : "overview");
+  const visibleTabs = isBranchManager ? TABS.filter(([k]) => k === "branch") : TABS;
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-5">
-        {TABS.map(([k, l]) => (
+        {visibleTabs.map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
             {l}
@@ -23,7 +25,7 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
         ))}
       </div>
 
-      {tab === "overview" && (
+      {tab === "overview" && !isBranchManager && (
         <div>
           <PageTitle title="HR Dashboard" subtitle="Staff position, payroll snapshot and attendance alerts."
             action={<Button className="rounded-2xl" onClick={() => setActive("imports")}>Import Employees</Button>} />
@@ -36,8 +38,8 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
         </div>
       )}
 
-      {tab === "branch"    && <BranchDashboard />}
-      {tab === "executive" && <ExecutiveDashboard />}
+      {tab === "branch"    && <BranchDashboard restrictToBranch={isBranchManager ? branchFilter : null} />}
+      {tab === "executive" && !isBranchManager && <ExecutiveDashboard />}
     </div>
   );
 }

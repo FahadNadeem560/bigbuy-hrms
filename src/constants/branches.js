@@ -4,6 +4,7 @@ export const BRANCH_CODE_MAP = {
   "DHA Branch": "DHA",
   "WAREHOUSE": "WH",
   "BASE FAISAL": "PAF",
+  "Qayyumabad": "QYB",
 };
 
 export const BRANCH_ALIASES = {
@@ -14,4 +15,5 @@ export const BRANCH_ALIASES = {
   "warehouse": "WAREHOUSE",
   "base faisal": "BASE FAISAL",
   "paf faisal": "BASE FAISAL",
+  "qayyumabad": "Qayyumabad",
 };

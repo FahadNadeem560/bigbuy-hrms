@@ -1,11 +1,14 @@
 // Big Buy HRMS — Playwright End-to-End Test Suite
-// App: https://bigbuy-hrms.vercel.app
+// App: https://bigbuy-hrms.vercel.app (override with PLAYWRIGHT_BASE_URL, e.g. for local dev)
 //
 // Architecture notes:
 // - Single-page React app (Vite). No URL routing — navigation is state-based (sidebar buttons).
-// - Main HR app loads directly without a login form; user/role are pre-set (Fahad Nadeem / Master).
-// - Role switching is via <select> dropdown in the top bar.
-// - Employee Self-Service portal is at /#employee-login (hash-based, separate login).
+// - The main app requires real login (Supabase Auth) as of the Branch Manager/GM roles work.
+//   Credentials are read from env vars only (never hardcoded here) — see loginAs() below.
+//   Required for the full suite: MASTER_USERNAME/MASTER_PASSWORD, BM_USERNAME/BM_PASSWORD,
+//   GM_USERNAME/GM_PASSWORD. Tests needing a credential that isn't set are skipped, not failed.
+// - Employee Self-Service portal is at /#employee-login (hash-based, separate login, unrelated
+//   to the real-auth work above).
 
 import { test, expect } from '@playwright/test';
 
@@ -15,6 +18,56 @@ import { test, expect } from '@playwright/test';
 async function navTo(page, label) {
   await page.locator('aside button').filter({ hasText: label }).first().click();
   await page.waitForTimeout(800);
+}
+
+// Supabase Auth rejects re-setting the same password on the forced-change
+// screen ("must differ from old"), so a first successful run permanently
+// changes the account's password away from `password`. To stay idempotent
+// across repeated test runs without knowing which state an account is in,
+// try `password` first, then this derived fallback (what a prior run's
+// forced-change would have set it to).
+function altPasswordFor(password) {
+  return `${password}-Test1`;
+}
+
+async function attemptLogin(page, username, password) {
+  await page.goto('/');
+  await page.locator('input[autocomplete="username"]').waitFor({ timeout: 15000 });
+  await page.fill('input[autocomplete="username"]', username);
+  await page.fill('input[autocomplete="current-password"]', password);
+  await page.click('button[type="submit"]');
+
+  const invalid = page.locator('text=Invalid username or password');
+  const changePassword = page.locator('text=Set a new password');
+  const sidebar = page.locator('aside');
+  await Promise.race([
+    invalid.waitFor({ timeout: 10000 }),
+    changePassword.waitFor({ timeout: 10000 }),
+    sidebar.waitFor({ timeout: 10000 }),
+  ]).catch(() => {});
+
+  if (await invalid.isVisible().catch(() => false)) return 'invalid';
+  if (await changePassword.isVisible().catch(() => false)) return 'change-password';
+  if (await sidebar.isVisible().catch(() => false)) return 'ok';
+  return 'unknown';
+}
+
+/** Log in with a username/password, handling the forced-password-change screen idempotently. */
+async function loginAs(page, username, password) {
+  const alt = altPasswordFor(password);
+  let result = await attemptLogin(page, username, password);
+  if (result === 'invalid') {
+    result = await attemptLogin(page, username, alt);
+  }
+  if (result === 'change-password') {
+    const pwInputs = page.locator('input[autocomplete="new-password"]');
+    await pwInputs.nth(0).fill(alt);
+    await pwInputs.nth(1).fill(alt);
+    await page.click('button[type="submit"]');
+  } else if (result !== 'ok') {
+    throw new Error(`Login failed for ${username} (state: ${result})`);
+  }
+  await page.locator('aside').waitFor({ timeout: 15000 });
 }
 
 /** Wait for the page to settle (no pending network) */
@@ -40,7 +93,9 @@ async function assertNoErrors(page) {
 // ─── Shared setup ────────────────────────────────────────────────────────────
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
+  test.skip(!process.env.MASTER_USERNAME || !process.env.MASTER_PASSWORD,
+    'MASTER_USERNAME/MASTER_PASSWORD not set — skipping (see file header)');
+  await loginAs(page, process.env.MASTER_USERNAME, process.env.MASTER_PASSWORD);
   // Wait for React to hydrate and Supabase data to load
   await settle(page, 3000);
 });
@@ -605,10 +660,11 @@ test('TEST 15 — Data Management page loads', async ({ page }) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test('TEST 16 — HR role shows correct sidebar items', async ({ page }) => {
-  // Role dropdown in top bar
-  const roleSelect = page.locator('select').first();
-  await roleSelect.selectOption('HR');
-  await page.waitForTimeout(800);
+  // The role dropdown this test used to rely on was removed when real login
+  // replaced it (see file header) — needs a seeded HR account now.
+  test.skip(!process.env.HR_USERNAME || !process.env.HR_PASSWORD,
+    'HR_USERNAME/HR_PASSWORD not set — no seeded HR test account yet');
+  await loginAs(page, process.env.HR_USERNAME, process.env.HR_PASSWORD);
   await page.screenshot({ path: 'tests/results/screenshots/16a-hr-sidebar.png' });
 
   // HR CAN see these
@@ -628,11 +684,6 @@ test('TEST 16 — HR role shows correct sidebar items', async ({ page }) => {
   await settle(page, 2000);
   await page.screenshot({ path: 'tests/results/screenshots/16b-hr-payroll.png' });
   await assertNoErrors(page);
-
-  // Restore Master
-  await roleSelect.selectOption('Master');
-  await page.waitForTimeout(500);
-  console.log('  ✓ Role restored to Master');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -640,9 +691,9 @@ test('TEST 16 — HR role shows correct sidebar items', async ({ page }) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test('TEST 17 — Finance role has restricted sidebar', async ({ page }) => {
-  const roleSelect = page.locator('select').first();
-  await roleSelect.selectOption('Finance');
-  await page.waitForTimeout(800);
+  test.skip(!process.env.FINANCE_USERNAME || !process.env.FINANCE_PASSWORD,
+    'FINANCE_USERNAME/FINANCE_PASSWORD not set — no seeded Finance test account yet');
+  await loginAs(page, process.env.FINANCE_USERNAME, process.env.FINANCE_PASSWORD);
   await page.screenshot({ path: 'tests/results/screenshots/17a-finance-sidebar.png' });
 
   // Finance CAN see Dashboard and Payroll
@@ -665,11 +716,6 @@ test('TEST 17 — Finance role has restricted sidebar', async ({ page }) => {
     page.locator('aside button').filter({ hasText: 'Settings' }).first()
   ).not.toBeVisible();
   console.log('  ✓ Settings hidden from Finance role');
-
-  // Restore Master
-  await roleSelect.selectOption('Master');
-  await page.waitForTimeout(500);
-  console.log('  ✓ Role restored to Master');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

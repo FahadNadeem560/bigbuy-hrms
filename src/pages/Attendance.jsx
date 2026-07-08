@@ -32,7 +32,7 @@ function Toggle({ value, onChange, tone = "blue" }) {
 
 const PAGE_SIZE = 50;
 
-export default function Attendance({ rows, role }) {
+export default function Attendance({ rows, role, branchFilter, employees }) {
   const [mainTab, setMainTab] = useState("records");
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -43,14 +43,16 @@ export default function Attendance({ rows, role }) {
   const [page, setPage] = useState(1);
 
   const canToggle = role === "HR" || role === "Master";
+  const empBranchMap = useMemo(() => Object.fromEntries((employees || []).map(e => [e.id, e.branch])), [employees]);
 
   const filteredRows = useMemo(() => rows.filter((row) => {
     const matchName = !employeeSearch || String(row.employeeCode || row.name || "").toLowerCase().includes(employeeSearch.toLowerCase());
     const matchStatus = statusFilter === "All" || row.status === statusFilter;
     const matchFrom = !dateFrom || row.date >= dateFrom;
     const matchTo = !dateTo || row.date <= dateTo;
-    return matchName && matchStatus && matchFrom && matchTo;
-  }), [rows, employeeSearch, statusFilter, dateFrom, dateTo]);
+    const matchBranch = !branchFilter || empBranchMap[row.employeeCode] === branchFilter;
+    return matchName && matchStatus && matchFrom && matchTo && matchBranch;
+  }), [rows, employeeSearch, statusFilter, dateFrom, dateTo, branchFilter, empBranchMap]);
 
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
@@ -227,7 +229,7 @@ export default function Attendance({ rows, role }) {
         </div>
       )}
 
-      {mainTab === "timesheet"   && <Timesheet />}
+      {mainTab === "timesheet"   && <Timesheet branchFilter={branchFilter} />}
       {mainTab === "adjustments" && <AttendanceAdjustment role={role} />}
       {mainTab === "missing"     && <MissingPunch />}
       {mainTab === "alerts"      && <AttendanceAlerts />}

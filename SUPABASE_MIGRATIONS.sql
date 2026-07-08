@@ -1221,3 +1221,326 @@ begin
 end;
 $function$;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.advances TO anon, authenticated;
+
+-- =============================================================
+-- Backfilled: 2026-07-08
+-- These two objects already existed live in Supabase (created directly
+-- against the DB, not via this file) -- discovered while diagnosing the
+-- ZKT statement-timeout bug. Adding them here so the migrations file
+-- matches production. No behavior change.
+-- =============================================================
+
+-- ── zkt_raw_punches: dedup unique index ────────────────────────
+-- import_zkt_raw_punches's `insert ... on conflict (...) do nothing`
+-- requires this index to exist.
+CREATE UNIQUE INDEX IF NOT EXISTS zkt_raw_punches_dedup_uq
+  ON public.zkt_raw_punches
+  USING btree (zkt_employee_no, punch_time, COALESCE(punch_status, ''::text), COALESCE(location_id, ''::text));
+
+-- ── process_zkt_raw_punches: raw punches -> attendance ─────────
+-- Pairs check-in/check-out punches per employee per day (20h max shift
+-- window, plus an overnight-shift fallback for check-outs before 06:00),
+-- dedupes to one row per employee/day, then deletes+rebuilds `attendance`
+-- rows for the given date range (NULL bounds = all time). Safe to re-run
+-- over overlapping/adjacent ranges. Large single-call ranges over the
+-- outage backlog hit statement_timeout -- see how it's called in
+-- src/pages/ZKTSync.jsx (chunked into 3-day windows client-side).
+CREATE OR REPLACE FUNCTION public.process_zkt_raw_punches(p_from_date date DEFAULT NULL::date, p_to_date date DEFAULT NULL::date)
+ RETURNS TABLE(processed_days integer, attendance_rows integer)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_processed_days integer := 0;
+  v_attendance_rows integer := 0;
+begin
+  delete from public.attendance
+  where source = 'ZKT'
+    and (p_from_date is null or coalesce(work_date, attendance_date) >= p_from_date)
+    and (p_to_date is null or coalesce(work_date, attendance_date) <= p_to_date);
+
+  create temp table tmp_zkt_punches on commit drop as
+  select
+    coalesce(employee_code, zkt_employee_no) as employee_code,
+    punch_time,
+    lower(coalesce(punch_status,'')) as status
+  from public.zkt_raw_punches
+  where (p_from_date is null or punch_time::date >= p_from_date)
+    and (p_to_date is null or punch_time::date <= p_to_date + interval '1 day')
+    and coalesce(employee_code, zkt_employee_no) is not null;
+
+  create index on tmp_zkt_punches(employee_code, punch_time);
+
+  create temp table tmp_zkt_pairs on commit drop as
+  select
+    i.employee_code,
+    i.punch_time::date as work_date,
+    i.punch_time as check_in,
+    coalesce(
+      (
+        select min(o.punch_time)
+        from tmp_zkt_punches o
+        where o.employee_code = i.employee_code
+          and o.status in ('c/out','cout','check out','out')
+          and o.punch_time > i.punch_time
+          and o.punch_time <= i.punch_time + interval '20 hours'
+      ),
+      (
+        select min(o.punch_time + interval '1 day')
+        from tmp_zkt_punches o
+        where o.employee_code = i.employee_code
+          and o.status in ('c/out','cout','check out','out')
+          and o.punch_time::date = i.punch_time::date
+          and o.punch_time::time < time '06:00'
+          and i.punch_time::time >= time '10:00'
+      )
+    ) as check_out
+  from tmp_zkt_punches i
+  where i.status in ('c/in','cin','check in','in')
+    and (p_from_date is null or i.punch_time::date >= p_from_date)
+    and (p_to_date is null or i.punch_time::date <= p_to_date);
+
+  create temp table tmp_zkt_deduped on commit drop as
+  select distinct on (employee_code, work_date)
+    employee_code, work_date, check_in, check_out
+  from tmp_zkt_pairs
+  order by employee_code, work_date, check_in asc;
+
+  with enriched as (
+    select
+      d.employee_code,
+      d.work_date,
+      d.check_in,
+      d.check_out,
+      e.staff_level,
+      e.eligibility_group,
+      e.assigned_shift_code,
+      extract(epoch from (coalesce(d.check_out, d.check_in) - d.check_in)) / 3600.0 as worked_hours
+    from tmp_zkt_deduped d
+    left join public.employees e on e.employee_code = d.employee_code or e.zkt_employee_no = d.employee_code
+  ), inserted as (
+    insert into public.attendance (
+      employee_code, attendance_date, work_date, check_in, check_out, first_check_in, last_check_out,
+      actual_hours, worked_hours, required_hours, short_hours, overtime_hours, late_minutes,
+      attendance_status, source, eligibility_group, shift_code, calculated_at, needs_review
+    )
+    select
+      employee_code,
+      work_date,
+      work_date,
+      check_in,
+      coalesce(check_out, check_in),
+      check_in,
+      coalesce(check_out, check_in),
+      round(greatest(worked_hours, 0)::numeric, 2),
+      round(greatest(worked_hours, 0)::numeric, 2),
+      case when staff_level = 'Management' then 9 else 10.5 end,
+      round(greatest((case when staff_level = 'Management' then 9 else 10.5 end) - worked_hours, 0)::numeric, 2),
+      round(greatest(worked_hours - (case when staff_level = 'Management' then 9 else 10.5 end), 0)::numeric, 2),
+      round(greatest(extract(epoch from (check_in - (work_date::timestamp + time '11:00'))) / 60.0, 0)::numeric, 0),
+      case
+        when check_out is null then 'Single Punch'
+        when worked_hours >= (case when staff_level = 'Management' then 9 else 10.5 end) then 'Present'
+        when worked_hours >= 5 then 'Short Hours'
+        else 'Half Day'
+      end,
+      'ZKT', eligibility_group, assigned_shift_code, now(), check_out is null
+    from enriched
+    returning 1
+  )
+  select count(*) into v_attendance_rows from inserted;
+
+  update public.zkt_raw_punches
+  set processing_status = 'Processed'
+  where (p_from_date is null or punch_time::date >= p_from_date)
+    and (p_to_date is null or punch_time::date <= p_to_date + interval '1 day');
+
+  select count(*) into v_processed_days
+  from public.attendance
+  where source = 'ZKT'
+    and (p_from_date is null or work_date >= p_from_date)
+    and (p_to_date is null or work_date <= p_to_date);
+
+  return query select v_processed_days, v_attendance_rows;
+end;
+$function$;
+
+-- =============================================================
+-- Applied: 2026-07-08
+-- Branch Manager + GM roles, multi-stage leave approval chain,
+-- real auth foundations. Schema additions only (additive, safe to
+-- apply immediately). RLS policies are a separate later migration,
+-- applied only once the real-auth frontend is ready to deploy --
+-- enabling RLS before then would break the currently-deployed
+-- anon-key/no-login frontend for the live user.
+-- =============================================================
+
+-- ── users: real-auth support columns ───────────────────────────
+ALTER TABLE public.users
+  ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS username TEXT UNIQUE;
+
+-- ── leave_requests: columns the app code already expects ───────
+-- submitApplication() in LeaveManagement.jsx writes these; the live
+-- table was missing them entirely, so leave submission has never
+-- actually succeeded (leave_requests had 0 rows).
+ALTER TABLE public.leave_requests
+  ADD COLUMN IF NOT EXISTS leave_type TEXT,
+  ADD COLUMN IF NOT EXISTS from_date DATE,
+  ADD COLUMN IF NOT EXISTS to_date DATE,
+  ADD COLUMN IF NOT EXISTS is_unpaid BOOLEAN DEFAULT FALSE;
+
+-- ── leave_approvals: real per-stage audit trail ─────────────────
+-- leave_requests.approved_by/approved_at get overwritten every stage
+-- today, losing prior-stage history. This table keeps one row per
+-- stage transition instead.
+CREATE TABLE IF NOT EXISTS public.leave_approvals (
+  id               UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  leave_request_id UUID        REFERENCES public.leave_requests(id) ON DELETE CASCADE,
+  stage            TEXT        NOT NULL,
+  actor_role       TEXT,
+  actor_name       TEXT,
+  action           TEXT        NOT NULL,
+  reason           TEXT,
+  created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.leave_approvals TO anon, authenticated;
+
+-- ── notifications: branch filter for Branch Manager notifications ──
+ALTER TABLE public.notifications
+  ADD COLUMN IF NOT EXISTS related_branch TEXT;
+
+-- ── RLS helper functions ────────────────────────────────────────────
+-- Named app_current_role/app_current_branch, NOT current_role/current_branch
+-- -- `CURRENT_ROLE` is a reserved Postgres keyword (returns the session's DB
+-- role) and collides with a same-named function: `current_role()` is a
+-- syntax error, not just a naming clash.
+CREATE OR REPLACE FUNCTION public.app_current_role()
+ RETURNS text
+ LANGUAGE sql STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $$
+  SELECT role FROM public.users WHERE auth_user_id = auth.uid() LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION public.app_current_branch()
+ RETURNS text
+ LANGUAGE sql STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $$
+  SELECT branch FROM public.users WHERE auth_user_id = auth.uid() LIMIT 1;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.app_current_role() TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.app_current_branch() TO anon, authenticated;
+
+-- SECURITY DEFINER helper for the attendance/leave_requests policies below.
+-- Those policies need each row's employee's branch, but employees now has
+-- its own RLS enabled -- a raw subquery against employees from within
+-- another table's policy caused Postgres to error ("nested" RLS evaluation
+-- across two RLS-protected tables). Routing through a SECURITY DEFINER
+-- function (which runs as the function owner and bypasses RLS on the table
+-- it queries) avoids that.
+CREATE OR REPLACE FUNCTION public.employee_branch(p_employee_code text)
+ RETURNS text
+ LANGUAGE sql STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $$
+  SELECT branch FROM public.employees WHERE employee_code = p_employee_code LIMIT 1;
+$$;
+GRANT EXECUTE ON FUNCTION public.employee_branch(text) TO anon, authenticated;
+
+-- =============================================================
+-- Applied: 2026-07-08 (later same day)
+-- RLS policies -- the actual enforcement for "Branch Manager can't see
+-- payroll/salary/loans/advances/fines/other branches". Scoped to only the
+-- tables the spec's "CANNOT see" list names; every other table keeps its
+-- existing anon-grant behavior untouched.
+--
+-- IMPORTANT performance note: every USING/WITH CHECK clause below wraps
+-- app_current_role()/app_current_branch() in `(select ...)`. This is the
+-- documented Supabase RLS pattern -- it lets Postgres evaluate the function
+-- once per query (as an InitPlan) instead of once per row. Without it, a
+-- paginated `attendance` read (thousands of rows) re-ran the SECURITY
+-- DEFINER role lookup per row and blew Postgres's statement_timeout. Do
+-- not remove the `(select ...)` wrapping when editing these policies.
+-- =============================================================
+
+ALTER TABLE public.payroll ENABLE ROW LEVEL SECURITY;
+CREATE POLICY payroll_select ON public.payroll FOR SELECT TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR','Finance','GM'));
+CREATE POLICY payroll_write ON public.payroll FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR'));
+
+ALTER TABLE public.fines ENABLE ROW LEVEL SECURITY;
+CREATE POLICY fines_full_access ON public.fines FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR','Finance','GM'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR','Finance','GM'));
+
+ALTER TABLE public.one_time_adjustments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY one_time_adjustments_full_access ON public.one_time_adjustments FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR','GM'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR','GM'));
+
+ALTER TABLE public.shortages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY shortages_full_access ON public.shortages FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR'));
+
+ALTER TABLE public.advances ENABLE ROW LEVEL SECURITY;
+CREATE POLICY advances_full_access ON public.advances FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR'));
+
+ALTER TABLE public.loans ENABLE ROW LEVEL SECURITY;
+CREATE POLICY loans_full_access ON public.loans FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR','Finance'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR','Finance'));
+
+ALTER TABLE public.loan_changes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY loan_changes_full_access ON public.loan_changes FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR','Finance'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR','Finance'));
+
+-- Branch-scoped tables: Branch Manager sees only their own branch.
+ALTER TABLE public.employees ENABLE ROW LEVEL SECURITY;
+CREATE POLICY employees_select ON public.employees FOR SELECT TO authenticated
+  USING (
+    (select app_current_role()) IN ('Master','HR','Finance','GM')
+    OR ((select app_current_role()) = 'Branch Manager' AND branch = (select app_current_branch()))
+  );
+CREATE POLICY employees_insert ON public.employees FOR INSERT TO authenticated
+  WITH CHECK ((select app_current_role()) IN ('Master','HR'));
+CREATE POLICY employees_update ON public.employees FOR UPDATE TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR'));
+CREATE POLICY employees_delete ON public.employees FOR DELETE TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR'));
+
+ALTER TABLE public.attendance ENABLE ROW LEVEL SECURITY;
+CREATE POLICY attendance_select ON public.attendance FOR SELECT TO authenticated
+  USING (
+    (select app_current_role()) IN ('Master','HR','Finance','GM')
+    OR ((select app_current_role()) = 'Branch Manager' AND (select public.employee_branch(employee_code)) = (select app_current_branch()))
+  );
+CREATE POLICY attendance_write ON public.attendance FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR'));
+
+ALTER TABLE public.leave_requests ENABLE ROW LEVEL SECURITY;
+CREATE POLICY leave_requests_select ON public.leave_requests FOR SELECT TO authenticated
+  USING (
+    (select app_current_role()) IN ('Master','HR','Finance','GM')
+    OR ((select app_current_role()) = 'Branch Manager' AND (select public.employee_branch(employee_code)) = (select app_current_branch()))
+  );
+CREATE POLICY leave_requests_write ON public.leave_requests FOR ALL TO authenticated
+  USING (
+    (select app_current_role()) IN ('Master','HR','GM')
+    OR ((select app_current_role()) = 'Branch Manager' AND (select public.employee_branch(employee_code)) = (select app_current_branch()))
+  )
+  WITH CHECK (
+    (select app_current_role()) IN ('Master','HR','GM')
+    OR ((select app_current_role()) = 'Branch Manager' AND (select public.employee_branch(employee_code)) = (select app_current_branch()))
+  );

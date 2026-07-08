@@ -3,12 +3,12 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Badge, PageTitle } from "../components/ui.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 
-export default function BranchDashboard() {
+export default function BranchDashboard({ restrictToBranch }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [employees, setEmployees] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [drillBranch, setDrillBranch] = useState(null);
+  const [drillBranch, setDrillBranch] = useState(restrictToBranch || null);
   const [err, setErr] = useState("");
 
   useEffect(() => { loadData(); }, [date]);
@@ -32,7 +32,7 @@ export default function BranchDashboard() {
   const attMap = useMemo(() => Object.fromEntries((attendance || []).map(a => [a.employee_code, a])), [attendance]);
 
   const branchStats = useMemo(() => {
-    const branches = Object.keys(BRANCH_CODE_MAP);
+    const branches = restrictToBranch ? [restrictToBranch] : Object.keys(BRANCH_CODE_MAP);
     return branches.map(branchName => {
       const emps = employees.filter(e => e.branch === branchName);
       const total = emps.length;
@@ -76,7 +76,7 @@ export default function BranchDashboard() {
 
       <div className="flex items-center gap-3 mb-4">
         <input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
-        {drillBranch && (
+        {drillBranch && !restrictToBranch && (
           <button onClick={() => setDrillBranch(null)} className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-sm hover:bg-slate-50">
             ← All Branches
           </button>

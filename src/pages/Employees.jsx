@@ -334,30 +334,33 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
   );
 }
 
-export default function Employees({ query, setQuery, branch, setBranch, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees, role }) {
+export default function Employees({ query, setQuery, branch, setBranch, branchLocked, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees, role }) {
   const supervisorMap = useMemo(() =>
     Object.fromEntries((employees || []).map(e => [e.id, e.name])),
     [employees]
   );
+  const viewOnly = role === "Branch Manager";
 
   return (
     <div>
       <PageTitle title="Employee Master" subtitle="Add, edit and manage staff records."
-        action={<Button className="rounded-2xl" onClick={() => setShowEmployeeForm(true)}>+ New Employee</Button>} />
+        action={!viewOnly && <Button className="rounded-2xl" onClick={() => setShowEmployeeForm(true)}>+ New Employee</Button>} />
       <div className="flex flex-col md:flex-row gap-3 mb-4">
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by name, ID, department, phone..." className="flex-1 px-4 py-2.5 rounded-2xl border border-slate-200" />
-        <select value={branch} onChange={e => setBranch(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200">
+        <select value={branch} onChange={e => setBranch(e.target.value)} disabled={branchLocked} className="px-4 py-2.5 rounded-2xl border border-slate-200 disabled:bg-slate-50 disabled:text-slate-500">
           <option>All</option>
           {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
         </select>
       </div>
 
-      {showEmployeeForm && <EmployeeAdd employee={newEmployee} setEmployee={setNewEmployee} save={saveEmployee} close={() => setShowEmployeeForm(false)} role={role} nextId={newEmployee._nextId} />}
-      {editingEmployee && <EmployeeEdit employee={editingEmployee} setEmployee={setEditingEmployee} save={updateEmployee} close={() => setEditingEmployee(null)} role={role} />}
+      {!viewOnly && showEmployeeForm && <EmployeeAdd employee={newEmployee} setEmployee={setNewEmployee} save={saveEmployee} close={() => setShowEmployeeForm(false)} role={role} nextId={newEmployee._nextId} />}
+      {!viewOnly && editingEmployee && <EmployeeEdit employee={editingEmployee} setEmployee={setEditingEmployee} save={updateEmployee} close={() => setEditingEmployee(null)} role={role} />}
       {loadingEmployees && <p className="text-slate-400 text-sm mb-2">Loading employees...</p>}
 
       <Table
-        headers={["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Salary", "CNIC Expiry", "Status", "Action"]}
+        headers={viewOnly
+          ? ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "CNIC Expiry", "Status"]
+          : ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Salary", "CNIC Expiry", "Status", "Action"]}
         rows={filteredEmployees}
         renderRow={e => {
           const cnicStatus = cnicExpiryStatus(e.cnicExpiryDate);
@@ -377,7 +380,7 @@ export default function Employees({ query, setQuery, branch, setBranch, showEmpl
               <td className="px-4 py-3 text-slate-500 text-xs">{supervisorMap[e.supervisorId] || e.supervisorId || "—"}</td>
               <td className="px-4 py-3">{e.branch}</td>
               <td className="px-4 py-3">{e.dept}</td>
-              <td className="px-4 py-3">{money(e.salary)}</td>
+              {!viewOnly && <td className="px-4 py-3">{money(e.salary)}</td>}
               <td className="px-4 py-3">
                 {e.cnicExpiryDate
                   ? <span className={`text-xs px-2 py-1 rounded-xl font-medium ${cnicStatus === "expired" ? "bg-red-100 text-red-700" : cnicStatus === "soon" ? "bg-orange-100 text-orange-700" : "text-slate-500"}`}>
@@ -386,10 +389,12 @@ export default function Employees({ query, setQuery, branch, setBranch, showEmpl
                   : <span className="text-slate-300">—</span>}
               </td>
               <td className="px-4 py-3"><Badge tone={e.status === "Active" ? "green" : "yellow"}>{e.status}</Badge></td>
-              <td className="px-4 py-3 flex gap-2">
-                <Button variant="outline" onClick={() => setEditingEmployee(e)}>Edit</Button>
-                {e.status === "Active" && <Button variant="outline" onClick={() => updateEmployeeStatus(e.id, "Inactive")}>Inactive</Button>}
-              </td>
+              {!viewOnly && (
+                <td className="px-4 py-3 flex gap-2">
+                  <Button variant="outline" onClick={() => setEditingEmployee(e)}>Edit</Button>
+                  {e.status === "Active" && <Button variant="outline" onClick={() => updateEmployeeStatus(e.id, "Inactive")}>Inactive</Button>}
+                </td>
+              )}
             </tr>
           );
         }}

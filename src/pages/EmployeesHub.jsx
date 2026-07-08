@@ -16,9 +16,10 @@ const TABS = [
 export default function EmployeesHub({ role, ...props }) {
   const [tab, setTab] = useState("directory");
 
-  // Finance cannot see recruitment or documents
+  // Finance cannot see recruitment or documents; Branch Manager only sees the directory (view-only)
   const visibleTabs = TABS.filter(([k]) => {
     if (role === "Finance") return false; // Finance has no access to Employees hub
+    if (role === "Branch Manager") return k === "directory";
     return true;
   });
 

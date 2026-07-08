@@ -29,8 +29,9 @@ import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
 import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch, getNextEmployeeId, getNextTempId } from "./services/employeeService.js";
 import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
+import { signOut } from "./services/authService.js";
+import { getBranchFilter, isBranchRestricted } from "./utils/branchFilter.js";
 
-const demoUser = { name: "Fahad Nadeem", email: "fahad-nadeem@hotmail.com", role: "Master" };
 const demoLoans = [];
 const demoAdjustments = {};
 
@@ -73,9 +74,11 @@ const BLANK_EMPLOYEE = {
   isTemporary: false, isFieldEmployee: false, employmentStatus: "Permanent",
 };
 
-export default function BigBuyHRMS() {
+export default function BigBuyHRMS({ profile }) {
   const [active, setActive] = useState("dashboard");
-  const [role, setRole] = useState("Master");
+  const role = profile?.role || "Master";
+  const userBranch = profile?.branch || null;
+  const user = { name: profile?.full_name || "User", email: profile?.email || "" };
   const [employees, setEmployees] = useState([]);
   const [attendanceRows, setAttendanceRows] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
@@ -91,10 +94,12 @@ export default function BigBuyHRMS() {
   const [error, setError] = useState("");
   const [selectedPayslip, setSelectedPayslip] = useState(null);
   const visibleMenu = useMemo(() => MENU_ITEMS.filter(item => item.roles.includes(role)), [role]);
+  const branchRestriction = getBranchFilter(profile);
+  const effectiveBranch = branchRestriction || branch;
   const filteredEmployees = useMemo(() => employees.filter(emp =>
-    (branch === "All" || emp.branch === branch) &&
+    (effectiveBranch === "All" || emp.branch === effectiveBranch) &&
     `${emp.name} ${emp.id} ${emp.dept} ${emp.phone}`.toLowerCase().includes(query.toLowerCase())
-  ), [employees, branch, query]);
+  ), [employees, effectiveBranch, query]);
   const activeEmployees = useMemo(() => employees.filter(emp => emp.status === "Active"), [employees]);
   const payrollRows = useMemo(() => activeEmployees.map(emp => calculatePayrollForEmployee(emp, demoAdjustments[emp.id] || {}, demoLoans)), [activeEmployees]);
 
@@ -271,7 +276,9 @@ export default function BigBuyHRMS() {
   }
 
   const employeeProps = {
-    query, setQuery, branch, setBranch,
+    query, setQuery,
+    branch: effectiveBranch, setBranch: branchRestriction ? () => {} : setBranch,
+    branchLocked: !!branchRestriction,
     showEmployeeForm,
     setShowEmployeeForm: (v) => { if (v) openNewEmployeeForm(); else setShowEmployeeForm(false); },
     newEmployee, setNewEmployee, saveEmployee,
@@ -281,7 +288,7 @@ export default function BigBuyHRMS() {
   };
 
   return (
-    <Layout user={demoUser} role={role} setRole={setRole} active={active} setActive={setActive} visibleMenu={visibleMenu}>
+    <Layout user={user} role={role} onLogout={signOut} active={active} setActive={setActive} visibleMenu={visibleMenu}>
       {error && <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}
       {/* Temporary Employee Notification Banner (HR/Master only) */}
       {(role === "HR" || role === "Master") && tempAlerts.length > 0 && (
@@ -316,21 +323,21 @@ export default function BigBuyHRMS() {
       )}
 
       {/* Core HR */}
-      {active === "dashboard"   && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} />}
+      {active === "dashboard"   && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} role={role} branchFilter={branchRestriction} />}
       {active === "employees"   && <EmployeesHub {...employeeProps} role={role} />}
       {active === "departments" && <DepartmentManagement />}
       {active === "profile"     && <EmployeeProfile role={role} />}
 
       {/* Attendance */}
-      {active === "attendance"  && <Attendance rows={attendanceRows} role={role} />}
+      {active === "attendance"  && <Attendance rows={attendanceRows} role={role} branchFilter={branchRestriction} employees={employees} />}
       {active === "roster"      && <RosterManagement />}
       {active === "zkt"         && <ZKTSync />}
 
       {/* Leave */}
-      {active === "leave"       && <LeaveManagement role={role} />}
+      {active === "leave"       && <LeaveManagement role={role} actorName={user.name} branchFilter={branchRestriction} />}
 
       {/* Workforce */}
-      {active === "workforce"   && <WorkforceHub />}
+      {active === "workforce"   && <WorkforceHub role={role} branchFilter={branchRestriction} />}
 
       {/* Payroll & Finance */}
       {active === "payroll-automation" && <PayrollAutomation role={role} />}
@@ -345,7 +352,7 @@ export default function BigBuyHRMS() {
       {active === "shortages" && <Shortages role={role} />}
 
       {/* Approvals */}
-      {active === "approval-queue" && <ApprovalQueue role={role} />}
+      {active === "approval-queue" && <ApprovalQueue role={role} actorName={user.name} />}
 
       {/* System */}
       {active === "imports"     && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}

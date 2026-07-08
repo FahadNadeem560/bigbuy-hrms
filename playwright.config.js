@@ -10,8 +10,8 @@ export default defineConfig({
     ['html', { outputFolder: 'tests/results', open: 'never' }],
   ],
   use: {
-    baseURL: 'https://bigbuy-hrms.vercel.app',
-    headless: false,
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'https://bigbuy-hrms.vercel.app',
+    headless: process.env.PLAYWRIGHT_HEADLESS ? process.env.PLAYWRIGHT_HEADLESS === 'true' : false,
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     trace: 'retain-on-failure',

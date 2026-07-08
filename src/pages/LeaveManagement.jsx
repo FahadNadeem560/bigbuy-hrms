@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import LeaveLiability from "./LeaveLiability.jsx";
 import { LEAVE_QUOTA } from "../config/staffPolicies.js";
+import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage, fetchApprovalTrail } from "../services/leaveApprovalService.js";
 
 const LEAVE_TYPES = ["Annual", "Half Day", "Emergency", "Maternity", "Paternity", "Unpaid"];
 
@@ -75,7 +76,7 @@ function previewRowColor(status) {
   return "text-slate-600";
 }
 
-export default function LeaveManagement({ role }) {
+export default function LeaveManagement({ role, actorName, branchFilter }) {
   const [tab, setTab] = useState("apply");
   const [employees, setEmployees] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -90,10 +91,12 @@ export default function LeaveManagement({ role }) {
   const [toDate, setToDate] = useState("");
   const [reason, setReason] = useState("");
 
-  const [historyFilter, setHistoryFilter] = useState({ type: "All", branch: "All", dept: "", from: "", to: "" });
+  const [historyFilter, setHistoryFilter] = useState({ type: "All", branch: branchFilter || "All", dept: "", from: "", to: "" });
   const [calMonth, setCalMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [rejectId, setRejectId] = useState(null);
   const [rejectNote, setRejectNote] = useState("");
+  const [trailFor, setTrailFor] = useState(null);
+  const [trail, setTrail] = useState([]);
 
   // Import state
   const [importFile, setImportFile] = useState(null);
@@ -132,7 +135,7 @@ export default function LeaveManagement({ role }) {
     const { error } = await supabase.from("leave_requests").insert({
       employee_id: selEmp.employee_code, employee_code: selEmp.employee_code,
       employee_name: selEmp.full_name, leave_type: leaveType,
-      from_date: fromDate, to_date: toDate, reason, status: "Pending",
+      from_date: fromDate, to_date: toDate, reason, status: "Pending Supervisor Approval",
       days: daysDiff, is_unpaid: leaveType === "Unpaid",
       applied_date: new Date().toISOString().slice(0, 10),
     });
@@ -142,29 +145,39 @@ export default function LeaveManagement({ role }) {
     loadAll();
   }
 
-  async function updateStatus(id, status, rejectionNote) {
-    const upd = { status, approved_by: "HR", approved_at: new Date().toISOString() };
-    if (rejectionNote) upd.rejection_reason = rejectionNote;
-    const { error } = await supabase.from("leave_requests").update(upd).eq("id", id);
-    if (!error) {
-      if (status === "Approved" || status === "Pending HR") {
-        const req = requests.find(r => r.id === id);
-        await supabase.from("notifications").insert({
-          recipient_role: status === "Pending HR" ? "HR" : null,
-          recipient_code: status === "Approved" ? req?.employee_code : null,
-          type: "leave_approval", is_read: false,
-          title: status === "Approved" ? "Leave Approved" : "Leave Forwarded to HR",
-          message: `${req?.employee_name}'s ${req?.leave_type} leave has been ${status === "Approved" ? "approved" : "forwarded to HR for review"}.`,
-          created_at: new Date().toISOString(),
-        }).then(() => {});
-      }
-      setMsg(`Leave ${status.toLowerCase()}.`); loadAll();
+  function withBranch(r) {
+    const emp = employees.find(e => e.employee_code === r.employee_code);
+    return { ...r, branch: emp?.branch || null };
+  }
+
+  async function approveRequest(r, opts) {
+    try {
+      const target = await approveLeaveStage(withBranch(r), role, actorName || role, opts);
+      setMsg(`Leave ${target === "Approved" ? "approved" : "forwarded to next stage"}.`);
+      loadAll();
+    } catch (e) {
+      setErr(e.message);
     }
   }
 
-  function approveAction(r) {
-    if (r.status === "Pending Supervisor" || r.status === "Pending") return "Pending HR";
-    return "Approved";
+  async function rejectRequest(r, reason) {
+    try {
+      await rejectLeaveStage(withBranch(r), role, actorName || role, reason);
+      setMsg("Leave rejected.");
+      loadAll();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  async function toggleTrail(r) {
+    if (trailFor === r.id) { setTrailFor(null); return; }
+    setTrailFor(r.id);
+    try {
+      setTrail(await fetchApprovalTrail(r.id));
+    } catch (e) {
+      setErr(e.message);
+    }
   }
 
   // ─── Import Template ──────────────────────────────────────────────────────
@@ -283,8 +296,9 @@ export default function LeaveManagement({ role }) {
   }
 
   // ─── Derived data ─────────────────────────────────────────────────────────
-  const PENDING_STATUSES = ["Pending", "Pending Supervisor", "Pending HR"];
-  const pending = requests.filter(r => PENDING_STATUSES.includes(r.status));
+  const PENDING_STATUSES = ["Pending", "Pending Supervisor", "Pending HR", "Pending Supervisor Approval", "Pending Branch Manager Approval", "Pending HR Approval"];
+  const empBranchMap = useMemo(() => Object.fromEntries(employees.map(e => [e.employee_code, e.branch])), [employees]);
+  const pending = requests.filter(r => PENDING_STATUSES.includes(r.status) && (!branchFilter || empBranchMap[r.employee_code] === branchFilter));
 
   const filteredHistory = useMemo(() => requests.filter(r => {
     const typeOk = historyFilter.type === "All" || r.leave_type === historyFilter.type;
@@ -361,7 +375,7 @@ export default function LeaveManagement({ role }) {
             Annual leave quota: Non-Management / Floor Management = 14 days/year · Management = 24 days/year. Earned proportionally each month.
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div><p className="text-xs text-slate-500 mb-1">Employee</p><EmpPicker employees={employees} value={selEmp} onChange={setSelEmp} /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Employee</p><EmpPicker employees={branchFilter ? employees.filter(e => e.branch === branchFilter) : employees} value={selEmp} onChange={setSelEmp} /></div>
             <div>
               <p className="text-xs text-slate-500 mb-1">Leave Type</p>
               <select value={leaveType} onChange={e => setLeaveType(e.target.value)} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm">
@@ -395,8 +409,8 @@ export default function LeaveManagement({ role }) {
               {pending.length === 0
                 ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending leave requests.</td></tr>
                 : pending.map(r => {
-                  const nextStatus = approveAction(r);
-                  const isAwaitingSup = r.status === "Pending" || r.status === "Pending Supervisor";
+                  const stage = normalizeStage(r.status);
+                  const canAct = canActOnStage(role, r.status);
                   return (
                     <tr key={r.id}>
                       <td className="px-4 py-3 font-medium">{r.employee_name || r.employee_id}</td>
@@ -405,29 +419,52 @@ export default function LeaveManagement({ role }) {
                       <td className="px-4 py-3">{r.to_date}</td>
                       <td className="px-4 py-3">{r.days || "—"}</td>
                       <td className="px-4 py-3 max-w-[120px] truncate">{r.reason || "—"}</td>
-                      <td className="px-4 py-3">
-                        {isAwaitingSup ? <Badge tone="yellow">Awaiting Supervisor</Badge> : <Badge tone="blue">Awaiting HR</Badge>}
-                      </td>
+                      <td className="px-4 py-3"><Badge tone="yellow">{stage}</Badge></td>
                       <td className="px-4 py-3">{r.applied_date || r.created_at?.slice(0, 10)}</td>
                       <td className="px-4 py-3">
-                        {rejectId === r.id
+                        {!canAct
+                          ? <span className="text-xs text-slate-400">Not your stage</span>
+                          : rejectId === r.id
                           ? <div className="flex flex-col gap-1">
                               <input value={rejectNote} onChange={e => setRejectNote(e.target.value)} placeholder="Rejection note..." className="px-2 py-1 rounded-xl border border-slate-200 text-xs" />
                               <div className="flex gap-1">
-                                <Button onClick={() => { updateStatus(r.id, "Rejected by HR", rejectNote); setRejectId(null); setRejectNote(""); }} className="rounded-xl text-xs py-1 px-2">Confirm</Button>
+                                <Button onClick={() => { rejectRequest(r, rejectNote); setRejectId(null); setRejectNote(""); }} className="rounded-xl text-xs py-1 px-2">Confirm</Button>
                                 <Button variant="outline" onClick={() => setRejectId(null)} className="rounded-xl text-xs py-1 px-2">Cancel</Button>
                               </div>
                             </div>
-                          : <div className="flex gap-1">
-                              <Button className="rounded-xl text-xs py-1 px-2" onClick={() => updateStatus(r.id, nextStatus)}>
-                                {nextStatus === "Approved" ? "Approve" : "Fwd to HR"}
+                          : <div className="flex gap-1 flex-wrap">
+                              <Button className="rounded-xl text-xs py-1 px-2" onClick={() => approveRequest(r)}>
+                                {stage === "Pending HR Approval" ? "Approve" : "Forward"}
                               </Button>
+                              {role === "Master" && stage !== "Pending HR Approval" && (
+                                <Button variant="outline" className="rounded-xl text-xs py-1 px-2" onClick={() => approveRequest(r, { skip: true })} title="Skip remaining stages and approve now">Approve &amp; Skip</Button>
+                              )}
                               <Button variant="outline" className="rounded-xl text-xs py-1 px-2" onClick={() => setRejectId(r.id)}>Reject</Button>
                             </div>}
+                        <button onClick={() => toggleTrail(r)} className="block mt-1 text-xs text-slate-400 underline underline-offset-2 hover:text-slate-600">
+                          {trailFor === r.id ? "Hide trail" : "View trail"}
+                        </button>
                       </td>
                     </tr>
                   );
                 })}
+              {trailFor && pending.some(r => r.id === trailFor) && (
+                <tr>
+                  <td colSpan={9} className="px-4 py-3 bg-slate-50">
+                    <div className="text-xs font-semibold text-slate-600 mb-1">Approval Trail</div>
+                    {trail.length === 0
+                      ? <div className="text-xs text-slate-400">No stage actions recorded yet.</div>
+                      : <ul className="space-y-1">
+                          {trail.map(t => (
+                            <li key={t.id} className="text-xs text-slate-600">
+                              <span className="font-medium">{t.action}</span> at <span className="italic">{t.stage}</span> by {t.actor_name || t.actor_role} ({t.actor_role}) — {t.created_at?.slice(0, 16).replace("T", " ")}
+                              {t.reason && <span> — "{t.reason}"</span>}
+                            </li>
+                          ))}
+                        </ul>}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -580,8 +617,8 @@ export default function LeaveManagement({ role }) {
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1">Branch</p>
-                <select value={historyFilter.branch} onChange={e => setHistoryFilter(v => ({ ...v, branch: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm">
-                  {branches.map(b => <option key={b}>{b}</option>)}
+                <select value={historyFilter.branch} onChange={e => setHistoryFilter(v => ({ ...v, branch: e.target.value }))} disabled={!!branchFilter} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm disabled:bg-slate-50 disabled:text-slate-500">
+                  {(branchFilter ? [branchFilter] : branches).map(b => <option key={b}>{b}</option>)}
                 </select>
               </div>
               <div><p className="text-xs text-slate-500 mb-1">Department</p><input value={historyFilter.dept} onChange={e => setHistoryFilter(v => ({ ...v, dept: e.target.value }))} placeholder="Dept filter..." className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" /></div>

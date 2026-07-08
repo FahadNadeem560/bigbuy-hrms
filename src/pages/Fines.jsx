@@ -59,7 +59,7 @@ export default function Fines({ role }) {
   const payrollMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
   const canIssue = ["Master", "HR", "Supervisor", "Manager"].includes(role);
-  const canApprove = ["Master", "HR", "Finance"].includes(role);
+  const canApprove = ["Master", "HR", "Finance", "GM"].includes(role);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -101,11 +101,11 @@ export default function Fines({ role }) {
     await supabase.from("fines").update({
       status: "Approved", approved_by: role, approved_at: new Date().toISOString(),
     }).eq("id", id);
-    // Log to audit_logs
+    // Log to audit_logs (columns match the live table: action_type/performed_by/details -- an
+    // earlier version of this insert used non-existent columns and silently failed)
     await supabase.from("audit_logs").insert({
-      action: "fine_approved", entity: "fines", entity_id: id,
-      performed_by: role, details: `Fine of ${money(fine?.amount)} approved for ${fine?.employee_name}`,
-      created_at: new Date().toISOString(),
+      action_type: "fine_approved", performed_by: role,
+      details: `Fine ${id} of ${money(fine?.amount)} approved for ${fine?.employee_name}`,
     }).then(() => {});
     setMsg("Fine approved and will be deducted in payroll."); loadAll();
   }

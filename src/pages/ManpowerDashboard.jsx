@@ -3,9 +3,9 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Badge, PageTitle } from "../components/ui.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 
-export default function ManpowerDashboard() {
+export default function ManpowerDashboard({ branchFilter }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [branch, setBranch] = useState("All");
+  const [branch, setBranch] = useState(branchFilter || "All");
   const [attendance, setAttendance] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -76,9 +76,10 @@ export default function ManpowerDashboard() {
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
         <div className="flex flex-wrap gap-3">
           <input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
-          <select value={branch} onChange={e => setBranch(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-            <option value="All">All Branches</option>
-            {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
+          <select value={branch} onChange={e => setBranch(e.target.value)} disabled={!!branchFilter} className="px-4 py-2 rounded-xl border border-slate-200 text-sm disabled:bg-slate-50 disabled:text-slate-500">
+            {branchFilter
+              ? <option value={branchFilter}>{branchFilter}</option>
+              : <><option value="All">All Branches</option>{Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}</>}
           </select>
         </div>
       </div>

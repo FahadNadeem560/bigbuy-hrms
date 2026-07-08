@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Badge, Button, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
+import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } from "../services/leaveApprovalService.js";
 
-const PENDING_LEAVE = ["Pending", "Pending Supervisor", "Pending HR"];
+const PENDING_LEAVE = ["Pending", "Pending Supervisor", "Pending HR", "Pending Supervisor Approval", "Pending Branch Manager Approval", "Pending HR Approval"];
 
 function StageBadge({ status }) {
   const map = {
@@ -15,7 +16,7 @@ function StageBadge({ status }) {
     "Rejected by Supervisor": { tone: "red", label: "Rejected by Sup." },
     "Rejected by HR":     { tone: "red",    label: "Rejected by HR" },
   };
-  const { tone = "slate", label = status } = map[status] || {};
+  const { tone = "slate", label = status } = map[status] || { label: status };
   return <Badge tone={tone}>{label}</Badge>;
 }
 
@@ -46,7 +47,7 @@ const TABS = [
   ["increments",   "Salary Increments"],
 ];
 
-export default function ApprovalQueue({ role }) {
+export default function ApprovalQueue({ role, actorName }) {
   const [tab, setTab] = useState("leave");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -122,22 +123,31 @@ export default function ApprovalQueue({ role }) {
     await supabase.from("notifications").insert({ recipient_role: recipientRole, type, title, message, is_read: false }).then(() => {});
   }
 
-  // ── Leave actions ──
+  // ── Leave actions (shared chain logic with LeaveManagement.jsx's Queue tab) ──
   async function approveLeave(id) {
     const req = leaveReqs.find(r => r.id === id);
-    const newStatus = (req?.status === "Pending HR" || req?.status === "Pending") ? "Approved" : "Pending HR";
-    await supabase.from("leave_requests").update({ status: newStatus, approved_by: role, approved_at: new Date().toISOString() }).eq("id", id);
-    if (newStatus === "Approved") await notify("HR", "leave_approval", "Leave Approved", `${req?.employee_name}'s leave has been approved.`);
-    setMsg(`Leave ${newStatus === "Approved" ? "approved" : "forwarded to HR"}.`);
-    loadAll();
+    if (!req) return;
+    const branch = empMap[req.employee_code]?.branch || null;
+    try {
+      const target = await approveLeaveStage({ ...req, branch }, role, actorName || role);
+      setMsg(`Leave ${target === "Approved" ? "approved" : "forwarded to next stage"}.`);
+      loadAll();
+    } catch (e) {
+      setErr(e.message);
+    }
   }
 
   async function rejectLeave(id, reason) {
     const req = leaveReqs.find(r => r.id === id);
-    const rejStatus = role === "Master" ? "Rejected by HR" : "Rejected by HR";
-    await supabase.from("leave_requests").update({ status: rejStatus, rejection_reason: reason, approved_by: role }).eq("id", id);
-    await notify(null, "leave_approval", "Leave Rejected", `${req?.employee_name}'s leave was rejected. Reason: ${reason}`);
-    setMsg("Leave rejected."); loadAll();
+    if (!req) return;
+    const branch = empMap[req.employee_code]?.branch || null;
+    try {
+      await rejectLeaveStage({ ...req, branch }, role, actorName || role, reason);
+      setMsg("Leave rejected.");
+      loadAll();
+    } catch (e) {
+      setErr(e.message);
+    }
   }
 
   // ── Attendance correction actions ──
@@ -242,7 +252,7 @@ export default function ApprovalQueue({ role }) {
                         id={r.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveLeave} onReject={rejectLeave}
-                        disabled={r.status === "Pending Supervisor" && role !== "Master"} />
+                        disabled={!canActOnStage(role, r.status)} />
                     </td>
                   </tr>
                 ))}

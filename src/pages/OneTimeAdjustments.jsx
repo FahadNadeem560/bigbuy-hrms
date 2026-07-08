@@ -84,8 +84,11 @@ export default function OneTimeAdjustments({ role }) {
   }
 
   async function approve(id) {
-    const { error } = await supabase.from("one_time_adjustments").update({ status: "Approved", approved_by: "Master", approved_at: new Date().toISOString() }).eq("id", id);
-    if (!error) { setMsg("Adjustment approved."); loadAll(); }
+    const { error } = await supabase.from("one_time_adjustments").update({ status: "Approved", approved_by: role, approved_at: new Date().toISOString() }).eq("id", id);
+    if (!error) {
+      await supabase.from("audit_logs").insert({ action_type: "adjustment_approved", performed_by: role, details: `Adjustment ${id} approved` }).then(() => {});
+      setMsg("Adjustment approved."); loadAll();
+    }
   }
 
   async function reject(id) {
@@ -97,10 +100,11 @@ export default function OneTimeAdjustments({ role }) {
 
   const pending = adjustments.filter(a => a.status === "Pending");
 
+  const canApprove = ["Master", "GM"].includes(role);
   const tabs = [
     ["new", "New Adjustment"],
     ["mine", "Submissions"],
-    ...(role === "Master" ? [["queue", `Approval Queue (${pending.length})`]] : []),
+    ...(canApprove ? [["queue", `Approval Queue (${pending.length})`]] : []),
   ];
 
   return (
@@ -167,7 +171,7 @@ export default function OneTimeAdjustments({ role }) {
         </div>
       )}
 
-      {tab === "queue" && role === "Master" && (
+      {tab === "queue" && canApprove && (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Approval Queue</h2><p className="text-xs text-slate-400">{pending.length} pending</p></div>
           <table className="w-full min-w-[900px] text-sm">

@@ -27,10 +27,10 @@ function formatTime(t) {
   return s;
 }
 
-export default function Timesheet() {
+export default function Timesheet({ branchFilter }) {
   const [empSearch, setEmpSearch] = useState("");
   const [department, setDepartment] = useState("");
-  const [branch, setBranch] = useState("All");
+  const [branch, setBranch] = useState(branchFilter || "All");
   const [fromDate, setFromDate] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
@@ -47,12 +47,13 @@ export default function Timesheet() {
   const dropdownRef = useRef(null);
 
   useEffect(() => {
-    supabase
+    let q = supabase
       .from("employees")
       .select("employee_code, full_name, department, branch, staff_level, ot_eligible, status")
-      .order("full_name")
-      .then(({ data }) => setEmployees(data || []));
-  }, []);
+      .order("full_name");
+    if (branchFilter) q = q.eq("branch", branchFilter);
+    q.then(({ data }) => setEmployees(data || []));
+  }, [branchFilter]);
 
   useEffect(() => {
     function handleClick(e) {
@@ -262,7 +263,8 @@ export default function Timesheet() {
           <select
             value={branch}
             onChange={(e) => setBranch(e.target.value)}
-            className="px-4 py-2 rounded-xl border border-slate-200 text-sm"
+            disabled={!!branchFilter}
+            className="px-4 py-2 rounded-xl border border-slate-200 text-sm disabled:bg-slate-50 disabled:text-slate-500"
           >
             <option value="All">All Branches</option>
             {Object.keys(BRANCH_CODE_MAP).map((b) => (
