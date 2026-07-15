@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { money } from "../utils/format.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import { approveLeaveStage, rejectLeaveStage, normalizeStage, routeInitialApprover } from "../services/leaveApprovalService.js";
 
 const BASE_TABS = [
   { id: "attendance",  label: "My Attendance",  icon: "⏱️" },
@@ -76,6 +77,7 @@ export default function EmployeeSelfService() {
   const [teamAtt, setTeamAtt] = useState([]);
   const [teamSignoffs, setTeamSignoffs] = useState([]);
   const [teamMsg, setTeamMsg] = useState("");
+  const [hasDirectReports, setHasDirectReports] = useState(false);
 
   // Data
   const [attendance, setAttendance] = useState([]);
@@ -99,8 +101,13 @@ export default function EmployeeSelfService() {
     const sess = JSON.parse(raw);
     setSession(sess);
     loadAll(sess);
-    loadTeam(sess);
   }, []);
+
+  // Team lookup needs the employee's UUID id (for employee_hierarchy.reports_to_employee_id),
+  // which only arrives once the profile row loads — the localStorage session only has employee_code.
+  useEffect(() => {
+    if (profile?.id) loadTeam(profile.id);
+  }, [profile?.id]);
 
   async function loadAll(sess) {
     setLoading(true); setErr("");
@@ -163,32 +170,63 @@ export default function EmployeeSelfService() {
     return { totalOT, payableOT };
   }, [attendance]);
 
-  async function loadTeam(sess) {
+  // A leave request can be actioned here if it's still on the legacy fixed
+  // chain's first stage (any listed supervisor could act, matching the old
+  // behavior), or if the dynamic hierarchy chain has routed it specifically
+  // to this employee (it may have moved past them via escalation).
+  function canActOnTeamRequest(request, myCode) {
+    const stage = normalizeStage(request.status);
+    if (!request.current_approver_id) return stage === "Pending Supervisor Approval";
+    return request.current_approver_code === myCode;
+  }
+
+  async function loadTeam(myId) {
     try {
+      const { data: reportsRows } = await supabase.from("employee_hierarchy")
+        .select("employee_id, employee_code")
+        .eq("reports_to_employee_id", myId).eq("is_active", true);
+      const teamCodes = (reportsRows || []).map(r => r.employee_code);
+      setHasDirectReports(teamCodes.length > 0);
+      if (teamCodes.length === 0) {
+        setTeam([]); setTeamLeave([]); setTeamAtt([]); setTeamSignoffs([]);
+        return;
+      }
       const today = new Date().toISOString().slice(0, 10);
       const month = today.slice(0, 7);
       const [{ data: members }, { data: lv }, { data: att }, { data: so }] = await Promise.all([
-        supabase.from("employees").select("employee_code,full_name,designation,department").eq("supervisor_id", sess.employee_code).eq("status", "Active"),
-        supabase.from("leave_requests").select("*").eq("status", "Pending Supervisor").order("created_at", { ascending: false }),
-        supabase.from("attendance").select("employee_code,attendance_status,check_in,check_out,work_date").eq("work_date", today),
-        supabase.from("timesheet_signoffs").select("*").eq("month", month),
+        supabase.from("employees").select("employee_code,full_name,designation,department,branch").in("employee_code", teamCodes).eq("status", "Active"),
+        supabase.from("leave_requests").select("*").in("employee_code", teamCodes).like("status", "Pending%").order("created_at", { ascending: false }),
+        supabase.from("attendance").select("employee_code,attendance_status,check_in,check_out,work_date").eq("work_date", today).in("employee_code", teamCodes),
+        supabase.from("timesheet_signoffs").select("*").eq("month", month).in("employee_code", teamCodes),
       ]);
       setTeam(members || []);
-      setTeamLeave(lv || []);
+      // HR-terminal-stage requests are HR's job from the main app, not shown here.
+      setTeamLeave((lv || []).filter(r => normalizeStage(r.status) !== "Pending HR Approval"));
       setTeamAtt(att || []);
       setTeamSignoffs(so || []);
     } catch { /* ignore */ }
   }
 
-  async function approveSupervisorLeave(id, empName) {
-    await supabase.from("leave_requests").update({ status: "Pending HR", approved_by: session.employee_code, approved_at: new Date().toISOString() }).eq("id", id);
-    await supabase.from("notifications").insert({ recipient_role: "HR", type: "leave_approval", title: "Leave Pending HR Approval", message: `${empName}'s leave has been approved by supervisor and is awaiting HR review.`, is_read: false });
-    setTeamMsg("Leave forwarded to HR."); loadTeam(session);
+  async function approveSupervisorLeave(request) {
+    try {
+      const emp = team.find(m => m.employee_code === request.employee_code);
+      const target = await approveLeaveStage({ ...request, branch: emp?.branch || session.branch }, "Supervisor", session.name);
+      setTeamMsg(target === "Approved" ? "Leave approved." : "Leave approved and forwarded to the next approver.");
+      loadTeam(profile.id);
+    } catch (e) {
+      setTeamMsg(`Error: ${e.message}`);
+    }
   }
 
-  async function rejectSupervisorLeave(id, empName, reason) {
-    await supabase.from("leave_requests").update({ status: "Rejected by Supervisor", rejection_reason: reason, approved_by: session.employee_code }).eq("id", id);
-    setTeamMsg("Leave rejected."); loadTeam(session);
+  async function rejectSupervisorLeave(request, reason) {
+    try {
+      const emp = team.find(m => m.employee_code === request.employee_code);
+      await rejectLeaveStage({ ...request, branch: emp?.branch || session.branch }, "Supervisor", session.name, reason);
+      setTeamMsg("Leave rejected.");
+      loadTeam(profile.id);
+    } catch (e) {
+      setTeamMsg(`Error: ${e.message}`);
+    }
   }
 
   async function signOffTimesheet(empCode, empName) {
@@ -200,7 +238,7 @@ export default function EmployeeSelfService() {
       await supabase.from("timesheet_signoffs").insert({ employee_code: empCode, employee_name: empName, month, supervisor_signed_off: true, supervisor_code: session.employee_code, supervisor_name: session.name, signed_at: new Date().toISOString(), hr_reviewed: false, payroll_ready: false });
     }
     await supabase.from("notifications").insert({ recipient_role: "HR", type: "timesheet_signoff", title: "Timesheet Signed Off", message: `Supervisor signed off ${empName}'s ${month} timesheet.`, is_read: false });
-    setTeamMsg(`Timesheet signed off for ${empName}.`); loadTeam(session);
+    setTeamMsg(`Timesheet signed off for ${empName}.`); loadTeam(profile.id);
   }
 
   async function submitLeave(e) {
@@ -208,19 +246,21 @@ export default function EmployeeSelfService() {
     if (!leaveForm.from || !leaveForm.to) return;
     setLeaveSubmitting(true); setLeaveMsg("");
     try {
+      const routing = await routeInitialApprover(session.employee_code);
       const { error } = await supabase.from("leave_requests").insert({
         employee_code: session.employee_code,
         leave_type: leaveForm.type,
         start_date: leaveForm.from,
         end_date: leaveForm.to,
         reason: leaveForm.reason,
-        status: "Pending Supervisor",
+        ...routing,
         from_date: leaveForm.from, to_date: leaveForm.to,
         employee_name: session.name,
         applied_date: new Date().toISOString().slice(0, 10),
+        approval_trail: [], stage_entered_at: new Date().toISOString(),
       });
       if (error) throw error;
-      setLeaveMsg("Leave request submitted. Pending supervisor approval.");
+      setLeaveMsg(`Leave request submitted. ${routing.status === "Pending HR Approval" ? "Pending HR approval." : `Pending ${routing.current_approver_name}'s approval.`}`);
       setLeaveForm(BLANK_LEAVE);
       const { data } = await supabase.from("leave_requests").select("*").eq("employee_code", session.employee_code).order("created_at", { ascending: false });
       setLeaveRequests(data || []);
@@ -292,7 +332,7 @@ export default function EmployeeSelfService() {
   }
 
   const isFieldEmployee = profile?.is_field_employee;
-  const isSupervisor = profile?.is_supervisor || profile?.is_manager;
+  const isSupervisor = hasDirectReports;
   const TABS = [
     ...BASE_TABS,
     ...(isFieldEmployee ? [{ id: "logtime", label: "Log My Time", icon: "📍" }] : []),
@@ -856,7 +896,7 @@ export default function EmployeeSelfService() {
                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
                   <h2 className="font-bold text-slate-800 mb-4">My Team — {team.length} Direct Reports</h2>
                   {team.length === 0
-                    ? <p className="text-sm text-slate-400">No direct reports assigned. Ask HR to set your employee code as supervisor for your team members.</p>
+                    ? <p className="text-sm text-slate-400">No direct reports assigned. Ask HR to assign your team members to you from Settings → Org Hierarchy.</p>
                     : (
                       <div className="space-y-3">
                         {team.map(m => {
@@ -892,21 +932,26 @@ export default function EmployeeSelfService() {
                               {pendingLv.length > 0 && (
                                 <div className="mt-3 border-t border-slate-100 pt-3">
                                   <p className="text-xs font-semibold text-slate-500 mb-2">Pending Leave Approvals</p>
-                                  {pendingLv.map(lv => (
+                                  {pendingLv.map(lv => {
+                                    const canAct = canActOnTeamRequest(lv, session.employee_code);
+                                    return (
                                     <div key={lv.id} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
                                       <div className="text-sm">
                                         <span className="font-medium">{lv.leave_type}</span>
                                         <span className="text-slate-400 text-xs ml-2">{lv.from_date} → {lv.to_date}</span>
                                         {lv.reason && <span className="text-slate-400 text-xs ml-2">· {lv.reason}</span>}
+                                        {!canAct && <span className="text-slate-400 text-xs ml-2">· awaiting {lv.current_approver_name || "another approver"}</span>}
                                       </div>
-                                      <div className="flex gap-2">
-                                        <button onClick={() => approveSupervisorLeave(lv.id, m.full_name)}
-                                          className="px-3 py-1 bg-emerald-600 text-white rounded-xl text-xs hover:bg-emerald-700 transition">Approve</button>
-                                        <button onClick={() => { const reason = prompt("Rejection reason?"); if (reason) rejectSupervisorLeave(lv.id, m.full_name, reason); }}
-                                          className="px-3 py-1 border border-slate-200 text-slate-600 rounded-xl text-xs hover:bg-slate-50 transition">Reject</button>
-                                      </div>
+                                      {canAct && (
+                                        <div className="flex gap-2">
+                                          <button onClick={() => approveSupervisorLeave(lv)}
+                                            className="px-3 py-1 bg-emerald-600 text-white rounded-xl text-xs hover:bg-emerald-700 transition">Approve</button>
+                                          <button onClick={() => { const reason = prompt("Rejection reason?"); if (reason) rejectSupervisorLeave(lv, reason); }}
+                                            className="px-3 py-1 border border-slate-200 text-slate-600 rounded-xl text-xs hover:bg-slate-50 transition">Reject</button>
+                                        </div>
+                                      )}
                                     </div>
-                                  ))}
+                                  );})}
                                 </div>
                               )}
                             </div>
