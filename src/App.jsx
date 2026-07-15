@@ -18,6 +18,7 @@ import AllowancesHub from "./pages/AllowancesHub.jsx";
 import PayrollExtras from "./pages/PayrollExtras.jsx";
 import LoanHub from "./pages/LoanHub.jsx";
 import SettingsHub from "./pages/SettingsHub.jsx";
+import HierarchyBuilder from "./pages/HierarchyBuilder.jsx";
 import ApprovalQueue from "./pages/ApprovalQueue.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
 import Fines from "./pages/Fines.jsx";
@@ -70,7 +71,6 @@ const BLANK_EMPLOYEE = {
   personalPhone: "", workPhone: "", email: "",
   bankName: "", accountNumber: "", iban: "",
   photoUrl: "", cnicCopyUrl: "", employmentContractUrl: "",
-  supervisorId: "", isSupervisor: false, isManager: false,
   isTemporary: false, isFieldEmployee: false, employmentStatus: "Permanent",
 };
 
@@ -79,6 +79,7 @@ export default function BigBuyHRMS({ profile }) {
   const role = profile?.role || "Master";
   const userBranch = profile?.branch || null;
   const user = { name: profile?.full_name || "User", email: profile?.email || "" };
+  const actorEmployeeCode = profile?.employee_id || null;
   const [employees, setEmployees] = useState([]);
   const [attendanceRows, setAttendanceRows] = useState([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
@@ -199,9 +200,6 @@ export default function BigBuyHRMS({ profile }) {
       personal_phone: newEmployee.personalPhone, work_phone: newEmployee.workPhone, email: newEmployee.email,
       bank_name: newEmployee.bankName, account_number: newEmployee.accountNumber, iban: newEmployee.iban,
       photo_url: newEmployee.photoUrl, cnic_copy_url: newEmployee.cnicCopyUrl, employment_contract_url: newEmployee.employmentContractUrl,
-      supervisor_id: newEmployee.supervisorId || null,
-      is_supervisor: !!newEmployee.isSupervisor,
-      is_manager: !!newEmployee.isManager,
       is_temporary: isTemp,
       temp_id: tempId,
       employment_status: employmentStatus,
@@ -228,9 +226,6 @@ export default function BigBuyHRMS({ profile }) {
         billing_address: editingEmployee.billingAddress, permanent_address: editingEmployee.permanentAddress, current_address: editingEmployee.currentAddress,
         personal_phone: editingEmployee.personalPhone, work_phone: editingEmployee.workPhone, email: editingEmployee.email,
         bank_name: editingEmployee.bankName, account_number: editingEmployee.accountNumber, iban: editingEmployee.iban,
-        supervisor_id: editingEmployee.supervisorId || null,
-        is_supervisor: !!editingEmployee.isSupervisor,
-        is_manager: !!editingEmployee.isManager,
       });
       await loadEmployees(); setEditingEmployee(null);
     } catch (err) { setError(`Update failed: ${err.message}`); }
@@ -334,7 +329,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "zkt"         && <ZKTSync />}
 
       {/* Leave */}
-      {active === "leave"       && <LeaveManagement role={role} actorName={user.name} branchFilter={branchRestriction} />}
+      {active === "leave"       && <LeaveManagement role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} branchFilter={branchRestriction} />}
 
       {/* Workforce */}
       {active === "workforce"   && <WorkforceHub role={role} branchFilter={branchRestriction} />}
@@ -352,11 +347,12 @@ export default function BigBuyHRMS({ profile }) {
       {active === "shortages" && <Shortages role={role} />}
 
       {/* Approvals */}
-      {active === "approval-queue" && <ApprovalQueue role={role} actorName={user.name} />}
+      {active === "approval-queue" && <ApprovalQueue role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
 
       {/* System */}
       {active === "imports"     && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
       {active === "settings"    && <SettingsHub />}
+      {active === "hierarchy"   && <HierarchyBuilder />}
       {active === "ai-assistant"&& <AIAssistant />}
     </Layout>
   );

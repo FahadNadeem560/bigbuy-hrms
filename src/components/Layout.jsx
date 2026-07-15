@@ -20,7 +20,7 @@ export default function Layout({ user, role, onLogout, active, setActive, visibl
       <div className="flex">
 
         {/* Sidebar */}
-        <aside className="hidden lg:flex w-72 min-h-screen bg-slate-950 text-white p-5 flex-col fixed left-0 top-0 bottom-0">
+        <aside className="hidden lg:flex w-72 min-h-screen bg-slate-950 text-white p-5 flex-col fixed left-0 top-0 bottom-0 print:hidden">
           <div className="mb-6">
             <div className="text-2xl font-bold">Big Buy HRMS</div>
             <div className="text-slate-400 text-sm mt-1">Staff • Attendance • Payroll</div>
@@ -50,9 +50,9 @@ export default function Layout({ user, role, onLogout, active, setActive, visibl
         </aside>
 
         {/* Main */}
-        <main className="flex-1 p-4 md:p-8 lg:ml-72">
+        <main className="flex-1 p-4 md:p-8 lg:ml-72 print:ml-0 print:p-0">
           {/* Top bar */}
-          <div className="mb-5 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+          <div className="mb-5 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-3 print:hidden">
             <div>
               <div className="font-bold">{user.name}</div>
               <div className="text-sm text-slate-500">{user.email} • {role}</div>
@@ -65,7 +65,7 @@ export default function Layout({ user, role, onLogout, active, setActive, visibl
           </div>
 
           {/* Mobile nav */}
-          <div className="lg:hidden mb-4 bg-slate-950 text-white rounded-2xl p-4">
+          <div className="lg:hidden mb-4 bg-slate-950 text-white rounded-2xl p-4 print:hidden">
             <div className="font-bold text-xl">Big Buy HRMS</div>
             <div className="flex gap-2 overflow-x-auto mt-4">
               {visibleMenu.map(item => (

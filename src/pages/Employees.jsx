@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Badge, Button, PageTitle, Table } from "../components/ui";
 import { BRANCH_CODE_MAP } from "../constants/branches";
@@ -37,57 +37,33 @@ function Field({ label, children }) {
   return <div><p className="text-xs text-slate-500 mb-1">{label}</p>{children}</div>;
 }
 
-function SupervisorPicker({ value, onChange }) {
-  const [supervisors, setSupervisors] = useState([]);
-  const [q, setQ] = useState("");
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+function HierarchyReadout({ employeeCode }) {
+  const [row, setRow] = useState(undefined); // undefined = loading, null = none found
 
   useEffect(() => {
-    supabase.from("employees")
-      .select("employee_code,full_name,designation,department")
-      .or("is_supervisor.eq.true,is_manager.eq.true")
-      .eq("status", "Active").order("full_name")
-      .then(({ data }) => setSupervisors(data || []));
-  }, []);
-
-  useEffect(() => {
-    function h(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, []);
-
-  const hits = useMemo(() => {
-    if (!q.trim()) return supervisors.slice(0, 10);
-    const lq = q.toLowerCase();
-    return supervisors.filter(e => e.full_name?.toLowerCase().includes(lq) || e.employee_code?.toLowerCase().includes(lq)).slice(0, 10);
-  }, [supervisors, q]);
-
-  const selected = supervisors.find(s => s.employee_code === value);
+    if (!employeeCode) { setRow(null); return; }
+    let active = true;
+    supabase.from("employee_hierarchy")
+      .select("level_number, level_name, reports_to_name")
+      .eq("employee_code", employeeCode).eq("is_active", true)
+      .order("created_at", { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => { if (active) setRow(data || null); });
+    return () => { active = false; };
+  }, [employeeCode]);
 
   return (
-    <div className="relative" ref={ref}>
-      <input
-        value={selected ? `${selected.employee_code} — ${selected.full_name}` : q}
-        onChange={e => { if (value) onChange(""); setQ(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        placeholder="Search supervisor…"
-        className="px-4 py-2 border rounded-xl w-full text-sm" />
-      {open && (
-        <div className="absolute z-20 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-48 overflow-y-auto">
-          <button onMouseDown={e => e.preventDefault()} onClick={() => { onChange(""); setQ(""); setOpen(false); }}
-            className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm text-slate-400">— None —</button>
-          {hits.map(e => (
-            <button key={e.employee_code} onMouseDown={ev => ev.preventDefault()}
-              onClick={() => { onChange(e.employee_code); setQ(""); setOpen(false); }}
-              className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm">
-              <span className="font-semibold">{e.employee_code}</span> — {e.full_name}
-              <span className="text-xs text-slate-400 ml-2">{e.designation || e.department}</span>
-            </button>
-          ))}
-          {hits.length === 0 && <div className="px-4 py-2 text-sm text-slate-400">No supervisors / managers found</div>}
+    <div className="md:col-span-2 p-3 bg-slate-50 rounded-xl grid grid-cols-1 md:grid-cols-2 gap-3">
+      <Field label="Hierarchy Position">
+        <div className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-sm text-slate-700">
+          {row === undefined ? "Loading…" : row ? `Level ${row.level_number} — ${row.level_name}` : "Not yet assigned"}
         </div>
-      )}
+      </Field>
+      <Field label="Reports To">
+        <div className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-sm text-slate-700">
+          {row === undefined ? "Loading…" : row?.reports_to_name || "—"}
+        </div>
+      </Field>
+      <p className="md:col-span-2 text-xs text-slate-400">Manage hierarchy from Settings → Org Hierarchy.</p>
     </div>
   );
 }
@@ -148,24 +124,14 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
       </Section>
 
       <Section title="Hierarchy & Role">
-        <Field label="Direct Supervisor">
-          <SupervisorPicker value={employee.supervisorId || ""} onChange={code => setEmployee(v => ({ ...v, supervisorId: code }))} />
-        </Field>
-        <Field label="Role Flags">
-          <div className="flex flex-wrap gap-4 mt-2">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={!!employee.isSupervisor} onChange={e => setEmployee(v => ({ ...v, isSupervisor: e.target.checked }))} className="rounded" />
-              <span>Is Supervisor</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={!!employee.isManager} onChange={e => setEmployee(v => ({ ...v, isManager: e.target.checked }))} className="rounded" />
-              <span>Is Manager</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={!!employee.isTemporary} onChange={e => setEmployee(v => ({ ...v, isTemporary: e.target.checked }))} className="rounded" />
-              <span className="text-red-700 font-medium">Temporary Employee</span>
-            </label>
-          </div>
+        <div className="md:col-span-2 p-3 bg-slate-50 rounded-xl text-sm text-slate-500">
+          Hierarchy position (level and reporting line) is assigned after this employee is created, from Settings → Org Hierarchy.
+        </div>
+        <Field label="Employee Status">
+          <label className="flex items-center gap-2 text-sm cursor-pointer mt-2">
+            <input type="checkbox" checked={!!employee.isTemporary} onChange={e => setEmployee(v => ({ ...v, isTemporary: e.target.checked }))} className="rounded" />
+            <span className="text-red-700 font-medium">Temporary Employee</span>
+          </label>
           {employee.isTemporary && (
             <p className="text-xs text-red-600 mt-1.5 bg-red-50 px-3 py-1.5 rounded-xl">
               A TEMP-xxx ID will be auto-assigned. HR will be notified after 7 days to enroll permanently or reject.
@@ -272,21 +238,7 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
       </Section>
 
       <Section title="Hierarchy & Role">
-        <Field label="Direct Supervisor">
-          <SupervisorPicker value={employee.supervisorId || ""} onChange={code => setEmployee(v => ({ ...v, supervisorId: code }))} />
-        </Field>
-        <Field label="Role Flags">
-          <div className="flex gap-4 mt-2">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={!!employee.isSupervisor} onChange={e => setEmployee(v => ({ ...v, isSupervisor: e.target.checked }))} className="rounded" />
-              <span>Is Supervisor</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input type="checkbox" checked={!!employee.isManager} onChange={e => setEmployee(v => ({ ...v, isManager: e.target.checked }))} className="rounded" />
-              <span>Is Manager</span>
-            </label>
-          </div>
-        </Field>
+        <HierarchyReadout employeeCode={employee.id} />
       </Section>
 
       <Section title="Identity & CNIC">

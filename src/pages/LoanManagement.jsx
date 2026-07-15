@@ -39,7 +39,7 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-const BLANK = { employee: null, loan_amount: "", monthly_deduction: "", start_date: "", reason: "" };
+const BLANK = { employee: null, loan_amount: "", monthly_deduction: "", start_date: "", reason: "", guarantor1: null, guarantor2: null };
 
 export default function LoanManagement() {
   const [loans, setLoans] = useState([]);
@@ -82,6 +82,8 @@ export default function LoanManagement() {
       monthly_deduction: Number(form.monthly_deduction), outstanding_balance: Number(form.loan_amount),
       start_date: form.start_date, reason: form.reason, status: "Active",
       repayment_months: months, auto_deduct: true, created_at: new Date().toISOString(),
+      guarantor_1_code: form.guarantor1?.employee_code || null, guarantor_1_name: form.guarantor1?.full_name || null,
+      guarantor_2_code: form.guarantor2?.employee_code || null, guarantor_2_name: form.guarantor2?.full_name || null,
     });
     if (error) return setErr(error.message);
     setMsg("Loan application created successfully.");
@@ -154,6 +156,8 @@ export default function LoanManagement() {
             {form.loan_amount && form.monthly_deduction && (
               <div className="md:col-span-2 p-3 bg-slate-50 rounded-xl text-sm text-slate-600">Repayment: <strong>{Math.ceil(Number(form.loan_amount) / Number(form.monthly_deduction))} months</strong></div>
             )}
+            <div><p className="text-xs text-slate-500 mb-1">Guarantor 1</p><EmpPicker employees={employees.filter(e => e.employee_code !== form.employee?.employee_code)} value={form.guarantor1} onChange={v => setForm(f => ({ ...f, guarantor1: v }))} /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Guarantor 2</p><EmpPicker employees={employees.filter(e => e.employee_code !== form.employee?.employee_code)} value={form.guarantor2} onChange={v => setForm(f => ({ ...f, guarantor2: v }))} /></div>
             <div className="md:col-span-2"><p className="text-xs text-slate-500 mb-1">Reason</p><input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason for loan..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
           </div>
           <div className="mt-4 flex gap-2"><Button onClick={submitLoan} className="rounded-2xl">Submit Loan</Button><Button variant="outline" onClick={() => setShowForm(false)} className="rounded-2xl">Cancel</Button></div>
@@ -178,21 +182,26 @@ export default function LoanManagement() {
 
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Ledger</h2><p className="text-xs text-slate-400 mt-0.5">{filtered.length} records</p></div>
-        <table className="w-full min-w-[950px] text-sm">
+        <table className="w-full min-w-[1050px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee", "Loan Amount", "Monthly Ded.", "Outstanding", "Start Date", "Months", "Status", "Actions"].map(h => (
+            <tr>{["Employee", "Guarantors", "Loan Amount", "Monthly Ded.", "Outstanding", "Start Date", "Months", "Status", "Actions"].map(h => (
               <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
             ))}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0
-              ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No loans found.</td></tr>
+              ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No loans found.</td></tr>
               : filtered.map(l => (
                 <tr key={l.id}>
                   <td className="px-4 py-3">
                     <button onClick={() => setSelectedHistory(l.employee_code || l.employee_id)} className="font-medium text-blue-600 hover:underline">
                       {l.employee_name || l.employee_code || l.employee_id}
                     </button>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-slate-500">
+                    {l.guarantor_1_name ? <div>{l.guarantor_1_code} — {l.guarantor_1_name}</div> : null}
+                    {l.guarantor_2_name ? <div>{l.guarantor_2_code} — {l.guarantor_2_name}</div> : null}
+                    {!l.guarantor_1_name && !l.guarantor_2_name && "—"}
                   </td>
                   <td className="px-4 py-3">{money(l.loan_amount)}</td>
                   <td className="px-4 py-3">
@@ -249,6 +258,11 @@ export default function LoanManagement() {
                   <div className="flex justify-between mb-1"><span className="font-semibold">{money(l.loan_amount)}</span><Badge tone={l.status === "Active" ? "yellow" : "green"}>{l.status}</Badge></div>
                   <div className="text-slate-500">Monthly: {money(l.monthly_deduction)} · Start: {l.start_date}</div>
                   <div className="text-slate-500">Outstanding: {money(l.outstanding_balance)} · Reason: {l.reason || "—"}</div>
+                  {(l.guarantor_1_name || l.guarantor_2_name) && (
+                    <div className="text-slate-500">
+                      Guarantors: {[l.guarantor_1_name && `${l.guarantor_1_code} — ${l.guarantor_1_name}`, l.guarantor_2_name && `${l.guarantor_2_code} — ${l.guarantor_2_name}`].filter(Boolean).join(", ")}
+                    </div>
+                  )}
                   {historyChanges.filter(c => c.loan_id === l.id).length > 0 && (
                     <div className="mt-2 border-t border-slate-50 pt-2 space-y-1">
                       <p className="text-xs font-semibold text-slate-400">Change Timeline:</p>

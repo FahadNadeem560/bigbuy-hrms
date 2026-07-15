@@ -1,5 +1,9 @@
 import { supabase } from "../lib/supabaseClient.js";
 
+// Fixed 3-stage chain, kept only so leave requests created before the org
+// hierarchy rollout (which never got a current_approver_id) keep resolving
+// exactly the way they always did. New requests are routed dynamically via
+// resolveNextApprover() below, walking employee_hierarchy.reports_to.
 export const LEAVE_STAGES = [
   "Pending Supervisor Approval",
   "Pending Branch Manager Approval",
@@ -7,14 +11,11 @@ export const LEAVE_STAGES = [
   "Approved",
 ];
 
-const STAGE_APPROVER_ROLE = {
+const LEGACY_STAGE_APPROVER_ROLE = {
   "Pending Supervisor Approval": "HR",
   "Pending Branch Manager Approval": "Branch Manager",
-  "Pending HR Approval": "HR",
 };
 
-// Older requests may still carry the previous two-stage status strings;
-// map them onto the new chain so they keep working without a data migration.
 const LEGACY_STAGE_MAP = {
   "Pending": "Pending Supervisor Approval",
   "Pending Supervisor": "Pending Supervisor Approval",
@@ -25,19 +26,97 @@ export function normalizeStage(status) {
   return LEGACY_STAGE_MAP[status] || status;
 }
 
-function nextStage(currentStage) {
+function legacyNextStage(currentStage) {
   const idx = LEAVE_STAGES.indexOf(currentStage);
   if (idx === -1 || idx >= LEAVE_STAGES.length - 1) return "Approved";
   return LEAVE_STAGES[idx + 1];
 }
 
-export function canActOnStage(role, status) {
+// A request is on the old fixed-role chain if it was never assigned a
+// hierarchy approver and hasn't yet reached the HR-terminal stage (HR is
+// terminal for both chain types, so it doesn't matter which one got it there).
+function isLegacyChainRequest(request) {
+  return !request.current_approver_id && normalizeStage(request.status) !== "Pending HR Approval";
+}
+
+export function canActOnStage(role, request, actorEmployeeCode) {
   if (role === "Master") return true;
-  const stage = normalizeStage(status);
-  if (stage === "Pending Supervisor Approval") return role === "HR";
-  if (stage === "Pending Branch Manager Approval") return role === "Branch Manager";
+  const stage = normalizeStage(request.status);
+  if (stage === "Approved" || stage.startsWith("Rejected")) return false;
   if (stage === "Pending HR Approval") return role === "HR";
-  return false;
+  if (isLegacyChainRequest(request)) {
+    if (stage === "Pending Supervisor Approval") return role === "HR";
+    if (stage === "Pending Branch Manager Approval") return role === "Branch Manager";
+    return false;
+  }
+  // Hierarchy-routed: only the specific person it's currently sitting with can act.
+  return !!actorEmployeeCode && actorEmployeeCode === request.current_approver_code;
+}
+
+async function findActiveHierarchyByEmployeeId(employeeId) {
+  if (!employeeId) return null;
+  const { data } = await supabase.from("employee_hierarchy")
+    .select("*").eq("employee_id", employeeId).eq("is_active", true)
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  return data || null;
+}
+
+async function findActiveHierarchyByCode(employeeCode) {
+  if (!employeeCode) return null;
+  const { data } = await supabase.from("employee_hierarchy")
+    .select("*").eq("employee_code", employeeCode).eq("is_active", true)
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  return data || null;
+}
+
+// Resolves who should act next in the dynamic chain. Pass `fromEmployeeId`
+// as null for the very first routing step (uses the applicant's own
+// hierarchy position); pass the current approver's employee id to walk one
+// level further up. Returns { toHR: true } once the chain runs out (nobody
+// left to report to, or the applicant/approver has no hierarchy assignment
+// at all) — HR always gives final approval per the spec.
+async function resolveNextApprover(fromEmployeeId, applicantEmployeeCode) {
+  const sourceEntry = fromEmployeeId
+    ? await findActiveHierarchyByEmployeeId(fromEmployeeId)
+    : await findActiveHierarchyByCode(applicantEmployeeCode);
+
+  if (!sourceEntry || !sourceEntry.reports_to_employee_id) return { toHR: true };
+
+  const nextEntry = await findActiveHierarchyByEmployeeId(sourceEntry.reports_to_employee_id);
+  if (!nextEntry) return { toHR: true };
+
+  return {
+    toHR: false,
+    approverId: nextEntry.employee_id,
+    approverName: nextEntry.employee_name,
+    approverCode: nextEntry.employee_code,
+    levelNumber: nextEntry.level_number,
+    levelName: nextEntry.level_name,
+  };
+}
+
+function toHRFields() {
+  return { status: "Pending HR Approval", current_approver_id: null, current_approver_name: null, current_approver_code: null, current_level: null };
+}
+
+function toApproverFields(next) {
+  return {
+    status: `Pending ${next.levelName} Approval`,
+    current_approver_id: next.approverId, current_approver_name: next.approverName,
+    current_approver_code: next.approverCode, current_level: next.levelNumber,
+  };
+}
+
+// Called by the Apply Leave form before inserting the row, so the very
+// first approver is set at submission time.
+export async function routeInitialApprover(employeeCode) {
+  const next = await resolveNextApprover(null, employeeCode);
+  return next.toHR ? toHRFields() : toApproverFields(next);
+}
+
+function appendTrail(request, entry) {
+  const trail = Array.isArray(request.approval_trail) ? request.approval_trail : [];
+  return [...trail, entry];
 }
 
 async function logAudit(request, actorRole, actorName, actionType, stage, reason) {
@@ -52,20 +131,33 @@ async function logAudit(request, actorRole, actorName, actionType, stage, reason
   }
 }
 
-async function notifyForStatus(request, newStatus) {
-  if (newStatus === "Approved") {
+async function notifyApplicantApproved(request) {
+  await supabase.from("notifications").insert({
+    recipient_code: request.employee_code, type: "leave_approval", is_read: false,
+    title: "Leave Approved",
+    message: `${request.employee_name}'s ${request.leave_type} leave has been approved.`,
+  });
+}
+
+async function notifyNextApprover(next, request) {
+  const message = `${request.employee_name} has requested ${request.days || ""} day(s) leave. Awaiting your approval.`;
+  if (next.toHR) {
     await supabase.from("notifications").insert({
-      recipient_code: request.employee_code, type: "leave_approval", is_read: false,
-      title: "Leave Approved",
-      message: `${request.employee_name}'s ${request.leave_type} leave has been approved.`,
+      recipient_role: "HR", type: "leave_approval", is_read: false,
+      title: "Leave Awaiting Approval", message,
     });
     return;
   }
-  const role = STAGE_APPROVER_ROLE[newStatus];
+  await supabase.from("notifications").insert({
+    recipient_employee_id: next.approverId, type: "leave_approval", is_read: false,
+    title: "Leave Awaiting Your Approval", message,
+  });
+}
+
+async function notifyLegacyRole(role, request) {
   if (!role) return;
   await supabase.from("notifications").insert({
-    recipient_role: role,
-    related_branch: role === "Branch Manager" ? request.branch || null : null,
+    recipient_role: role, related_branch: role === "Branch Manager" ? request.branch || null : null,
     type: "leave_approval", is_read: false,
     title: "Leave Awaiting Approval",
     message: `${request.employee_name}'s ${request.leave_type} leave is awaiting ${role} approval.`,
@@ -73,42 +165,78 @@ async function notifyForStatus(request, newStatus) {
 }
 
 // `request` must carry `.branch` (the requesting employee's branch, looked up
-// by the caller) so the Branch Manager stage notification can be scoped.
+// by the caller) so legacy Branch Manager stage notifications can be scoped,
+// and `.current_approver_id`/`.current_approver_code`/`.current_level`/
+// `.approval_trail` for hierarchy-routed requests.
 export async function approveLeaveStage(request, actorRole, actorName, { skip = false } = {}) {
   const currentStage = normalizeStage(request.status);
-  const target = skip ? "Approved" : nextStage(currentStage);
-
-  const { error } = await supabase.from("leave_requests")
-    .update({ status: target, approved_by: actorName || actorRole, approved_at: new Date().toISOString() })
-    .eq("id", request.id);
-  if (error) throw error;
-
-  await supabase.from("leave_approvals").insert({
-    leave_request_id: request.id, stage: currentStage,
-    actor_role: actorRole, actor_name: actorName, action: skip ? "Skipped" : "Approved",
+  const trail = appendTrail(request, {
+    level: request.current_level, approver: actorName || actorRole,
+    action: skip ? "Skipped" : "Approved", timestamp: new Date().toISOString(),
   });
-  await notifyForStatus(request, target);
-  await logAudit(request, actorRole, actorName, skip ? "leave_skipped" : "leave_approved", currentStage);
-  return target;
+
+  // Master's "Approve & Skip", or arriving at the HR-terminal stage (shared by
+  // both chain types), finalizes the request immediately.
+  if (skip || currentStage === "Pending HR Approval") {
+    const { error } = await supabase.from("leave_requests").update({
+      approved_by: actorName || actorRole, approved_at: new Date().toISOString(),
+      ...toHRFields(), status: "Approved", approval_trail: trail,
+    }).eq("id", request.id);
+    if (error) throw error;
+    await supabase.from("leave_approvals").insert({ leave_request_id: request.id, stage: currentStage, actor_role: actorRole, actor_name: actorName, action: skip ? "Skipped" : "Approved" });
+    await notifyApplicantApproved(request);
+    await logAudit(request, actorRole, actorName, skip ? "leave_skipped" : "leave_approved", currentStage);
+    return "Approved";
+  }
+
+  if (isLegacyChainRequest(request)) {
+    const target = legacyNextStage(currentStage);
+    const { error } = await supabase.from("leave_requests")
+      .update({ status: target, approved_by: actorName || actorRole, approved_at: new Date().toISOString() })
+      .eq("id", request.id);
+    if (error) throw error;
+    await supabase.from("leave_approvals").insert({ leave_request_id: request.id, stage: currentStage, actor_role: actorRole, actor_name: actorName, action: "Approved" });
+    if (target === "Approved") await notifyApplicantApproved(request);
+    else await notifyLegacyRole(LEGACY_STAGE_APPROVER_ROLE[target], request);
+    await logAudit(request, actorRole, actorName, "leave_approved", currentStage);
+    return target;
+  }
+
+  // Hierarchy-routed: move to whoever the current approver reports to.
+  const next = await resolveNextApprover(request.current_approver_id, request.employee_code);
+  const payload = next.toHR ? toHRFields() : toApproverFields(next);
+  const { error } = await supabase.from("leave_requests").update({
+    ...payload, approved_by: actorName || actorRole, approved_at: new Date().toISOString(),
+    stage_entered_at: new Date().toISOString(), reminder_sent_at: null, escalated_at: null,
+    approval_trail: trail,
+  }).eq("id", request.id);
+  if (error) throw error;
+  await supabase.from("leave_approvals").insert({ leave_request_id: request.id, stage: currentStage, actor_role: actorRole, actor_name: actorName, action: "Approved" });
+  await notifyNextApprover(next, request);
+  await logAudit(request, actorRole, actorName, "leave_approved", currentStage);
+  return payload.status;
 }
 
 export async function rejectLeaveStage(request, actorRole, actorName, reason) {
   const currentStage = normalizeStage(request.status);
   const rejectStatus = `Rejected by ${actorRole}`;
+  const trail = appendTrail(request, {
+    level: request.current_level, approver: actorName || actorRole,
+    action: "Rejected", timestamp: new Date().toISOString(), reason: reason || null,
+  });
 
-  const { error } = await supabase.from("leave_requests")
-    .update({ status: rejectStatus, approved_by: actorName || actorRole, approved_at: new Date().toISOString(), rejection_reason: reason })
-    .eq("id", request.id);
+  const { error } = await supabase.from("leave_requests").update({
+    status: rejectStatus, approved_by: actorName || actorRole, approved_at: new Date().toISOString(), rejection_reason: reason,
+    current_approver_id: null, current_approver_name: null, current_approver_code: null, current_level: null,
+    approval_trail: trail,
+  }).eq("id", request.id);
   if (error) throw error;
 
-  await supabase.from("leave_approvals").insert({
-    leave_request_id: request.id, stage: currentStage,
-    actor_role: actorRole, actor_name: actorName, action: "Rejected", reason,
-  });
+  await supabase.from("leave_approvals").insert({ leave_request_id: request.id, stage: currentStage, actor_role: actorRole, actor_name: actorName, action: "Rejected", reason });
   await supabase.from("notifications").insert({
     recipient_code: request.employee_code, type: "leave_approval", is_read: false,
     title: "Leave Rejected",
-    message: `${request.employee_name}'s ${request.leave_type} leave was rejected by ${actorRole}${reason ? `: ${reason}` : "."}`,
+    message: `${request.employee_name}'s ${request.leave_type} leave was rejected by ${actorName || actorRole}${reason ? `: ${reason}` : "."}`,
   });
   await logAudit(request, actorRole, actorName, "leave_rejected", currentStage, reason);
   return rejectStatus;

@@ -1,36 +1,64 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
+import { OrgChartNode } from "./HierarchyBuilder.jsx";
 
 const DEPT_BLANK = { name: "", description: "" };
 const DES_BLANK = { name: "", department_id: "", description: "" };
+
+function DeptMiniChart({ department, hierarchy, employees }) {
+  const rows = useMemo(() => hierarchy.filter(h => h.department === department), [hierarchy, department]);
+  const ids = useMemo(() => new Set(rows.map(r => r.employee_id)), [rows]);
+  const roots = useMemo(() => rows.filter(r => !r.reports_to_employee_id || !ids.has(r.reports_to_employee_id)), [rows, ids]);
+  const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e])), [employees]);
+
+  if (rows.length === 0) {
+    return <p className="text-xs text-slate-400">No one in this department is assigned to the org hierarchy yet.</p>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <div className="flex gap-8 items-start min-w-max px-2 pt-2 pb-4">
+        {roots.map(r => <OrgChartNode key={r.id} row={r} all={rows} empMap={empMap} depth={0} onSelect={() => {}} />)}
+      </div>
+    </div>
+  );
+}
 
 export default function DepartmentManagement() {
   const [tab, setTab] = useState("departments");
   const [departments, setDepartments] = useState([]);
   const [designations, setDesignations] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [orgHierarchy, setOrgHierarchy] = useState([]);
   const [deptForm, setDeptForm] = useState(DEPT_BLANK);
   const [desForm, setDesForm] = useState(DES_BLANK);
   const [editDept, setEditDept] = useState(null);
   const [editDes, setEditDes] = useState(null);
   const [showDeptForm, setShowDeptForm] = useState(false);
   const [showDesForm, setShowDesForm] = useState(false);
+  const [chartDept, setChartDept] = useState(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
-    const [{ data: depts }, { data: dess }, { data: emps }] = await Promise.all([
+    const [{ data: depts }, { data: dess }, { data: emps }, { data: eh }] = await Promise.all([
       supabase.from("departments").select("*").order("name"),
       supabase.from("designations").select("*").order("name"),
-      supabase.from("employees").select("employee_code, full_name, department, designation, status").eq("status", "Active"),
+      supabase.from("employees").select("id, employee_code, full_name, department, designation, status").eq("status", "Active"),
+      supabase.from("employee_hierarchy").select("*").eq("is_active", true),
     ]);
     setDepartments(depts || []);
     setDesignations(dess || []);
     setEmployees(emps || []);
+    setOrgHierarchy(eh || []);
   }
+
+  // First active "Department Manager" hierarchy entry per department name.
+  const deptHeadMap = useMemo(() => Object.fromEntries(
+    departments.map(d => [d.name, orgHierarchy.find(h => h.department === d.name && h.level_name === "Department Manager") || null])
+  ), [departments, orgHierarchy]);
 
   async function saveDept() {
     const f = editDept || deptForm;
@@ -110,23 +138,38 @@ export default function DepartmentManagement() {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Department", "Description", "Employees", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Department", "Description", "Department Head", "Employees", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {departments.length === 0
-                  ? <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">No departments. Add one above.</td></tr>
-                  : departments.map(d => (
-                    <tr key={d.id}>
+                  ? <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No departments. Add one above.</td></tr>
+                  : departments.map(d => {
+                    const head = deptHeadMap[d.name];
+                    return (
+                    <React.Fragment key={d.id}>
+                    <tr>
                       <td className="px-4 py-3 font-semibold">{d.name}</td>
                       <td className="px-4 py-3 text-slate-500">{d.description || "—"}</td>
+                      <td className="px-4 py-3">
+                        {head ? <span className="text-slate-700">{head.employee_name}</span> : <span className="text-slate-300">— Not Assigned —</span>}
+                      </td>
                       <td className="px-4 py-3">{employees.filter(e => e.department === d.name).length}</td>
                       <td className="px-4 py-3"><Badge tone={d.is_active ? "green" : "slate"}>{d.is_active ? "Active" : "Inactive"}</Badge></td>
                       <td className="px-4 py-3 flex gap-2">
                         <Button variant="outline" onClick={() => { setEditDept(d); setShowDeptForm(true); }} className="rounded-xl text-xs py-1 px-2">Edit</Button>
                         <Button variant="outline" onClick={() => toggleDept(d.id, d.is_active)} className="rounded-xl text-xs py-1 px-2">{d.is_active ? "Deactivate" : "Activate"}</Button>
+                        <Button variant="outline" onClick={() => setChartDept(chartDept === d.name ? null : d.name)} className="rounded-xl text-xs py-1 px-2">{chartDept === d.name ? "Hide Chart" : "View Org Chart"}</Button>
                       </td>
                     </tr>
-                  ))}
+                    {chartDept === d.name && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-4 bg-slate-50">
+                          <DeptMiniChart department={d.name} hierarchy={orgHierarchy} employees={employees} />
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
+                  );})}
               </tbody>
             </table>
           </div>

@@ -4,20 +4,23 @@ import { Badge, Button, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } from "../services/leaveApprovalService.js";
 
-const PENDING_LEAVE = ["Pending", "Pending Supervisor", "Pending HR", "Pending Supervisor Approval", "Pending Branch Manager Approval", "Pending HR Approval"];
+// Hierarchy-routed requests carry dynamic stage names ("Pending Floor
+// Manager Approval", "Pending Owner Approval", ...) so this can't be a fixed
+// whitelist — anything still "Pending ..." counts.
+const isPendingLeaveStatus = (s) => !!s?.startsWith("Pending");
 
 function StageBadge({ status }) {
   const map = {
     "Pending Supervisor": { tone: "yellow", label: "Awaiting Supervisor" },
     "Pending":            { tone: "yellow", label: "Awaiting Supervisor" },
     "Pending HR":         { tone: "blue",   label: "Awaiting HR" },
+    "Pending HR Approval": { tone: "blue",  label: "Awaiting HR" },
     "Approved":           { tone: "green",  label: "Approved" },
-    "Rejected":           { tone: "red",    label: "Rejected" },
-    "Rejected by Supervisor": { tone: "red", label: "Rejected by Sup." },
-    "Rejected by HR":     { tone: "red",    label: "Rejected by HR" },
   };
-  const { tone = "slate", label = status } = map[status] || { label: status };
-  return <Badge tone={tone}>{label}</Badge>;
+  if (map[status]) return <Badge tone={map[status].tone}>{map[status].label}</Badge>;
+  if (status?.startsWith("Rejected")) return <Badge tone="red">{status}</Badge>;
+  if (status?.startsWith("Pending")) return <Badge tone="yellow">{status.replace("Pending ", "Awaiting ")}</Badge>;
+  return <Badge tone="slate">{status}</Badge>;
 }
 
 function ApproveRejectBtns({ onApprove, onReject, rejectId, id, setRejectId, rejectNote, setRejectNote, disabled }) {
@@ -47,7 +50,7 @@ const TABS = [
   ["increments",   "Salary Increments"],
 ];
 
-export default function ApprovalQueue({ role, actorName }) {
+export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   const [tab, setTab] = useState("leave");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -89,7 +92,7 @@ export default function ApprovalQueue({ role, actorName }) {
         { data: sett },
         { data: inc },
       ] = await Promise.all([
-        supabase.from("leave_requests").select("*").in("status", PENDING_LEAVE).order("created_at", { ascending: false }).limit(200),
+        supabase.from("leave_requests").select("*").like("status", "Pending%").order("created_at", { ascending: false }).limit(200),
         supabase.from("timesheet_signoffs").select("*").order("created_at", { ascending: false }).limit(200),
         supabase.from("employees").select("employee_code,full_name,department,branch,supervisor_id").order("full_name"),
         supabase.from("attendance_adjustments").select("*").in("status", ["Pending Supervisor","Pending HR"]).order("created_at", { ascending: false }).limit(200),
@@ -200,7 +203,7 @@ export default function ApprovalQueue({ role, actorName }) {
     setMsg("Increment rejected."); loadAll();
   }
 
-  const pendingLeave = leaveReqs.filter(r => PENDING_LEAVE.includes(r.status));
+  const pendingLeave = leaveReqs.filter(r => isPendingLeaveStatus(r.status));
   const pendingCorr  = attCorrs.filter(a => ["Pending Supervisor","Pending HR"].includes(a.status));
 
   return (
@@ -232,7 +235,7 @@ export default function ApprovalQueue({ role, actorName }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Leave Approval Queue</h2><p className="text-xs text-slate-400">{pendingLeave.length} pending</p></div>
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Supervisor","Type","From","To","Days","Stage","Submitted","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee","Awaiting","Type","From","To","Days","Stage","Submitted","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {pendingLeave.length === 0
@@ -240,7 +243,7 @@ export default function ApprovalQueue({ role, actorName }) {
                 : pendingLeave.map(r => (
                   <tr key={r.id}>
                     <td className="px-4 py-3 font-medium">{r.employee_name || r.employee_id}</td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{supervisorName(r.employee_code)}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs">{r.current_approver_name || supervisorName(r.employee_code)}</td>
                     <td className="px-4 py-3"><Badge tone="blue">{r.leave_type}</Badge></td>
                     <td className="px-4 py-3">{r.from_date}</td>
                     <td className="px-4 py-3">{r.to_date}</td>
@@ -252,7 +255,7 @@ export default function ApprovalQueue({ role, actorName }) {
                         id={r.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveLeave} onReject={rejectLeave}
-                        disabled={!canActOnStage(role, r.status)} />
+                        disabled={!canActOnStage(role, r, actorEmployeeCode)} />
                     </td>
                   </tr>
                 ))}

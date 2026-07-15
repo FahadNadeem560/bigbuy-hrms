@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import LeaveLiability from "./LeaveLiability.jsx";
 import { LEAVE_QUOTA } from "../config/staffPolicies.js";
-import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage, fetchApprovalTrail } from "../services/leaveApprovalService.js";
+import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage, fetchApprovalTrail, routeInitialApprover } from "../services/leaveApprovalService.js";
 
 const LEAVE_TYPES = ["Annual", "Half Day", "Emergency", "Maternity", "Paternity", "Unpaid"];
 
@@ -76,7 +76,7 @@ function previewRowColor(status) {
   return "text-slate-600";
 }
 
-export default function LeaveManagement({ role, actorName, branchFilter }) {
+export default function LeaveManagement({ role, actorName, actorEmployeeCode, branchFilter }) {
   const [tab, setTab] = useState("apply");
   const [employees, setEmployees] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -132,12 +132,14 @@ export default function LeaveManagement({ role, actorName, branchFilter }) {
     if (!selEmp || !fromDate || !toDate) return setErr("Employee, from date and to date are required.");
     setErr(""); setMsg("");
     const daysDiff = Math.max(1, Math.ceil((new Date(toDate) - new Date(fromDate)) / (1000 * 60 * 60 * 24)) + 1);
+    const routing = await routeInitialApprover(selEmp.employee_code);
     const { error } = await supabase.from("leave_requests").insert({
       employee_id: selEmp.employee_code, employee_code: selEmp.employee_code,
       employee_name: selEmp.full_name, leave_type: leaveType,
-      from_date: fromDate, to_date: toDate, reason, status: "Pending Supervisor Approval",
+      from_date: fromDate, to_date: toDate, reason, ...routing,
       days: daysDiff, is_unpaid: leaveType === "Unpaid",
       applied_date: new Date().toISOString().slice(0, 10),
+      approval_trail: [], stage_entered_at: new Date().toISOString(),
     });
     if (error) return setErr(error.message);
     setMsg(`Leave application submitted (${daysDiff} day${daysDiff > 1 ? "s" : ""}). ${leaveType === "Unpaid" ? "Salary deduction will apply." : ""}`);
@@ -296,9 +298,11 @@ export default function LeaveManagement({ role, actorName, branchFilter }) {
   }
 
   // ─── Derived data ─────────────────────────────────────────────────────────
-  const PENDING_STATUSES = ["Pending", "Pending Supervisor", "Pending HR", "Pending Supervisor Approval", "Pending Branch Manager Approval", "Pending HR Approval"];
+  // Hierarchy-routed requests carry dynamic stage names ("Pending Floor
+  // Manager Approval", "Pending Owner Approval", ...) so a fixed whitelist
+  // can't enumerate them all — anything still "Pending ..." is open.
   const empBranchMap = useMemo(() => Object.fromEntries(employees.map(e => [e.employee_code, e.branch])), [employees]);
-  const pending = requests.filter(r => PENDING_STATUSES.includes(r.status) && (!branchFilter || empBranchMap[r.employee_code] === branchFilter));
+  const pending = requests.filter(r => r.status?.startsWith("Pending") && (!branchFilter || empBranchMap[r.employee_code] === branchFilter));
 
   const filteredHistory = useMemo(() => requests.filter(r => {
     const typeOk = historyFilter.type === "All" || r.leave_type === historyFilter.type;
@@ -410,7 +414,7 @@ export default function LeaveManagement({ role, actorName, branchFilter }) {
                 ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending leave requests.</td></tr>
                 : pending.map(r => {
                   const stage = normalizeStage(r.status);
-                  const canAct = canActOnStage(role, r.status);
+                  const canAct = canActOnStage(role, r, actorEmployeeCode);
                   return (
                     <tr key={r.id}>
                       <td className="px-4 py-3 font-medium">{r.employee_name || r.employee_id}</td>
