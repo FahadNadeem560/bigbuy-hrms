@@ -114,6 +114,16 @@ export async function routeInitialApprover(employeeCode) {
   return next.toHR ? toHRFields() : toApproverFields(next);
 }
 
+// Called by the Apply Leave form after the row insert succeeds, to notify
+// whoever routeInitialApprover() assigned. `request` needs employee_name,
+// leave_type and days for the notification message.
+export async function notifyInitialApprover(routing, request) {
+  const next = routing.current_approver_id
+    ? { toHR: false, approverId: routing.current_approver_id }
+    : { toHR: true };
+  await notifyNextApprover(next, request);
+}
+
 function appendTrail(request, entry) {
   const trail = Array.isArray(request.approval_trail) ? request.approval_trail : [];
   return [...trail, entry];

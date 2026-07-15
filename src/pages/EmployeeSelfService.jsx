@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { money } from "../utils/format.js";
 import NotificationBell from "../components/NotificationBell.jsx";
-import { approveLeaveStage, rejectLeaveStage, normalizeStage, routeInitialApprover } from "../services/leaveApprovalService.js";
+import { approveLeaveStage, rejectLeaveStage, normalizeStage, routeInitialApprover, notifyInitialApprover } from "../services/leaveApprovalService.js";
 
 const BASE_TABS = [
   { id: "attendance",  label: "My Attendance",  icon: "⏱️" },
@@ -247,6 +247,7 @@ export default function EmployeeSelfService() {
     setLeaveSubmitting(true); setLeaveMsg("");
     try {
       const routing = await routeInitialApprover(session.employee_code);
+      const days = Math.max(1, Math.ceil((new Date(leaveForm.to) - new Date(leaveForm.from)) / (1000 * 60 * 60 * 24)) + 1);
       const { error } = await supabase.from("leave_requests").insert({
         employee_code: session.employee_code,
         leave_type: leaveForm.type,
@@ -255,11 +256,12 @@ export default function EmployeeSelfService() {
         reason: leaveForm.reason,
         ...routing,
         from_date: leaveForm.from, to_date: leaveForm.to,
-        employee_name: session.name,
+        employee_name: session.name, days,
         applied_date: new Date().toISOString().slice(0, 10),
         approval_trail: [], stage_entered_at: new Date().toISOString(),
       });
       if (error) throw error;
+      await notifyInitialApprover(routing, { employee_name: session.name, leave_type: leaveForm.type, days });
       setLeaveMsg(`Leave request submitted. ${routing.status === "Pending HR Approval" ? "Pending HR approval." : `Pending ${routing.current_approver_name}'s approval.`}`);
       setLeaveForm(BLANK_LEAVE);
       const { data } = await supabase.from("leave_requests").select("*").eq("employee_code", session.employee_code).order("created_at", { ascending: false });
