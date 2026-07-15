@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
+
+function excelDateToJS(serial) {
+  if (!serial) return null;
+  if (typeof serial === "string") return serial.trim() || null;
+  const date = new Date((serial - 25569) * 86400 * 1000);
+  return date.toISOString().split("T")[0];
+}
 
 function EmpPicker({ employees, value, onChange }) {
   const [q, setQ] = useState("");
@@ -58,6 +66,13 @@ export default function LoanManagement() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
+  // Bulk import state
+  const [showImport, setShowImport] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importSummary, setImportSummary] = useState(null);
+  const [importing, setImporting] = useState(false);
+
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
@@ -77,7 +92,7 @@ export default function LoanManagement() {
     setErr("");
     const months = Math.ceil(Number(form.loan_amount) / Number(form.monthly_deduction));
     const { error } = await supabase.from("loans").insert({
-      employee_id: form.employee.employee_code, employee_code: form.employee.employee_code,
+      employee_code: form.employee.employee_code,
       employee_name: form.employee.full_name, loan_amount: Number(form.loan_amount),
       monthly_deduction: Number(form.monthly_deduction), outstanding_balance: Number(form.loan_amount),
       start_date: form.start_date, reason: form.reason, status: "Active",
@@ -88,6 +103,97 @@ export default function LoanManagement() {
     if (error) return setErr(error.message);
     setMsg("Loan application created successfully.");
     setForm(BLANK); setShowForm(false); loadAll();
+  }
+
+  // ─── Bulk Import ───────────────────────────────────────────────────────
+  function downloadLoanImportTemplate() {
+    const instructions =
+      "INSTRUCTIONS: Employee Code must match an existing employee. Guarantor codes are optional but if given must " +
+      "match existing employees and cannot be the borrower themselves. Repayment Months is auto-calculated from " +
+      "Loan Amount / Monthly Deduction. Do not leave Employee Code, Loan Amount, Monthly Deduction or Start Date blank.";
+    const aoa = [
+      [instructions],
+      ["Employee Code", "Loan Amount", "Monthly Deduction", "Start Date", "Reason", "Guarantor 1 Code", "Guarantor 2 Code"],
+      ["1001", 25000, 5000, "2026-04-01", "Medical emergency", "1002", "1003"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
+    ws["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 24 }, { wch: 16 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Loan Import");
+    XLSX.writeFile(wb, "loan_import_template.xlsx");
+  }
+
+  async function handleLoanImportPreview() {
+    if (!importFile) return setErr("Select an Excel file first.");
+    setErr(""); setImportSummary(null); setImportPreview(null);
+    try {
+      const data = await importFile.arrayBuffer();
+      const wb = XLSX.read(data);
+      const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+
+      const headerIdx = rawRows.findIndex(r => String(r[0] || "").trim() === "Employee Code");
+      if (headerIdx === -1) throw new Error("Header row not found. Ensure you're using the downloaded template.");
+      const headers = rawRows[headerIdx];
+      const dataRows = rawRows.slice(headerIdx + 1).filter(r => r.some(c => c !== ""));
+
+      const preview = dataRows.map(row => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[String(h)] = row[i] ?? ""; });
+        const code = String(obj["Employee Code"] || "").trim();
+        const emp = employees.find(e => e.employee_code === code);
+        const loanAmount = Number(obj["Loan Amount"] || 0);
+        const monthlyDeduction = Number(obj["Monthly Deduction"] || 0);
+        const startDate = excelDateToJS(obj["Start Date"]);
+        const reason = String(obj["Reason"] || "").trim();
+        const g1Code = String(obj["Guarantor 1 Code"] || "").trim();
+        const g2Code = String(obj["Guarantor 2 Code"] || "").trim();
+        const g1 = g1Code ? employees.find(e => e.employee_code === g1Code) : null;
+        const g2 = g2Code ? employees.find(e => e.employee_code === g2Code) : null;
+        const months = monthlyDeduction > 0 ? Math.ceil(loanAmount / monthlyDeduction) : 0;
+
+        let status = "ok";
+        if (!code) status = "error: missing employee code";
+        else if (!emp) status = `error: ${code} not found`;
+        else if (!loanAmount || loanAmount <= 0) status = "error: invalid loan amount";
+        else if (!monthlyDeduction || monthlyDeduction <= 0) status = "error: invalid monthly deduction";
+        else if (!startDate) status = "error: missing start date";
+        else if (g1Code && !g1) status = `error: guarantor 1 (${g1Code}) not found`;
+        else if (g2Code && !g2) status = `error: guarantor 2 (${g2Code}) not found`;
+        else if (g1Code && g1Code === code) status = "error: guarantor 1 cannot be the borrower";
+        else if (g2Code && g2Code === code) status = "error: guarantor 2 cannot be the borrower";
+        else if (g1Code && g2Code && g1Code === g2Code) status = "warning: same guarantor listed twice";
+
+        return { code, emp, loanAmount, monthlyDeduction, startDate, reason, months, g1Code, g1, g2Code, g2, status };
+      });
+      setImportPreview(preview);
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  async function handleLoanImportConfirm() {
+    if (!importPreview) return;
+    setImporting(true); setErr("");
+    let imported = 0, failed = 0;
+    const errors = [];
+    for (const row of importPreview) {
+      if (row.status.startsWith("error")) { failed++; errors.push(`${row.code || "?"}: ${row.status}`); continue; }
+      const { error } = await supabase.from("loans").insert({
+        employee_code: row.code, employee_name: row.emp?.full_name,
+        loan_amount: row.loanAmount, monthly_deduction: row.monthlyDeduction,
+        outstanding_balance: row.loanAmount, start_date: row.startDate, reason: row.reason,
+        status: "Active", repayment_months: row.months, auto_deduct: true,
+        guarantor_1_code: row.g1?.employee_code || null, guarantor_1_name: row.g1?.full_name || null,
+        guarantor_2_code: row.g2?.employee_code || null, guarantor_2_name: row.g2?.full_name || null,
+        created_at: new Date().toISOString(),
+      });
+      if (error) { failed++; errors.push(`${row.code}: ${error.message}`); }
+      else imported++;
+    }
+    setImportSummary({ total: importPreview.length, imported, failed, errors });
+    setImportPreview(null); setImportFile(null); setImporting(false);
+    loadAll();
   }
 
   async function clearLoan(id) {
@@ -140,10 +246,94 @@ export default function LoanManagement() {
   return (
     <div>
       <PageTitle title="Loans & Advances" subtitle="Manage employee loan applications, rescheduling, relief and settlements."
-        action={<Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Loan"}</Button>} />
+        action={
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowImport(s => !s)} className="rounded-2xl">{showImport ? "Cancel Import" : "Import Loans"}</Button>
+            <Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Loan"}</Button>
+          </div>
+        } />
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
+
+      {showImport && (
+        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
+          <h2 className="font-bold text-slate-800 mb-3">Import Loans</h2>
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-3">
+            <strong>Instructions:</strong> Employee Code must match an existing employee. Guarantor codes are optional but if given must match
+            existing employees and cannot be the borrower themselves. Repayment Months is auto-calculated from Loan Amount / Monthly Deduction.
+          </div>
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <Button variant="outline" onClick={downloadLoanImportTemplate} className="rounded-xl text-xs py-1.5 px-3">Download Template</Button>
+            <input type="file" accept=".xlsx,.xls,.csv" id="loan-import-file"
+              onChange={e => { setImportFile(e.target.files?.[0] || null); setImportPreview(null); setImportSummary(null); }}
+              className="hidden" />
+            <label htmlFor="loan-import-file" className="cursor-pointer inline-flex items-center gap-2 px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 hover:bg-slate-50">
+              {importFile ? importFile.name : "Choose File"}
+            </label>
+            {importFile && !importPreview && (
+              <Button onClick={handleLoanImportPreview} className="rounded-xl text-xs py-1.5 px-3">Preview Import</Button>
+            )}
+            {importFile && (
+              <button onClick={() => { setImportFile(null); setImportPreview(null); setImportSummary(null); }}
+                className="text-xs text-slate-400 hover:text-slate-600">Clear</button>
+            )}
+          </div>
+
+          {importPreview && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-slate-700">{importPreview.length} rows parsed — review before confirming</p>
+                <div className="flex gap-2">
+                  <Button onClick={handleLoanImportConfirm} disabled={importing || importPreview.every(r => r.status.startsWith("error"))} className="rounded-xl text-xs py-1.5 px-3">
+                    {importing ? "Importing..." : "Confirm Import"}
+                  </Button>
+                  <Button variant="outline" onClick={() => setImportPreview(null)} className="rounded-xl text-xs py-1.5 px-3">Cancel</Button>
+                </div>
+              </div>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-xs min-w-[900px]">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr>
+                      {["Code", "Employee", "Loan Amount", "Monthly Ded.", "Months", "Start Date", "Guarantor 1", "Guarantor 2", "Status"].map(h => (
+                        <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {importPreview.map((row, i) => (
+                      <tr key={i} className={row.status.startsWith("error") ? "bg-red-50" : row.status.startsWith("warning") ? "bg-yellow-50" : ""}>
+                        <td className="px-3 py-2 font-mono">{row.code || "—"}</td>
+                        <td className="px-3 py-2">{row.emp?.full_name || "—"}</td>
+                        <td className="px-3 py-2 text-center">{money(row.loanAmount)}</td>
+                        <td className="px-3 py-2 text-center">{money(row.monthlyDeduction)}</td>
+                        <td className="px-3 py-2 text-center">{row.months || "—"}</td>
+                        <td className="px-3 py-2">{row.startDate || "—"}</td>
+                        <td className="px-3 py-2">{row.g1 ? `${row.g1.employee_code} — ${row.g1.full_name}` : row.g1Code || "—"}</td>
+                        <td className="px-3 py-2">{row.g2 ? `${row.g2.employee_code} — ${row.g2.full_name}` : row.g2Code || "—"}</td>
+                        <td className={`px-3 py-2 font-medium ${row.status.startsWith("error") ? "text-red-600" : row.status.startsWith("warning") ? "text-yellow-700" : "text-emerald-600"}`}>
+                          {row.status}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {importSummary && (
+            <div className="mt-3 p-3 bg-slate-50 rounded-xl text-xs text-slate-700">
+              <span className="font-semibold">Total: {importSummary.total}</span>
+              <span className="text-emerald-600 font-semibold ml-4">{importSummary.imported} imported</span>
+              {importSummary.failed > 0 && <span className="text-red-500 font-semibold ml-3">{importSummary.failed} failed</span>}
+              {importSummary.errors.length > 0 && (
+                <div className="mt-2 space-y-0.5 text-red-500">{importSummary.errors.slice(0, 8).map((e, i) => <div key={i}>{e}</div>)}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {showForm && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
