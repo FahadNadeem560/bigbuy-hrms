@@ -36,7 +36,6 @@ export default function DepartmentManagement() {
   const [editDes, setEditDes] = useState(null);
   const [showDeptForm, setShowDeptForm] = useState(false);
   const [showDesForm, setShowDesForm] = useState(false);
-  const [chartDept, setChartDept] = useState(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
@@ -91,12 +90,6 @@ export default function DepartmentManagement() {
   async function toggleDept(id, cur) { await supabase.from("departments").update({ is_active: !cur }).eq("id", id); loadAll(); }
   async function toggleDes(id, cur) { await supabase.from("designations").update({ is_active: !cur }).eq("id", id); loadAll(); }
 
-  const hierarchy = useMemo(() => departments.map(d => ({
-    ...d,
-    designations: designations.filter(ds => String(ds.department_id) === String(d.id)),
-    empCount: employees.filter(e => e.department === d.name).length,
-  })), [departments, designations, employees]);
-
   const deptField = (field, form, setForm, editVal, setEdit) =>
     <input value={editVal !== null ? (editVal?.[field] || "") : (form[field] || "")}
       onChange={e => editVal !== null ? setEdit(v => ({ ...v, [field]: e.target.value })) : setForm(v => ({ ...v, [field]: e.target.value }))}
@@ -146,8 +139,7 @@ export default function DepartmentManagement() {
                   : departments.map(d => {
                     const head = deptHeadMap[d.name];
                     return (
-                    <React.Fragment key={d.id}>
-                    <tr>
+                    <tr key={d.id}>
                       <td className="px-4 py-3 font-semibold">{d.name}</td>
                       <td className="px-4 py-3 text-slate-500">{d.description || "—"}</td>
                       <td className="px-4 py-3">
@@ -158,17 +150,8 @@ export default function DepartmentManagement() {
                       <td className="px-4 py-3 flex gap-2">
                         <Button variant="outline" onClick={() => { setEditDept(d); setShowDeptForm(true); }} className="rounded-xl text-xs py-1 px-2">Edit</Button>
                         <Button variant="outline" onClick={() => toggleDept(d.id, d.is_active)} className="rounded-xl text-xs py-1 px-2">{d.is_active ? "Deactivate" : "Activate"}</Button>
-                        <Button variant="outline" onClick={() => setChartDept(chartDept === d.name ? null : d.name)} className="rounded-xl text-xs py-1 px-2">{chartDept === d.name ? "Hide Chart" : "View Org Chart"}</Button>
                       </td>
                     </tr>
-                    {chartDept === d.name && (
-                      <tr>
-                        <td colSpan={6} className="px-4 py-4 bg-slate-50">
-                          <DeptMiniChart department={d.name} hierarchy={orgHierarchy} employees={employees} />
-                        </td>
-                      </tr>
-                    )}
-                    </React.Fragment>
                   );})}
               </tbody>
             </table>
@@ -247,29 +230,21 @@ export default function DepartmentManagement() {
 
       {tab === "hierarchy" && (
         <div className="space-y-3">
-          {hierarchy.length === 0
+          {departments.length === 0
             ? <p className="text-slate-400 text-sm p-4">No departments found. Create departments first.</p>
-            : hierarchy.map(d => (
+            : departments.map(d => (
               <div key={d.id} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <span className="text-xl">🏗️</span>
                     <span className="font-bold text-slate-800 text-base">{d.name}</span>
                     <Badge tone={d.is_active ? "green" : "slate"}>{d.is_active ? "Active" : "Inactive"}</Badge>
                   </div>
-                  <Badge tone="blue">{d.empCount} employees</Badge>
+                  <Badge tone="blue">{employees.filter(e => e.department === d.name).length} employees</Badge>
                 </div>
-                {d.description && <p className="text-xs text-slate-400 ml-9 mb-2">{d.description}</p>}
-                {d.designations.length > 0
-                  ? <div className="ml-9 mt-2 grid grid-cols-2 md:grid-cols-4 gap-2">
-                      {d.designations.map(ds => (
-                        <div key={ds.id} className="bg-slate-50 rounded-xl px-3 py-2 text-sm">
-                          <p className="font-medium text-slate-700">{ds.name}</p>
-                          <p className="text-xs text-slate-400">{employees.filter(e => e.designation === ds.name).length} employees</p>
-                        </div>
-                      ))}
-                    </div>
-                  : <p className="text-xs text-slate-400 ml-9">No designations assigned to this department.</p>}
+                {d.description && <p className="text-xs text-slate-400 mb-2">{d.description}</p>}
+                <p className="text-xs text-slate-400 mb-2">Each branch this department operates in gets its own reporting chain, shown as a separate tree below.</p>
+                <DeptMiniChart department={d.name} hierarchy={orgHierarchy} employees={employees} />
               </div>
             ))}
         </div>

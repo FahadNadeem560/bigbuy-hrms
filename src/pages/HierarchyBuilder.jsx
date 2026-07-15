@@ -279,7 +279,7 @@ function AssignTab({ levels, employees, hierarchy, reload, setMsg, setErr }) {
                     <EmpSearchPicker employees={branchEmployees} value={assignEmp} onChange={setAssignEmp} />
                   </div>
                   <div>
-                    <p className="text-xs text-slate-500 mb-1">Reports To {above ? `(${above.level_name})` : "(top of hierarchy)"}</p>
+                    <p className="text-xs text-slate-500 mb-1">Reports To {above ? `(${above.level_name} in ${branch})` : "(top of hierarchy)"}</p>
                     {above
                       ? <EmpSearchPicker employees={reportsToOptions.map(r => ({ id: r.employee_id, employee_code: r.employee_code, full_name: r.employee_name, department: r.department }))} value={reportsTo} onChange={setReportsTo} placeholder="Search or leave blank..." />
                       : <div className="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-400 bg-white">No one — top of hierarchy</div>}
@@ -328,7 +328,7 @@ export function OrgChartNode({ row, all, empMap, depth, onSelect }) {
         onClick={() => onSelect(row)}>
         <div className="font-bold text-xs leading-snug truncate">{row.employee_name}</div>
         <div className="text-[10px] mt-0.5 opacity-80 truncate">{emp?.designation || row.level_name}</div>
-        <div className="text-[10px] opacity-70 truncate">{row.department || ""}</div>
+        <div className="text-[10px] opacity-70 truncate">{[row.department, row.branch].filter(Boolean).join(" · ")}</div>
         {reports.length > 0 && (
           <button onClick={e => { e.stopPropagation(); setExpanded(x => !x); }} className="text-[10px] mt-1 font-semibold opacity-80">
             {reports.length} report{reports.length > 1 ? "s" : ""} {expanded ? "▲" : "▼"}
@@ -351,11 +351,25 @@ export function OrgChartNode({ row, all, empMap, depth, onSelect }) {
 
 function OrgChartTab({ hierarchy, employees }) {
   const branches = useMemo(() => ["All", ...new Set(hierarchy.map(h => h.branch).filter(Boolean))], [hierarchy]);
+  const departments = useMemo(() => ["All", ...new Set(hierarchy.map(h => h.department).filter(Boolean))], [hierarchy]);
+  const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e])), [employees]);
+  const designations = useMemo(() => {
+    const set = new Set();
+    hierarchy.forEach(h => { const d = empMap[h.employee_id]?.designation; if (d) set.add(d); });
+    return ["All", ...set];
+  }, [hierarchy, empMap]);
+
   const [branch, setBranch] = useState("All");
+  const [department, setDepartment] = useState("All");
+  const [designation, setDesignation] = useState("All");
   const [selected, setSelected] = useState(null);
 
-  const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e])), [employees]);
-  const active = useMemo(() => hierarchy.filter(h => h.is_active && (branch === "All" || h.branch === branch)), [hierarchy, branch]);
+  const active = useMemo(() => hierarchy.filter(h =>
+    h.is_active
+    && (branch === "All" || h.branch === branch)
+    && (department === "All" || h.department === department)
+    && (designation === "All" || empMap[h.employee_id]?.designation === designation)
+  ), [hierarchy, branch, department, designation, empMap]);
   const activeIds = useMemo(() => new Set(active.map(h => h.employee_id)), [active]);
   const roots = useMemo(() => active.filter(h => !h.reports_to_employee_id || !activeIds.has(h.reports_to_employee_id)), [active, activeIds]);
 
@@ -364,6 +378,12 @@ function OrgChartTab({ hierarchy, employees }) {
       <div className="flex flex-wrap items-center gap-4 mb-5 print:hidden">
         <select value={branch} onChange={e => setBranch(e.target.value)} className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm">
           {branches.map(b => <option key={b}>{b}</option>)}
+        </select>
+        <select value={department} onChange={e => setDepartment(e.target.value)} className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm">
+          {departments.map(d => <option key={d}>{d}</option>)}
+        </select>
+        <select value={designation} onChange={e => setDesignation(e.target.value)} className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm">
+          {designations.map(d => <option key={d}>{d}</option>)}
         </select>
         <div className="flex flex-wrap gap-1.5">
           {Object.entries(LEVEL_COLORS).map(([n, c]) => (
@@ -374,7 +394,7 @@ function OrgChartTab({ hierarchy, employees }) {
       </div>
 
       {roots.length === 0 ? (
-        <div className="text-center py-16 text-slate-400 text-sm">No hierarchy configured for this branch yet. Use the Assign Employees tab.</div>
+        <div className="text-center py-16 text-slate-400 text-sm">No hierarchy matches these filters yet. Use the Assign Employees tab.</div>
       ) : (
         <div className="overflow-x-auto pb-8 print:overflow-visible">
           <div className="flex gap-12 items-start min-w-max px-4 pt-4">
