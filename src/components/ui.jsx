@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 
 export function Card({ className = "", children }) {
   return <div className={`bg-white ${className}`}>{children}</div>;
@@ -38,6 +38,26 @@ export function PageTitle({ title, subtitle, action }) {
   return <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6"><div><h1 className="text-2xl md:text-3xl font-bold text-slate-950">{title}</h1><p className="text-slate-500 mt-1">{subtitle}</p></div>{action}</div>;
 }
 
-export function StatCard({ title, value, sub, icon }) {
-  return <Card className="rounded-2xl shadow-sm border border-slate-100"><CardContent className="p-5 flex items-center justify-between gap-3"><div><p className="text-sm text-slate-500">{title}</p><h3 className="text-2xl font-bold mt-1 text-slate-900">{value}</h3><p className="text-xs text-slate-400 mt-1">{sub}</p></div><span className="h-12 w-12 rounded-2xl bg-slate-100 flex items-center justify-center text-2xl shrink-0">{icon}</span></CardContent></Card>;
+export function StatCard({ title, value, sub, icon, maskable = false }) {
+  const [revealed, setRevealed] = useState(!maskable);
+  return (
+    <Card className="rounded-2xl shadow-sm border border-slate-100">
+      <CardContent className="p-5 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm text-slate-500 flex items-center gap-1.5">
+            {title}
+            {maskable && (
+              <button type="button" onClick={() => setRevealed(r => !r)} title={revealed ? "Hide" : "Show"}
+                className="text-slate-400 hover:text-slate-600 transition leading-none">
+                {revealed ? "🙈" : "👁️"}
+              </button>
+            )}
+          </p>
+          <h3 className="text-2xl font-bold mt-1 text-slate-900">{maskable && !revealed ? "••••••" : value}</h3>
+          <p className="text-xs text-slate-400 mt-1">{sub}</p>
+        </div>
+        <span className="h-12 w-12 rounded-2xl bg-slate-100 flex items-center justify-center text-2xl shrink-0">{icon}</span>
+      </CardContent>
+    </Card>
+  );
 }

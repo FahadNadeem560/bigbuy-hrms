@@ -30,10 +30,10 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
           <PageTitle title="HR Dashboard" subtitle="Staff position, payroll snapshot and attendance alerts."
             action={<Button className="rounded-2xl" onClick={() => setActive("imports")}>Import Employees</Button>} />
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <StatCard title="Active Staff"    value={activeEmployees.length} sub="Across branches" icon="👥" />
+            <StatCard title="Active Staff"    value={activeEmployees.length} sub="Across branches" icon="👥" maskable />
             <StatCard title="Attendance Logs" value={attendanceRows.length}  sub="Processed punches" icon="✅" />
             <StatCard title="Late / Half Day" value={attendanceRows.filter(a => a.status !== "Present").length} sub="Needs review" icon="⚠️" />
-            <StatCard title="Payroll"         value={money(payrollRows.reduce((s, r) => s + r.finalSalary, 0))} sub={payrollStatus} icon="💰" />
+            <StatCard title="Payroll"         value={money(payrollRows.reduce((s, r) => s + r.finalSalary, 0))} sub={payrollStatus} icon="💰" maskable />
           </div>
         </div>
       )}
