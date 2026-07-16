@@ -32,6 +32,5 @@ export const MENU_ITEMS = [
   // System
   { key: "imports",      label: "Data Management",     icon: "🗄️", section: "System",           roles: ["Master","HR","Finance","GM"] },
   { key: "settings",     label: "Settings",            icon: "⚙️", section: "System",           roles: ["Master"] },
-  { key: "hierarchy",    label: "Org Hierarchy",       icon: "🏗️", section: "System",           roles: ["Master"] },
   { key: "ai-assistant", label: "AI Assistant",        icon: "🤖", section: "System",           roles: ["Master","HR","Finance","Employee","GM"] },
 ];

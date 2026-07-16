@@ -114,14 +114,85 @@ export async function routeInitialApprover(employeeCode) {
   return next.toHR ? toHRFields() : toApproverFields(next);
 }
 
+const FINANCE_FYI_LEVELS = ["Chief Cashier", "Head Cashier"];
+
 // Called by the Apply Leave form after the row insert succeeds, to notify
-// whoever routeInitialApprover() assigned. `request` needs employee_name,
-// leave_type and days for the notification message.
+// whoever routeInitialApprover() assigned. `request` needs employee_code,
+// employee_name, leave_type and days for the notification message.
 export async function notifyInitialApprover(routing, request) {
   const next = routing.current_approver_id
     ? { toHR: false, approverId: routing.current_approver_id }
     : { toHR: true };
   await notifyNextApprover(next, request);
+
+  // HR is always kept in the loop, even when they aren't the current approver.
+  if (!next.toHR) {
+    await supabase.from("notifications").insert({
+      recipient_role: "HR", type: "leave_approval", is_read: false,
+      title: "New Leave Request (FYI)",
+      message: `${request.employee_name} has requested ${request.days || ""} day(s) leave. Currently with ${routing.current_approver_name || "the next approver"}.`,
+    });
+  }
+
+  // Finance is notified when a cash-handling role applies for leave.
+  const applicant = await findActiveHierarchyByCode(request.employee_code);
+  if (applicant && FINANCE_FYI_LEVELS.includes(applicant.level_name)) {
+    await supabase.from("notifications").insert({
+      recipient_role: "Finance", type: "leave_approval", is_read: false,
+      title: "Cash-Handling Staff Leave (FYI)",
+      message: `${request.employee_name} (${applicant.level_name}) has requested ${request.days || ""} day(s) leave.`,
+    });
+  }
+}
+
+// Walks all hierarchy-routed leave requests still awaiting action and:
+//  - 24h with no action → reminder notification to the current approver (once)
+//  - 48h with no action → auto-escalates to the next level and notifies both
+// No server-side cron exists in this project; call this on app load instead,
+// same pattern as the temporary-employee check in App.jsx.
+export async function escalateStaleApprovals() {
+  const { data: pending } = await supabase.from("leave_requests")
+    .select("*")
+    .not("status", "in", "(Approved)")
+    .not("status", "like", "Rejected%")
+    .not("stage_entered_at", "is", null);
+  if (!pending || pending.length === 0) return;
+
+  const now = Date.now();
+  for (const request of pending) {
+    const hoursInStage = (now - new Date(request.stage_entered_at).getTime()) / 3600000;
+    const isHRStage = normalizeStage(request.status) === "Pending HR Approval";
+
+    if (hoursInStage >= 48 && !request.escalated_at) {
+      if (isHRStage) continue; // HR is terminal — nothing further to escalate to.
+      const next = await resolveNextApprover(request.current_approver_id, request.employee_code);
+      const payload = next.toHR ? toHRFields() : toApproverFields(next);
+      const trail = appendTrail(request, {
+        level: request.current_level, approver: request.current_approver_name || "System",
+        action: "Escalated (48h timeout)", timestamp: new Date().toISOString(),
+      });
+      await supabase.from("leave_requests").update({
+        ...payload, stage_entered_at: new Date().toISOString(),
+        reminder_sent_at: null, escalated_at: new Date().toISOString(), approval_trail: trail,
+      }).eq("id", request.id);
+      if (request.current_approver_id) {
+        await supabase.from("notifications").insert({
+          recipient_employee_id: request.current_approver_id, type: "leave_approval", is_read: false,
+          title: "Leave Request Escalated",
+          message: `${request.employee_name}'s leave request was auto-escalated after 48 hours without action.`,
+        });
+      }
+      await notifyNextApprover(next, request);
+    } else if (hoursInStage >= 24 && !request.reminder_sent_at) {
+      const message = `Reminder: ${request.employee_name} has requested ${request.days || ""} day(s) leave. Still awaiting your approval.`;
+      if (isHRStage || !request.current_approver_id) {
+        await supabase.from("notifications").insert({ recipient_role: "HR", type: "leave_approval", is_read: false, title: "Leave Approval Reminder", message });
+      } else {
+        await supabase.from("notifications").insert({ recipient_employee_id: request.current_approver_id, type: "leave_approval", is_read: false, title: "Leave Approval Reminder", message });
+      }
+      await supabase.from("leave_requests").update({ reminder_sent_at: new Date().toISOString() }).eq("id", request.id);
+    }
+  }
 }
 
 function appendTrail(request, entry) {

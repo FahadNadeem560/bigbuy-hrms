@@ -44,7 +44,7 @@ function HierarchyReadout({ employeeCode }) {
     if (!employeeCode) { setRow(null); return; }
     let active = true;
     supabase.from("employee_hierarchy")
-      .select("level_number, level_name, reports_to_name")
+      .select("level_number, level_name, reports_to_name, dotted_line_to_name, dotted_line_reason")
       .eq("employee_code", employeeCode).eq("is_active", true)
       .order("created_at", { ascending: false }).limit(1).maybeSingle()
       .then(({ data }) => { if (active) setRow(data || null); });
@@ -63,7 +63,14 @@ function HierarchyReadout({ employeeCode }) {
           {row === undefined ? "Loading…" : row?.reports_to_name || "—"}
         </div>
       </Field>
-      <p className="md:col-span-2 text-xs text-slate-400">Manage hierarchy from Settings → Org Hierarchy.</p>
+      {row?.dotted_line_to_name && (
+        <Field label="Dotted Line To">
+          <div className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-sm text-slate-700">
+            {row.dotted_line_to_name}{row.dotted_line_reason ? ` — ${row.dotted_line_reason}` : ""}
+          </div>
+        </Field>
+      )}
+      <p className="md:col-span-2 text-xs text-slate-400">Manage hierarchy from Settings → Departments → Org Hierarchy.</p>
     </div>
   );
 }
@@ -125,7 +132,7 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
 
       <Section title="Hierarchy & Role">
         <div className="md:col-span-2 p-3 bg-slate-50 rounded-xl text-sm text-slate-500">
-          Hierarchy position (level and reporting line) is assigned after this employee is created, from Settings → Org Hierarchy.
+          Hierarchy position (level and reporting line) is assigned after this employee is created, from Settings → Departments → Org Hierarchy.
         </div>
         <Field label="Employee Status">
           <label className="flex items-center gap-2 text-sm cursor-pointer mt-2">

@@ -427,3 +427,37 @@ CREATE POLICY "Allow authenticated" ON departments FOR ALL USING (auth.role() = 
 | `loan_changes` | Loan rescheduling, relief, settlement audit log |
 | `salary_structures` | Salary component breakdown per employee |
 | `hrms_policy_settings` | Configurable attendance/payroll policy values |
+
+---
+
+## Org Hierarchy v2 — dotted-line + cross-branch (applied directly via Supabase MCP)
+
+`hierarchy_levels` and `employee_hierarchy` already existed from the prior hierarchy rollout. This
+pass reseeded `hierarchy_levels` with the real 21-role structure (CEO down to Cashier, with
+multiple roles sharing a level number) and added dotted-line reporting support:
+
+```sql
+ALTER TABLE hierarchy_levels ADD COLUMN IF NOT EXISTS is_cross_branch boolean DEFAULT false;
+
+ALTER TABLE employee_hierarchy
+  ADD COLUMN IF NOT EXISTS dotted_line_to_employee_id uuid REFERENCES employees(id),
+  ADD COLUMN IF NOT EXISTS dotted_line_to_name text,
+  ADD COLUMN IF NOT EXISTS dotted_line_reason text,
+  ADD COLUMN IF NOT EXISTS is_cross_branch boolean DEFAULT false;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.hierarchy_levels TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.employee_hierarchy TO anon, authenticated;
+```
+
+`hierarchy_levels` was reseeded (old 9-row scheme deleted, existing employee_hierarchy rows
+remapped) to: CEO(1) · GM/Finance Manager/Chief Technology Manager(2) · Store Manager/HR
+Manager/Chief Cashier/Assistant Finance Manager/Warehouse Manager/Buying Manager/Administration
+Manager/Security Manager(3) · Floor Manager/HR Executive/Finance Executive(4) · Department
+Manager(5) · Supervisor/Head Cashier(6) · Senior Staff(7) · Staff/Cashier(8).
+
+`leave_requests` already had `current_approver_id/name/code`, `current_level`, `approval_trail`,
+`stage_entered_at`, `reminder_sent_at`, `escalated_at` from the prior rollout — the smart routing
+walk (`resolveNextApprover` in `src/services/leaveApprovalService.js`) needed no schema changes,
+just correctly-seeded `employee_hierarchy.reports_to_employee_id` chains. `escalateStaleApprovals()`
+(called once on app load, same pattern as the temp-employee check) reads `stage_entered_at` to send
+a 24h reminder and auto-escalate at 48h — there's no server-side cron in this project.

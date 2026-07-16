@@ -261,7 +261,7 @@ export default function EmployeeSelfService() {
         approval_trail: [], stage_entered_at: new Date().toISOString(),
       });
       if (error) throw error;
-      await notifyInitialApprover(routing, { employee_name: session.name, leave_type: leaveForm.type, days });
+      await notifyInitialApprover(routing, { employee_code: session.employee_code, employee_name: session.name, leave_type: leaveForm.type, days });
       setLeaveMsg(`Leave request submitted. ${routing.status === "Pending HR Approval" ? "Pending HR approval." : `Pending ${routing.current_approver_name}'s approval.`}`);
       setLeaveForm(BLANK_LEAVE);
       const { data } = await supabase.from("leave_requests").select("*").eq("employee_code", session.employee_code).order("created_at", { ascending: false });

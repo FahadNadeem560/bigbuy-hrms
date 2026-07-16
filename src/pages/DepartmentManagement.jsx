@@ -1,28 +1,10 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
-import { OrgChartNode } from "./HierarchyBuilder.jsx";
+import HierarchyBuilder from "./HierarchyBuilder.jsx";
 
 const DEPT_BLANK = { name: "", description: "" };
 const DES_BLANK = { name: "", department_id: "", description: "" };
-
-function DeptMiniChart({ department, hierarchy, employees }) {
-  const rows = useMemo(() => hierarchy.filter(h => h.department === department), [hierarchy, department]);
-  const ids = useMemo(() => new Set(rows.map(r => r.employee_id)), [rows]);
-  const roots = useMemo(() => rows.filter(r => !r.reports_to_employee_id || !ids.has(r.reports_to_employee_id)), [rows, ids]);
-  const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e])), [employees]);
-
-  if (rows.length === 0) {
-    return <p className="text-xs text-slate-400">No one in this department is assigned to the org hierarchy yet.</p>;
-  }
-  return (
-    <div className="overflow-x-auto">
-      <div className="flex gap-8 items-start min-w-max px-2 pt-2 pb-4">
-        {roots.map(r => <OrgChartNode key={r.id} row={r} all={rows} empMap={empMap} depth={0} onSelect={() => {}} />)}
-      </div>
-    </div>
-  );
-}
 
 export default function DepartmentManagement() {
   const [tab, setTab] = useState("departments");
@@ -102,7 +84,7 @@ export default function DepartmentManagement() {
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
       <div className="flex flex-wrap gap-2 mb-4">
-        {[["departments", "Departments"], ["designations", "Designations"], ["hierarchy", "Hierarchy View"]].map(([k, l]) => (
+        {[["departments", "Departments"], ["designations", "Designations"], ["orghierarchy", "Org Hierarchy"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{l}</button>
         ))}
@@ -228,27 +210,7 @@ export default function DepartmentManagement() {
         </div>
       )}
 
-      {tab === "hierarchy" && (
-        <div className="space-y-3">
-          {departments.length === 0
-            ? <p className="text-slate-400 text-sm p-4">No departments found. Create departments first.</p>
-            : departments.map(d => (
-              <div key={d.id} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl">🏗️</span>
-                    <span className="font-bold text-slate-800 text-base">{d.name}</span>
-                    <Badge tone={d.is_active ? "green" : "slate"}>{d.is_active ? "Active" : "Inactive"}</Badge>
-                  </div>
-                  <Badge tone="blue">{employees.filter(e => e.department === d.name).length} employees</Badge>
-                </div>
-                {d.description && <p className="text-xs text-slate-400 mb-2">{d.description}</p>}
-                <p className="text-xs text-slate-400 mb-2">Each branch this department operates in gets its own reporting chain, shown as a separate tree below.</p>
-                <DeptMiniChart department={d.name} hierarchy={orgHierarchy} employees={employees} />
-              </div>
-            ))}
-        </div>
-      )}
+      {tab === "orghierarchy" && <HierarchyBuilder embedded />}
     </div>
   );
 }

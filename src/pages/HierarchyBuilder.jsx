@@ -144,6 +144,7 @@ function LevelsTab({ levels, reload, setMsg, setErr }) {
               <th className="text-left px-4 py-3 font-medium w-10"></th>
               <th className="text-left px-4 py-3 font-medium">#</th>
               <th className="text-left px-4 py-3 font-medium">Level Name</th>
+              <th className="text-center px-3 py-3 font-medium">Cross-Branch</th>
               {PERM_FIELDS.map(([k, l]) => <th key={k} className="text-center px-3 py-3 font-medium">{l}</th>)}
             </tr>
           </thead>
@@ -165,6 +166,9 @@ function LevelsTab({ levels, reload, setMsg, setErr }) {
                 <td className="px-4 py-3">
                   <input defaultValue={level.level_name} onBlur={e => saveName(level, e.target.value)}
                     className="px-2 py-1 rounded-lg border border-transparent hover:border-slate-200 focus:border-slate-300 text-sm font-medium w-full" />
+                </td>
+                <td className="px-3 py-3 text-center">
+                  <input type="checkbox" checked={!!level.is_cross_branch} onChange={() => togglePerm(level, "is_cross_branch")} className="rounded" />
                 </td>
                 {PERM_FIELDS.map(([k]) => (
                   <td key={k} className="px-3 py-3 text-center">
@@ -188,6 +192,8 @@ function AssignTab({ levels, employees, hierarchy, reload, setMsg, setErr }) {
   const [openLevelId, setOpenLevelId] = useState(null);
   const [assignEmp, setAssignEmp] = useState(null);
   const [reportsTo, setReportsTo] = useState(null);
+  const [dottedTo, setDottedTo] = useState(null);
+  const [dottedReason, setDottedReason] = useState("");
   const [editingRow, setEditingRow] = useState(null);
 
   const branchEmployees = useMemo(() => employees.filter(e => e.branch === branch), [employees, branch]);
@@ -206,12 +212,15 @@ function AssignTab({ levels, employees, hierarchy, reload, setMsg, setErr }) {
       setAssignEmp(emp || { id: existing.employee_id, employee_code: existing.employee_code, full_name: existing.employee_name, department: existing.department });
       const rt = employees.find(e => e.id === existing.reports_to_employee_id);
       setReportsTo(rt || (existing.reports_to_employee_id ? { id: existing.reports_to_employee_id, employee_code: "", full_name: existing.reports_to_name } : null));
+      const dt = employees.find(e => e.id === existing.dotted_line_to_employee_id);
+      setDottedTo(dt || (existing.dotted_line_to_employee_id ? { id: existing.dotted_line_to_employee_id, employee_code: "", full_name: existing.dotted_line_to_name } : null));
+      setDottedReason(existing.dotted_line_reason || "");
     } else {
-      setEditingRow(null); setAssignEmp(null); setReportsTo(null);
+      setEditingRow(null); setAssignEmp(null); setReportsTo(null); setDottedTo(null); setDottedReason("");
     }
   }
 
-  function closeAssign() { setOpenLevelId(null); setAssignEmp(null); setReportsTo(null); setEditingRow(null); }
+  function closeAssign() { setOpenLevelId(null); setAssignEmp(null); setReportsTo(null); setDottedTo(null); setDottedReason(""); setEditingRow(null); }
 
   async function saveAssignment(level) {
     if (!assignEmp) return setErr("Select an employee first.");
@@ -223,6 +232,9 @@ function AssignTab({ levels, employees, hierarchy, reload, setMsg, setErr }) {
       branch, department: assignEmp.department || null,
       hierarchy_level_id: level.id, level_number: level.level_number, level_name: level.level_name,
       reports_to_employee_id: reportsTo?.id || null, reports_to_name: reportsTo?.full_name || null,
+      dotted_line_to_employee_id: dottedTo?.id || null, dotted_line_to_name: dottedTo?.full_name || null,
+      dotted_line_reason: dottedTo ? (dottedReason || null) : null,
+      is_cross_branch: !!level.is_cross_branch,
       is_active: true,
     });
     if (error) return setErr(error.message);
@@ -284,6 +296,15 @@ function AssignTab({ levels, employees, hierarchy, reload, setMsg, setErr }) {
                       ? <EmpSearchPicker employees={reportsToOptions.map(r => ({ id: r.employee_id, employee_code: r.employee_code, full_name: r.employee_name, department: r.department }))} value={reportsTo} onChange={setReportsTo} placeholder="Search or leave blank..." />
                       : <div className="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-400 bg-white">No one — top of hierarchy</div>}
                   </div>
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">Dotted Line To (optional)</p>
+                    <EmpSearchPicker employees={employees.filter(e => e.id !== assignEmp?.id)} value={dottedTo} onChange={setDottedTo} placeholder="Search or leave blank..." />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">Dotted Line Reason</p>
+                    <input value={dottedReason} onChange={e => setDottedReason(e.target.value)} disabled={!dottedTo}
+                      placeholder="e.g. Financial oversight" className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm disabled:bg-slate-100" />
+                  </div>
                   <div className="md:col-span-2 flex gap-2">
                     <Button onClick={() => saveAssignment(level)} className="rounded-xl text-xs py-1.5 px-3">Save</Button>
                     <Button variant="outline" onClick={closeAssign} className="rounded-xl text-xs py-1.5 px-3">Cancel</Button>
@@ -299,6 +320,9 @@ function AssignTab({ levels, employees, hierarchy, reload, setMsg, setErr }) {
                         <div className="font-semibold text-slate-800">{row.employee_name}</div>
                         <div className="text-xs text-slate-400">{row.employee_code} · {row.department || "—"}</div>
                         <div className="text-xs text-slate-500 mt-1">Reports to: {row.reports_to_name || "—"}</div>
+                        {row.dotted_line_to_name && (
+                          <div className="text-xs text-slate-400 mt-0.5">⤳ Dotted to: {row.dotted_line_to_name}{row.dotted_line_reason ? ` (${row.dotted_line_reason})` : ""}</div>
+                        )}
                         <div className="flex gap-2 mt-2">
                           <Button variant="outline" onClick={() => openAssign(level, row)} className="rounded-lg text-[11px] py-1 px-2">Edit</Button>
                           <Button variant="outline" onClick={() => removeAssignment(row)} className="rounded-lg text-[11px] py-1 px-2 text-red-600">Remove</Button>
@@ -329,6 +353,7 @@ export function OrgChartNode({ row, all, empMap, depth, onSelect }) {
         <div className="font-bold text-xs leading-snug truncate">{row.employee_name}</div>
         <div className="text-[10px] mt-0.5 opacity-80 truncate">{emp?.designation || row.level_name}</div>
         <div className="text-[10px] opacity-70 truncate">{[row.department, row.branch].filter(Boolean).join(" · ")}</div>
+        {row.dotted_line_to_name && <div className="text-[10px] opacity-70 truncate" title={row.dotted_line_reason || ""}>⤳ {row.dotted_line_to_name}</div>}
         {reports.length > 0 && (
           <button onClick={e => { e.stopPropagation(); setExpanded(x => !x); }} className="text-[10px] mt-1 font-semibold opacity-80">
             {reports.length} report{reports.length > 1 ? "s" : ""} {expanded ? "▲" : "▼"}
@@ -414,6 +439,9 @@ function OrgChartTab({ hierarchy, employees }) {
               <div><span className="text-slate-400">Branch:</span> {selected.branch || "—"}</div>
               <div><span className="text-slate-400">Level:</span> {selected.level_number}. {selected.level_name}</div>
               <div><span className="text-slate-400">Reports To:</span> {selected.reports_to_name || "— Top of hierarchy —"}</div>
+              {selected.dotted_line_to_name && (
+                <div><span className="text-slate-400">Dotted Line To:</span> {selected.dotted_line_to_name}{selected.dotted_line_reason ? ` — ${selected.dotted_line_reason}` : ""}</div>
+              )}
             </div>
             <Button variant="outline" onClick={() => setSelected(null)} className="rounded-xl text-xs mt-4">Close</Button>
           </div>
@@ -424,7 +452,7 @@ function OrgChartTab({ hierarchy, employees }) {
 }
 
 // ═══════════════════════════ ROOT ═══════════════════════════
-export default function HierarchyBuilder() {
+export default function HierarchyBuilder({ embedded = false }) {
   const [tab, setTab] = useState("levels");
   const [levels, setLevels] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -447,7 +475,7 @@ export default function HierarchyBuilder() {
 
   return (
     <div>
-      <PageTitle title="Org Hierarchy" subtitle="Define reporting levels, assign employees, and visualize the organisation chart." />
+      {!embedded && <PageTitle title="Org Hierarchy" subtitle="Define reporting levels, assign employees, and visualize the organisation chart." />}
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm print:hidden">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm print:hidden">{err}</div>}
 

@@ -18,7 +18,6 @@ import AllowancesHub from "./pages/AllowancesHub.jsx";
 import PayrollExtras from "./pages/PayrollExtras.jsx";
 import LoanHub from "./pages/LoanHub.jsx";
 import SettingsHub from "./pages/SettingsHub.jsx";
-import HierarchyBuilder from "./pages/HierarchyBuilder.jsx";
 import ApprovalQueue from "./pages/ApprovalQueue.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
 import Fines from "./pages/Fines.jsx";
@@ -30,6 +29,7 @@ import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
 import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch, getNextEmployeeId, getNextTempId } from "./services/employeeService.js";
 import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
+import { escalateStaleApprovals } from "./services/leaveApprovalService.js";
 import { signOut } from "./services/authService.js";
 import { getBranchFilter, isBranchRestricted } from "./utils/branchFilter.js";
 
@@ -172,6 +172,7 @@ export default function BigBuyHRMS({ profile }) {
 
   useEffect(() => {
     runMigrations().then(() => { loadEmployees(); loadAttendance(); checkTemporaryEmployees(); });
+    escalateStaleApprovals().catch(() => {});
   }, []);
 
   async function saveEmployee() {
@@ -352,7 +353,6 @@ export default function BigBuyHRMS({ profile }) {
       {/* System */}
       {active === "imports"     && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
       {active === "settings"    && <SettingsHub />}
-      {active === "hierarchy"   && <HierarchyBuilder />}
       {active === "ai-assistant"&& <AIAssistant />}
     </Layout>
   );

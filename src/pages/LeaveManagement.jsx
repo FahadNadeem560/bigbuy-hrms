@@ -142,7 +142,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
       approval_trail: [], stage_entered_at: new Date().toISOString(),
     });
     if (error) return setErr(error.message);
-    await notifyInitialApprover(routing, { employee_name: selEmp.full_name, leave_type: leaveType, days: daysDiff });
+    await notifyInitialApprover(routing, { employee_code: selEmp.employee_code, employee_name: selEmp.full_name, leave_type: leaveType, days: daysDiff });
     setMsg(`Leave application submitted (${daysDiff} day${daysDiff > 1 ? "s" : ""}). ${leaveType === "Unpaid" ? "Salary deduction will apply." : ""}`);
     setSelEmp(null); setFromDate(""); setToDate(""); setReason("");
     loadAll();
