@@ -6,7 +6,7 @@ import HierarchyBuilder from "./HierarchyBuilder.jsx";
 const DEPT_BLANK = { name: "", description: "" };
 const DES_BLANK = { name: "", department_id: "", description: "" };
 
-export default function DepartmentManagement() {
+export default function DepartmentManagement({ role }) {
   const [tab, setTab] = useState("departments");
   const [departments, setDepartments] = useState([]);
   const [designations, setDesignations] = useState([]);
@@ -210,7 +210,7 @@ export default function DepartmentManagement() {
         </div>
       )}
 
-      {tab === "orghierarchy" && <HierarchyBuilder embedded />}
+      {tab === "orghierarchy" && <HierarchyBuilder embedded role={role} />}
     </div>
   );
 }

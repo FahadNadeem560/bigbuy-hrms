@@ -321,7 +321,7 @@ export default function BigBuyHRMS({ profile }) {
       {/* Core HR */}
       {active === "dashboard"   && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} role={role} branchFilter={branchRestriction} />}
       {active === "employees"   && <EmployeesHub {...employeeProps} role={role} />}
-      {active === "departments" && <DepartmentManagement />}
+      {active === "departments" && <DepartmentManagement role={role} />}
       {active === "profile"     && <EmployeeProfile role={role} />}
 
       {/* Attendance */}
