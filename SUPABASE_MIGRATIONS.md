@@ -461,3 +461,32 @@ walk (`resolveNextApprover` in `src/services/leaveApprovalService.js`) needed no
 just correctly-seeded `employee_hierarchy.reports_to_employee_id` chains. `escalateStaleApprovals()`
 (called once on app load, same pattern as the temp-employee check) reads `stage_entered_at` to send
 a 24h reminder and auto-escalate at 48h — there's no server-side cron in this project.
+
+Note: a server-side `check_leave_escalations()` function already exists doing the same 24h/48h
+walk (found later, applied directly via Supabase MCP in an earlier session). Both are effectively
+idempotent given the `reminder_sent_at`/`escalated_at` guards, but only one is actually needed —
+worth consolidating onto whichever one is on a schedule.
+
+---
+
+## Attendance: respect joining_date / last_working_day (applied directly via Supabase MCP)
+
+`process_daily_attendance(from_date, to_date)` used to process every requested day for every
+`status = 'Active'` employee, with no floor/ceiling — it would generate Absent rows before an
+employee's `joining_date`, and skipped inactive employees entirely (losing their real pre-last-working-day
+history too, not just future days). Patched (`CREATE OR REPLACE FUNCTION`) to:
+- include employees with `last_working_day` set even if not Active (so their real attendance up to
+  that date still processes)
+- skip any day before `employees.joining_date`
+- skip any day after `employees.last_working_day` for non-Active employees
+
+`employee_hierarchy`, `hierarchy_levels` etc. unaffected. Employees.jsx and EmployeeProfile.jsx
+both write `last_working_day` when marking someone Inactive/Resigned — this function is what
+actually consumes it now.
+
+## Leave → Attendance/Payroll integration
+
+`leaveApprovalService.js`'s `markAttendanceLeaveDays()` (called on final leave approval) upserts
+`attendance_status = 'Leave'` (`review_status = 'Locked'` so ZKT re-sync won't clobber it) for every
+day of the approved range. `PayrollAutomation.jsx` already read `attendance_status === "Leave"` into
+its `leaveDaysUsed` bucket before this change — this was the one missing write-side step.

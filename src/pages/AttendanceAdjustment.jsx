@@ -40,6 +40,12 @@ function EmpPicker({ employees, value, onChange }) {
 
 const BLANK_FORM = { employee: null, work_date: "", original_in: "", original_out: "", adjusted_in: "", adjusted_out: "", reason: "" };
 
+function toTimeInput(t) {
+  if (!t) return "";
+  const s = String(t);
+  return s.includes("T") ? s.slice(11, 16) : s.slice(0, 5);
+}
+
 export default function AttendanceAdjustment({ role }) {
   const [tab, setTab] = useState("field");
   const [adjustments, setAdjustments] = useState([]);
@@ -48,6 +54,7 @@ export default function AttendanceAdjustment({ role }) {
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(BLANK_FORM);
+  const [originalRow, setOriginalRow] = useState(undefined); // undefined = not looked up, null = no record found
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
@@ -62,6 +69,24 @@ export default function AttendanceAdjustment({ role }) {
   const [filterTo, setFilterTo] = useState("");
 
   useEffect(() => { loadAll(); }, []);
+
+  // Auto-fetch the real punch times so the form doesn't require typing the
+  // original in/out from memory — only the corrected values need entering.
+  useEffect(() => {
+    if (!form.employee || !form.work_date) { setOriginalRow(undefined); return; }
+    let active = true;
+    supabase.from("attendance").select("*")
+      .eq("employee_code", form.employee.employee_code).eq("work_date", form.work_date)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!active) return;
+        setOriginalRow(data || null);
+        const origIn = toTimeInput(data?.check_in || data?.first_check_in);
+        const origOut = toTimeInput(data?.check_out || data?.last_check_out);
+        setForm(f => ({ ...f, original_in: origIn, original_out: origOut, adjusted_in: f.adjusted_in || origIn, adjusted_out: f.adjusted_out || origOut }));
+      });
+    return () => { active = false; };
+  }, [form.employee, form.work_date]);
 
   async function loadAll() {
     setLoading(true);
@@ -140,22 +165,52 @@ export default function AttendanceAdjustment({ role }) {
 
   async function saveAdjustment() {
     if (!form.employee || !form.work_date) return setErr("Employee and date are required.");
+    if (!form.adjusted_in && !form.adjusted_out) return setErr("Enter at least one corrected time.");
     setErr("");
+    const now = new Date().toISOString();
     const payload = {
       employee_code: form.employee.employee_code, employee_id: form.employee.employee_code,
       employee_name: form.employee.full_name, work_date: form.work_date,
       original_in: form.original_in || null, original_out: form.original_out || null,
       adjusted_in: form.adjusted_in || null, adjusted_out: form.adjusted_out || null,
-      reason: form.reason, adjusted_by: role || "HR", created_at: new Date().toISOString(),
+      reason: form.reason, adjusted_by: role || "HR", created_at: now,
     };
     const { error } = await supabase.from("attendance_adjustments").insert(payload);
     if (error) return setErr(error.message);
+
+    // Apply the correction to the live attendance record (both legacy and
+    // current column pairs are in use across this app) so it's not just an
+    // audit entry disconnected from what everyone else sees. Locking it
+    // protects the correction from being overwritten by the next ZKT re-sync.
+    const checkInTs = form.adjusted_in ? `${form.work_date}T${form.adjusted_in}:00` : null;
+    const checkOutTs = form.adjusted_out ? `${form.work_date}T${form.adjusted_out}:00` : null;
+    const workedHours = (checkInTs && checkOutTs)
+      ? Math.max(0, Math.round(((new Date(checkOutTs) - new Date(checkInTs)) / 3600000) * 100) / 100)
+      : (originalRow?.actual_hours ?? originalRow?.worked_hours ?? null);
+    const attUpdate = {
+      check_in: checkInTs, check_out: checkOutTs,
+      first_check_in: checkInTs, last_check_out: checkOutTs,
+      actual_hours: workedHours, worked_hours: workedHours,
+      is_manual_entry: true, manual_entry_by: role || "HR",
+      adjustment_status: "Adjusted", adjustment_approved_by: role || "HR",
+      review_status: "Locked",
+    };
+    if (originalRow) {
+      await supabase.from("attendance").update(attUpdate).eq("id", originalRow.id);
+    } else {
+      await supabase.from("attendance").insert({
+        employee_code: form.employee.employee_code, work_date: form.work_date, attendance_date: form.work_date,
+        ...attUpdate,
+      });
+    }
+
     await supabase.from("audit_logs").insert({
       action: "attendance_adjustment", entity: "attendance",
       entity_id: form.employee.employee_code, details: JSON.stringify(payload),
-      performed_by: role || "HR", created_at: new Date().toISOString(),
+      performed_by: role || "HR", created_at: now,
     }).then(() => {});
-    setMsg("Adjustment saved."); setForm(BLANK_FORM); setShowForm(false); loadAll();
+    setMsg("Adjustment saved and applied to the attendance record. Status/late/OT will be recalculated on the next attendance sync.");
+    setForm(BLANK_FORM); setOriginalRow(undefined); setShowForm(false); loadAll();
   }
 
   function formatTime(t) {
@@ -192,17 +247,30 @@ export default function AttendanceAdjustment({ role }) {
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-4">New Attendance Adjustment</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div><p className="text-xs text-slate-500 mb-1">Employee</p><EmpPicker employees={employees} value={form.employee} onChange={v => setForm(f => ({ ...f, employee: v }))} /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Date</p><input type="date" value={form.work_date} onChange={e => setForm(f => ({ ...f, work_date: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Original In</p><input type="time" value={form.original_in} onChange={e => setForm(f => ({ ...f, original_in: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Original Out</p><input type="time" value={form.original_out} onChange={e => setForm(f => ({ ...f, original_out: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Adjusted In</p><input type="time" value={form.adjusted_in} onChange={e => setForm(f => ({ ...f, adjusted_in: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Adjusted Out</p><input type="time" value={form.adjusted_out} onChange={e => setForm(f => ({ ...f, adjusted_out: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Employee</p><EmpPicker employees={employees} value={form.employee} onChange={v => setForm(f => ({ ...f, employee: v, adjusted_in: "", adjusted_out: "" }))} /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Date</p><input type="date" value={form.work_date} onChange={e => setForm(f => ({ ...f, work_date: e.target.value, adjusted_in: "", adjusted_out: "" }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
+            <div className="lg:col-span-1" />
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Original In {originalRow === undefined ? "" : originalRow ? "(recorded)" : "(no record)"}</p>
+              <div className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm bg-slate-50 text-slate-600">
+                {form.employee && form.work_date ? (originalRow === undefined ? "Loading…" : form.original_in || "—") : "Pick employee + date"}
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Original Out {originalRow === undefined ? "" : originalRow ? "(recorded)" : "(no record)"}</p>
+              <div className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm bg-slate-50 text-slate-600">
+                {form.employee && form.work_date ? (originalRow === undefined ? "Loading…" : form.original_out || "—") : "Pick employee + date"}
+              </div>
+            </div>
+            <div className="lg:col-span-1" />
+            <div><p className="text-xs text-slate-500 mb-1">Corrected In</p><input type="time" value={form.adjusted_in} onChange={e => setForm(f => ({ ...f, adjusted_in: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-blue-200 text-sm" /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Corrected Out</p><input type="time" value={form.adjusted_out} onChange={e => setForm(f => ({ ...f, adjusted_out: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-blue-200 text-sm" /></div>
             <div className="lg:col-span-3"><p className="text-xs text-slate-500 mb-1">Reason</p><input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
           </div>
+          <p className="text-xs text-slate-400 mt-2">Original times are pulled automatically from the recorded attendance for that day — only enter the corrected time(s).</p>
           <div className="mt-4 flex gap-2">
             <Button onClick={saveAdjustment} className="rounded-2xl">Save Adjustment</Button>
-            <Button variant="outline" onClick={() => setShowForm(false)} className="rounded-2xl">Cancel</Button>
+            <Button variant="outline" onClick={() => { setShowForm(false); setForm(BLANK_FORM); setOriginalRow(undefined); }} className="rounded-2xl">Cancel</Button>
           </div>
         </div>
       )}

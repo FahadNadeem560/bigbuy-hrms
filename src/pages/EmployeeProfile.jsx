@@ -92,6 +92,29 @@ export default function EmployeeProfile({ role }) {
 
   const [fieldMsg, setFieldMsg] = useState("");
   const [taxSetting, setTaxSetting] = useState(null);
+  const [statusMsg, setStatusMsg] = useState("");
+  const [showDeactivate, setShowDeactivate] = useState(false);
+  const [lastWorkingDay, setLastWorkingDay] = useState("");
+
+  async function setEmployeeStatus(newStatus, lwd) {
+    if (role !== "Master" && role !== "HR") return;
+    setErr("");
+    const payload = newStatus === "Active"
+      ? { status: "Active", last_working_day: null }
+      : { status: newStatus, last_working_day: lwd || null };
+    const { error } = await supabase.from("employees").update(payload).eq("employee_code", selEmp.employee_code);
+    if (error) return setErr(error.message);
+    await supabase.from("audit_logs").insert({
+      action: newStatus === "Active" ? "employee_reactivated" : "employee_deactivated",
+      entity: "employees", entity_id: selEmp.employee_code, performed_by: role,
+      details: newStatus === "Active" ? "Marked Active." : `Marked ${newStatus}. Last working day: ${lwd || "—"}.`,
+      created_at: new Date().toISOString(),
+    }).then(() => {});
+    setStatusMsg(newStatus === "Active" ? "Employee reactivated." : `Employee marked ${newStatus}. Attendance/payroll won't generate past ${lwd}.`);
+    setShowDeactivate(false); setLastWorkingDay("");
+    const { data } = await supabase.from("employees").select("*").eq("employee_code", selEmp.employee_code).maybeSingle();
+    if (data) setSelEmp(data);
+  }
 
   async function toggleFieldEmployee(newVal) {
     if (role !== "Master") return;
@@ -207,6 +230,28 @@ export default function EmployeeProfile({ role }) {
                 {selEmp.is_attendance_exempt && selEmp.exemption_reason && (
                   <p className="text-xs text-purple-600 mt-1">Exemption reason: {selEmp.exemption_reason}</p>
                 )}
+                {selEmp.last_working_day && (
+                  <p className="text-xs text-red-600 mt-1">Last working day: {selEmp.last_working_day}</p>
+                )}
+                {(role === "Master" || role === "HR") && (
+                  <div className="mt-2">
+                    {selEmp.status === "Active" ? (
+                      showDeactivate ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input type="date" value={lastWorkingDay} onChange={e => setLastWorkingDay(e.target.value)}
+                            className="px-3 py-1.5 rounded-xl border border-slate-200 text-xs" />
+                          <Button onClick={() => lastWorkingDay ? setEmployeeStatus("Inactive", lastWorkingDay) : setErr("Last working day is required.")} className="rounded-xl text-xs py-1.5 px-3">Confirm Inactive</Button>
+                          <Button variant="outline" onClick={() => { setShowDeactivate(false); setLastWorkingDay(""); }} className="rounded-xl text-xs py-1.5 px-3">Cancel</Button>
+                        </div>
+                      ) : (
+                        <Button variant="outline" onClick={() => setShowDeactivate(true)} className="rounded-xl text-xs py-1 px-3 text-red-600">Mark Inactive</Button>
+                      )
+                    ) : (
+                      <Button variant="outline" onClick={() => setEmployeeStatus("Active")} className="rounded-xl text-xs py-1 px-3 text-emerald-600">Reactivate</Button>
+                    )}
+                  </div>
+                )}
+                {statusMsg && <p className="text-xs text-blue-600 mt-1">{statusMsg}</p>}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-sm">
                   {[
                     ["Employee ID", selEmp.employee_code],

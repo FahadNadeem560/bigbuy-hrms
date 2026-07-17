@@ -212,6 +212,34 @@ async function logAudit(request, actorRole, actorName, actionType, stage, reason
   }
 }
 
+// Marks every day of an approved leave request as attendance_status='Leave'
+// (locked so a ZKT re-sync won't overwrite it back to Absent). PayrollAutomation.jsx
+// already reads this status into its leaveDaysUsed bucket — this is the one
+// missing write-side step that makes leave flow into attendance/payroll automatically.
+async function markAttendanceLeaveDays(request) {
+  const from = request.from_date || request.start_date;
+  const to = request.to_date || request.end_date || from;
+  if (!request.employee_code || !from) return;
+  const dates = [];
+  for (let d = new Date(from + "T00:00:00"); d <= new Date(to + "T00:00:00"); d.setDate(d.getDate() + 1)) {
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  const { data: existing } = await supabase.from("attendance")
+    .select("id, work_date").eq("employee_code", request.employee_code).in("work_date", dates);
+  const existingByDate = Object.fromEntries((existing || []).map(r => [r.work_date, r.id]));
+
+  await Promise.all(dates.map(work_date => {
+    const update = {
+      attendance_status: "Leave", status: "Leave", check_in: null, check_out: null,
+      first_check_in: null, last_check_out: null, review_status: "Locked",
+      is_manual_entry: true, manual_entry_by: "Leave Approval",
+    };
+    return existingByDate[work_date]
+      ? supabase.from("attendance").update(update).eq("id", existingByDate[work_date])
+      : supabase.from("attendance").insert({ employee_code: request.employee_code, work_date, attendance_date: work_date, ...update });
+  }));
+}
+
 async function notifyApplicantApproved(request) {
   await supabase.from("notifications").insert({
     recipient_code: request.employee_code, type: "leave_approval", is_read: false,
@@ -265,6 +293,7 @@ export async function approveLeaveStage(request, actorRole, actorName, { skip = 
     }).eq("id", request.id);
     if (error) throw error;
     await supabase.from("leave_approvals").insert({ leave_request_id: request.id, stage: currentStage, actor_role: actorRole, actor_name: actorName, action: skip ? "Skipped" : "Approved" });
+    await markAttendanceLeaveDays(request);
     await notifyApplicantApproved(request);
     await logAudit(request, actorRole, actorName, skip ? "leave_skipped" : "leave_approved", currentStage);
     return "Approved";

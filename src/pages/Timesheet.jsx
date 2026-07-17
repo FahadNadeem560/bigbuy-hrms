@@ -328,30 +328,34 @@ export default function Timesheet({ branchFilter }) {
 
       {!loading && selectedEmp && (
         <>
-          {/* Print CSS */}
+          {/* Print CSS — compact everything (via root font-size, since Tailwind spacing is rem-based)
+              so a full month's ledger + summaries + signatures fits on one A4 page. */}
           <style>{`
             @media print {
-              @page { size: A4 portrait; margin: 15mm; }
+              @page { size: A4 portrait; margin: 10mm; }
+              html, body { font-size: 10px; }
               body * { visibility: hidden; }
               #timesheet-print-root, #timesheet-print-root * { visibility: visible; }
               #timesheet-print-root { position: absolute; top: 0; left: 0; width: 100%; }
+              #timesheet-print-root table { page-break-inside: auto; }
+              #timesheet-print-root tr { page-break-inside: avoid; }
             }
           `}</style>
 
           <div id="timesheet-print-root">
             {/* Print-only A4 header */}
-            <div className="hidden print:block mb-4">
-              <div className="flex justify-between items-start border-b-2 border-slate-800 pb-3 mb-4">
+            <div className="hidden print:block mb-2">
+              <div className="flex justify-between items-start border-b-2 border-slate-800 pb-2 mb-2">
                 <div>
-                  <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">The Big Buy</h1>
-                  <p className="text-xs text-slate-500">Attendance Timesheet Report</p>
+                  <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">The Big Buy</h1>
+                  <p className="text-xs text-slate-500">Attendance Summary Report</p>
                 </div>
                 <div className="text-right text-xs text-slate-500">
                   <p>Period: {fromDate} — {toDate}</p>
                   <p>Generated: {new Date().toLocaleDateString()}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm mb-4">
+              <div className="grid grid-cols-2 gap-x-8 gap-y-0.5 text-sm mb-2">
                 {[
                   ["Employee Code", selectedEmp.employee_code],
                   ["Full Name", selectedEmp.full_name],
@@ -369,18 +373,18 @@ export default function Timesheet({ branchFilter }) {
             </div>
 
             {/* Attendance Ledger */}
-            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm mb-4 overflow-x-auto print:rounded-none print:border-0 print:shadow-none">
-              <div className="px-5 pt-4 pb-2 print:px-0 print:pt-0">
-                <h2 className="font-bold text-slate-800 print:text-base">Attendance Ledger</h2>
-                <p className="text-xs text-slate-400 mt-0.5">
+            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm mb-4 overflow-x-auto print:rounded-none print:border-0 print:shadow-none print:mb-1">
+              <div className="px-5 pt-4 pb-2 print:px-0 print:pt-0 print:pb-1">
+                <h2 className="font-bold text-slate-800 print:text-sm">Attendance Ledger</h2>
+                <p className="text-xs text-slate-400 mt-0.5 print:hidden">
                   {fromDate} — {toDate} · {attendance.length} record{attendance.length !== 1 ? "s" : ""}
                 </p>
               </div>
-              <table className="w-full min-w-[820px] text-sm print:min-w-0 print:text-xs">
+              <table className="w-full min-w-[820px] text-sm print:min-w-0 print:text-[9px]">
                 <thead className="bg-slate-50 text-slate-500 print:bg-slate-200">
                   <tr>
                     {["Date", "Day", "Shift", "In", "Out", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status"].map((h) => (
-                      <th key={h} className="text-left px-4 py-3 font-medium print:px-2 print:py-2">{h}</th>
+                      <th key={h} className="text-left px-4 py-3 font-medium print:px-1.5 print:py-1">{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -397,30 +401,30 @@ export default function Timesheet({ branchFilter }) {
                       const shift = row.detected_shift;
                       return (
                         <tr key={i} className={status === "Absent" ? "bg-red-50/40" : ""}>
-                          <td className="px-4 py-3 font-medium text-slate-800 print:px-2 print:py-1.5">{row.work_date}</td>
-                          <td className="px-4 py-3 text-slate-400 text-xs print:px-2 print:py-1.5">{getDayName(row.work_date)}</td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                          <td className="px-4 py-3 font-medium text-slate-800 print:px-1.5 print:py-0.5">{row.work_date}</td>
+                          <td className="px-4 py-3 text-slate-400 text-xs print:px-1.5 print:py-0.5">{getDayName(row.work_date)}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {shift ? (
                               <span className={`font-medium ${shift === "A" ? "text-blue-600" : shift === "B" ? "text-purple-600" : "text-amber-600"}`}>
                                 {shift === "HalfDay" ? "HD" : `Sh.${shift}`}
                               </span>
                             ) : "—"}
                           </td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">{formatTime(row.check_in || row.time_in)}</td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">{formatTime(row.check_out || row.time_out)}</td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">{row.actual_hours ?? row.hours_worked ?? 0}</td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{formatTime(row.check_in || row.time_in)}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{formatTime(row.check_out || row.time_out)}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.actual_hours ?? row.hours_worked ?? 0}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {Number(row.late_minutes || 0) > 0 ? <span className="text-amber-600 font-medium">{row.late_minutes}</span> : "0"}
                           </td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {Number(row.short_hours || 0) > 0 ? <span className="text-red-500 font-medium">{row.short_hours}</span> : "0"}
                           </td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {Number(row.ot_hours || row.overtime_hours || 0) > 0 ? (
                               <span className="text-blue-600 font-medium">{row.ot_hours ?? row.overtime_hours}</span>
                             ) : "0"}
                           </td>
-                          <td className="px-4 py-3 print:px-2 print:py-1.5">
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             <StatusBadge status={status} />
                           </td>
                         </tr>
@@ -432,14 +436,14 @@ export default function Timesheet({ branchFilter }) {
             </div>
 
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 print:gap-2 print:mb-1">
             {/* Late Summary */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="h-9 w-9 rounded-xl bg-amber-50 flex items-center justify-center text-lg shrink-0">⏰</span>
-                <h3 className="font-bold text-slate-800">Late Summary</h3>
+            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm print:p-2 print:border-slate-300">
+              <div className="flex items-center gap-2 mb-4 print:mb-1">
+                <span className="h-9 w-9 rounded-xl bg-amber-50 flex items-center justify-center text-lg shrink-0 print:hidden">⏰</span>
+                <h3 className="font-bold text-slate-800 print:text-xs">Late Summary</h3>
               </div>
-              <div className="space-y-2.5">
+              <div className="space-y-2.5 print:space-y-1">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">Total Late Count</span>
                   <Badge tone={lateSummary.totalLateCount > 0 ? "yellow" : "green"}>
@@ -465,12 +469,12 @@ export default function Timesheet({ branchFilter }) {
             </div>
 
             {/* Short Hours */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="h-9 w-9 rounded-xl bg-red-50 flex items-center justify-center text-lg shrink-0">⏱️</span>
-                <h3 className="font-bold text-slate-800">Short Hours</h3>
+            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm print:p-2 print:border-slate-300">
+              <div className="flex items-center gap-2 mb-4 print:mb-1">
+                <span className="h-9 w-9 rounded-xl bg-red-50 flex items-center justify-center text-lg shrink-0 print:hidden">⏱️</span>
+                <h3 className="font-bold text-slate-800 print:text-xs">Short Hours</h3>
               </div>
-              <div className="space-y-2.5">
+              <div className="space-y-2.5 print:space-y-1">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">Monthly Short Hours</span>
                   <span className="font-semibold">{shortSummary.totalShort} hrs</span>
@@ -490,12 +494,12 @@ export default function Timesheet({ branchFilter }) {
             </div>
 
             {/* OT Summary */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-              <div className="flex items-center gap-2 mb-4">
-                <span className="h-9 w-9 rounded-xl bg-blue-50 flex items-center justify-center text-lg shrink-0">💼</span>
-                <h3 className="font-bold text-slate-800">OT Summary</h3>
+            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm print:p-2 print:border-slate-300">
+              <div className="flex items-center gap-2 mb-4 print:mb-1">
+                <span className="h-9 w-9 rounded-xl bg-blue-50 flex items-center justify-center text-lg shrink-0 print:hidden">💼</span>
+                <h3 className="font-bold text-slate-800 print:text-xs">OT Summary</h3>
               </div>
-              <div className="space-y-2.5">
+              <div className="space-y-2.5 print:space-y-1">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">Monthly OT</span>
                   <span className="font-semibold">{otSummary.totalOT} hrs</span>
@@ -520,14 +524,14 @@ export default function Timesheet({ branchFilter }) {
           </div>
 
           {/* Leave Balance */}
-          <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4 print:rounded-none print:border-0 print:shadow-none print:mb-2">
+          <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4 print:rounded-none print:border-0 print:shadow-none print:mb-1 print:p-0">
             <div className="flex items-center gap-2 mb-4 print:hidden">
               <span className="h-9 w-9 rounded-xl bg-emerald-50 flex items-center justify-center text-lg shrink-0">🌴</span>
               <h3 className="font-bold text-slate-800">Leave Balance</h3>
             </div>
-            <h3 className="hidden print:block font-bold text-slate-800 mb-2 text-sm">Annual Leave Balance</h3>
+            <h3 className="hidden print:block font-bold text-slate-800 mb-1 text-xs">Annual Leave Balance</h3>
             {leaveData ? (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 print:gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 print:gap-1.5">
                 {[
                   { label: "Opening Balance", value: leaveData.opening_balance },
                   { label: "Earned", value: leaveData.earned },
@@ -535,9 +539,9 @@ export default function Timesheet({ branchFilter }) {
                   { label: "Half Leaves", value: leaveData.half_leaves },
                   { label: "Remaining Balance", value: leaveData.remaining ?? leaveData.remaining_balance, highlight: true },
                 ].map(({ label, value, highlight }) => (
-                  <div key={label} className={`text-center rounded-xl p-4 print:p-2 print:border print:border-slate-300 ${highlight ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50"}`}>
-                    <div className="text-xs text-slate-500 mb-1">{label}</div>
-                    <div className={`text-2xl font-bold print:text-lg ${highlight ? "text-emerald-700" : "text-slate-900"}`}>{value ?? "—"}</div>
+                  <div key={label} className={`text-center rounded-xl p-4 print:p-1 print:border print:border-slate-300 ${highlight ? "bg-emerald-50 border border-emerald-100" : "bg-slate-50"}`}>
+                    <div className="text-xs text-slate-500 mb-1 print:mb-0">{label}</div>
+                    <div className={`text-2xl font-bold print:text-sm ${highlight ? "text-emerald-700" : "text-slate-900"}`}>{value ?? "—"}</div>
                   </div>
                 ))}
               </div>
@@ -547,10 +551,10 @@ export default function Timesheet({ branchFilter }) {
           </div>
 
           {/* Print Signature Footer */}
-          <div className="hidden print:flex justify-between mt-12 pt-4 border-t border-slate-300">
+          <div className="hidden print:flex justify-between mt-6 pt-2 border-t border-slate-300">
             {[["HR Manager", "Human Resources"], ["Supervisor", "Direct Supervisor"], ["Employee", selectedEmp.full_name]].map(([title, name]) => (
               <div key={title} className="text-center w-1/3">
-                <div className="border-t border-slate-600 mt-12 pt-2 mx-4">
+                <div className="border-t border-slate-600 mt-6 pt-1 mx-4">
                   <p className="font-semibold text-xs">{title}</p>
                   <p className="text-xs text-slate-500">{name}</p>
                   <p className="text-xs text-slate-400 mt-1">Date: _______________</p>
