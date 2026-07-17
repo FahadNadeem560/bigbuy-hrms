@@ -108,17 +108,21 @@ export default function LoanManagement() {
   // ─── Bulk Import ───────────────────────────────────────────────────────
   function downloadLoanImportTemplate() {
     const instructions =
-      "INSTRUCTIONS: Employee Code must match an existing employee. Guarantor codes are optional but if given must " +
-      "match existing employees and cannot be the borrower themselves. Repayment Months is auto-calculated from " +
-      "Loan Amount / Monthly Deduction. Do not leave Employee Code, Loan Amount, Monthly Deduction or Start Date blank.";
+      "INSTRUCTIONS: Employee Code must match an existing employee. Outstanding Balance is optional — leave blank for a " +
+      "fresh loan (defaults to Loan Amount), or enter the remaining balance for an existing loan, or 0 to record a loan " +
+      "that has already been fully paid off (imported for history, status will be set to Cleared). Guarantor codes are " +
+      "optional but if given must match existing employees and cannot be the borrower themselves. Repayment Months is " +
+      "auto-calculated from Loan Amount / Monthly Deduction. Do not leave Employee Code, Loan Amount, Monthly Deduction " +
+      "or Start Date blank.";
     const aoa = [
       [instructions],
-      ["Employee Code", "Loan Amount", "Monthly Deduction", "Start Date", "Reason", "Guarantor 1 Code", "Guarantor 2 Code"],
-      ["1001", 25000, 5000, "2026-04-01", "Medical emergency", "1002", "1003"],
+      ["Employee Code", "Loan Amount", "Outstanding Balance", "Monthly Deduction", "Start Date", "Reason", "Guarantor 1 Code", "Guarantor 2 Code"],
+      ["1001", 25000, "", 5000, "2026-04-01", "Medical emergency", "1002", "1003"],
+      ["1004", 20000, 0, 4000, "2025-11-01", "Paid off — imported for record", "", ""],
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
-    ws["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 24 }, { wch: 16 }, { wch: 16 }];
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }];
+    ws["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 24 }, { wch: 16 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Loan Import");
     XLSX.writeFile(wb, "loan_import_template.xlsx");
@@ -143,6 +147,9 @@ export default function LoanManagement() {
         const code = String(obj["Employee Code"] || "").trim();
         const emp = employees.find(e => e.employee_code === code);
         const loanAmount = Number(obj["Loan Amount"] || 0);
+        const balanceRaw = String(obj["Outstanding Balance"] ?? "").trim();
+        const outstandingBalance = balanceRaw === "" ? loanAmount : Number(balanceRaw);
+        const loanStatus = outstandingBalance <= 0 ? "Cleared" : "Active";
         const monthlyDeduction = Number(obj["Monthly Deduction"] || 0);
         const startDate = excelDateToJS(obj["Start Date"]);
         const reason = String(obj["Reason"] || "").trim();
@@ -156,6 +163,8 @@ export default function LoanManagement() {
         if (!code) status = "error: missing employee code";
         else if (!emp) status = `error: ${code} not found`;
         else if (!loanAmount || loanAmount <= 0) status = "error: invalid loan amount";
+        else if (isNaN(outstandingBalance) || outstandingBalance < 0) status = "error: invalid outstanding balance";
+        else if (outstandingBalance > loanAmount) status = "error: outstanding balance exceeds loan amount";
         else if (!monthlyDeduction || monthlyDeduction <= 0) status = "error: invalid monthly deduction";
         else if (!startDate) status = "error: missing start date";
         else if (g1Code && !g1) status = `error: guarantor 1 (${g1Code}) not found`;
@@ -164,7 +173,7 @@ export default function LoanManagement() {
         else if (g2Code && g2Code === code) status = "error: guarantor 2 cannot be the borrower";
         else if (g1Code && g2Code && g1Code === g2Code) status = "warning: same guarantor listed twice";
 
-        return { code, emp, loanAmount, monthlyDeduction, startDate, reason, months, g1Code, g1, g2Code, g2, status };
+        return { code, emp, loanAmount, outstandingBalance, loanStatus, monthlyDeduction, startDate, reason, months, g1Code, g1, g2Code, g2, status };
       });
       setImportPreview(preview);
     } catch (e) {
@@ -182,8 +191,8 @@ export default function LoanManagement() {
       const { error } = await supabase.from("loans").insert({
         employee_code: row.code, employee_name: row.emp?.full_name,
         loan_amount: row.loanAmount, monthly_deduction: row.monthlyDeduction,
-        outstanding_balance: row.loanAmount, start_date: row.startDate, reason: row.reason,
-        status: "Active", repayment_months: row.months, auto_deduct: true,
+        outstanding_balance: row.outstandingBalance, start_date: row.startDate, reason: row.reason,
+        status: row.loanStatus, repayment_months: row.months, auto_deduct: true,
         guarantor_1_code: row.g1?.employee_code || null, guarantor_1_name: row.g1?.full_name || null,
         guarantor_2_code: row.g2?.employee_code || null, guarantor_2_name: row.g2?.full_name || null,
         created_at: new Date().toISOString(),
@@ -260,8 +269,10 @@ export default function LoanManagement() {
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-3">Import Loans</h2>
           <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-3">
-            <strong>Instructions:</strong> Employee Code must match an existing employee. Guarantor codes are optional but if given must match
-            existing employees and cannot be the borrower themselves. Repayment Months is auto-calculated from Loan Amount / Monthly Deduction.
+            <strong>Instructions:</strong> Employee Code must match an existing employee. Outstanding Balance is optional — leave blank for a
+            fresh loan, or set it (including 0 for already paid-off loans) to import historical loans for the record; a balance of 0 is
+            imported as Cleared. Guarantor codes are optional but if given must match existing employees and cannot be the borrower themselves.
+            Repayment Months is auto-calculated from Loan Amount / Monthly Deduction.
           </div>
           <div className="flex flex-wrap items-center gap-3 mb-3">
             <Button variant="outline" onClick={downloadLoanImportTemplate} className="rounded-xl text-xs py-1.5 px-3">Download Template</Button>
@@ -295,7 +306,7 @@ export default function LoanManagement() {
                 <table className="w-full text-xs min-w-[900px]">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
-                      {["Code", "Employee", "Loan Amount", "Monthly Ded.", "Months", "Start Date", "Guarantor 1", "Guarantor 2", "Status"].map(h => (
+                      {["Code", "Employee", "Loan Amount", "Outstanding", "Monthly Ded.", "Months", "Start Date", "Guarantor 1", "Guarantor 2", "Loan Status", "Status"].map(h => (
                         <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
                       ))}
                     </tr>
@@ -306,11 +317,15 @@ export default function LoanManagement() {
                         <td className="px-3 py-2 font-mono">{row.code || "—"}</td>
                         <td className="px-3 py-2">{row.emp?.full_name || "—"}</td>
                         <td className="px-3 py-2 text-center">{money(row.loanAmount)}</td>
+                        <td className="px-3 py-2 text-center">{money(row.outstandingBalance)}</td>
                         <td className="px-3 py-2 text-center">{money(row.monthlyDeduction)}</td>
                         <td className="px-3 py-2 text-center">{row.months || "—"}</td>
                         <td className="px-3 py-2">{row.startDate || "—"}</td>
                         <td className="px-3 py-2">{row.g1 ? `${row.g1.employee_code} — ${row.g1.full_name}` : row.g1Code || "—"}</td>
                         <td className="px-3 py-2">{row.g2 ? `${row.g2.employee_code} — ${row.g2.full_name}` : row.g2Code || "—"}</td>
+                        <td className="px-3 py-2">
+                          <span className={`px-2 py-0.5 rounded-lg text-[11px] font-medium ${row.loanStatus === "Cleared" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{row.loanStatus}</span>
+                        </td>
                         <td className={`px-3 py-2 font-medium ${row.status.startsWith("error") ? "text-red-600" : row.status.startsWith("warning") ? "text-yellow-700" : "text-emerald-600"}`}>
                           {row.status}
                         </td>
