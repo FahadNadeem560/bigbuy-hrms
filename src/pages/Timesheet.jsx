@@ -69,6 +69,22 @@ export default function Timesheet({ branchFilter, role }) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
   });
   const [toDate, setToDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [monthPick, setMonthPick] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+
+  function applyMonth(value) {
+    setMonthPick(value);
+    if (!value) return;
+    const [y, m] = value.split("-").map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const newFrom = `${value}-01`;
+    const newTo = `${value}-${String(lastDay).padStart(2, "0")}`;
+    setFromDate(newFrom);
+    setToDate(newTo);
+    if (selectedEmp) loadTimesheet(selectedEmp, newFrom, newTo);
+  }
 
   const [employees, setEmployees] = useState([]);
   const [selectedEmp, setSelectedEmp] = useState(null);
@@ -115,7 +131,7 @@ export default function Timesheet({ branchFilter, role }) {
       .slice(0, 12);
   }, [employees, empSearch, department, branch]);
 
-  async function loadTimesheet(emp) {
+  async function loadTimesheet(emp, from = fromDate, to = toDate) {
     setSelectedEmp(emp);
     setShowDropdown(false);
     setEmpSearch("");
@@ -126,8 +142,8 @@ export default function Timesheet({ branchFilter, role }) {
         .from("attendance")
         .select("*")
         .eq("employee_code", emp.employee_code)
-        .gte("work_date", fromDate)
-        .lte("work_date", toDate)
+        .gte("work_date", from)
+        .lte("work_date", to)
         .order("work_date", { ascending: true });
       if (attErr) throw attErr;
       setAttendance(att || []);
@@ -136,8 +152,8 @@ export default function Timesheet({ branchFilter, role }) {
         .from("employee_work_rosters")
         .select("roster_date, is_weekly_off, is_gazetted_holiday")
         .eq("employee_code", emp.employee_code)
-        .gte("roster_date", fromDate)
-        .lte("roster_date", toDate);
+        .gte("roster_date", from)
+        .lte("roster_date", to);
       setRoster(rst || []);
 
       const { data: lv } = await supabase
@@ -204,6 +220,31 @@ export default function Timesheet({ branchFilter, role }) {
     ));
     setNotice(`${flag.replace(/([A-Z])/g, " $1").trim()} updated.`);
     setTimeout(() => setNotice(""), 3000);
+  }
+
+  async function markDayAsLeave(row) {
+    if (!canToggle || !selectedEmp || !row.work_date) return;
+    const work_date = row.work_date;
+    const update = {
+      attendance_status: "Leave", status: "Leave", check_in: null, check_out: null,
+      first_check_in: null, last_check_out: null, review_status: "Locked",
+      is_manual_entry: true, manual_entry_by: role,
+    };
+    const { error: updErr } = row.id
+      ? await supabase.from("attendance").update(update).eq("id", row.id)
+      : await supabase.from("attendance").insert({ employee_code: selectedEmp.employee_code, work_date, attendance_date: work_date, ...update });
+    if (updErr) { setNotice(`Error: ${updErr.message}`); return; }
+
+    await supabase.from("audit_logs").insert({
+      action: "attendance_absent_to_leave", entity: "attendance", entity_id: row.id || null,
+      performed_by: role,
+      details: `Marked ${selectedEmp.employee_code} ${work_date} as Leave (was Absent).`,
+      created_at: new Date().toISOString(),
+    }).then(() => {});
+
+    setNotice(`${work_date} marked as Leave.`);
+    setTimeout(() => setNotice(""), 3000);
+    loadTimesheet(selectedEmp);
   }
 
   const isOtEligible = useMemo(() => {
@@ -327,7 +368,7 @@ export default function Timesheet({ branchFilter, role }) {
 
       {/* Filter Bar */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 print:hidden">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
           <div className="relative lg:col-span-2" ref={dropdownRef}>
             <input
               value={selectedEmp ? `${selectedEmp.employee_code} — ${selectedEmp.full_name}` : empSearch}
@@ -379,15 +420,22 @@ export default function Timesheet({ branchFilter, role }) {
           </select>
 
           <input
+            type="month"
+            value={monthPick}
+            onChange={(e) => applyMonth(e.target.value)}
+            title="Select a whole month"
+            className="px-4 py-2 rounded-xl border border-slate-200 text-sm"
+          />
+          <input
             type="date"
             value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
+            onChange={(e) => { setFromDate(e.target.value); setMonthPick(""); }}
             className="px-4 py-2 rounded-xl border border-slate-200 text-sm"
           />
           <input
             type="date"
             value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
+            onChange={(e) => { setToDate(e.target.value); setMonthPick(""); }}
             className="px-4 py-2 rounded-xl border border-slate-200 text-sm"
           />
         </div>
@@ -538,6 +586,11 @@ export default function Timesheet({ branchFilter, role }) {
                           </td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             <StatusBadge status={status} />
+                            {canToggle && status === "Absent" && (
+                              <button onClick={() => markDayAsLeave(row)} className="block mt-1 text-[10px] text-blue-600 underline print:hidden">
+                                Mark as Leave
+                              </button>
+                            )}
                           </td>
                           {canToggle && (
                             <>

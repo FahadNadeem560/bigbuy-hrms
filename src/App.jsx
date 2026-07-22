@@ -205,6 +205,7 @@ export default function BigBuyHRMS({ profile }) {
       temp_id: tempId,
       employment_status: employmentStatus,
       is_field_employee: !!newEmployee.isFieldEmployee,
+      weekly_off_day: newEmployee.weeklyOffDay !== "" && newEmployee.weeklyOffDay != null ? newEmployee.weeklyOffDay : null,
     };
     try {
       await createEmployee(payload); await loadEmployees();
@@ -227,6 +228,7 @@ export default function BigBuyHRMS({ profile }) {
         billing_address: editingEmployee.billingAddress, permanent_address: editingEmployee.permanentAddress, current_address: editingEmployee.currentAddress,
         personal_phone: editingEmployee.personalPhone, work_phone: editingEmployee.workPhone, email: editingEmployee.email,
         bank_name: editingEmployee.bankName, account_number: editingEmployee.accountNumber, iban: editingEmployee.iban,
+        weekly_off_day: editingEmployee.weeklyOffDay !== "" && editingEmployee.weeklyOffDay != null ? editingEmployee.weeklyOffDay : null,
       });
       await loadEmployees(); setEditingEmployee(null);
     } catch (err) { setError(`Update failed: ${err.message}`); }

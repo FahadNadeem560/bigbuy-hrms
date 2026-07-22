@@ -3,12 +3,14 @@ import Employees from "./Employees.jsx";
 import Recruitment from "./Recruitment.jsx";
 import DocumentManagement from "./DocumentManagement.jsx";
 import StaffCredentials from "./StaffCredentials.jsx";
+import Permissions from "./Permissions.jsx";
 
 const TABS = [
   ["directory",   "Directory"],
   ["recruitment", "Recruitment"],
   ["documents",   "Documents"],
   ["credentials", "Credentials"],
+  ["permissions", "Permissions"],
 ];
 
 export default function EmployeesHub({ role, ...props }) {
@@ -35,6 +37,7 @@ export default function EmployeesHub({ role, ...props }) {
       {tab === "recruitment" && role !== "Finance" && <Recruitment />}
       {tab === "documents"   && role !== "Finance" && <DocumentManagement />}
       {tab === "credentials" && <StaffCredentials />}
+      {tab === "permissions" && <Permissions {...props} role={role} />}
     </div>
   );
 }

@@ -15,6 +15,18 @@ function cnicExpiryStatus(expiryDate) {
   return "ok";
 }
 
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// Company policy: Admin/Warehouse staff always get Sunday off; Floor Management
+// and Non-Management (sales/support floor staff) can only be off Mon-Thu;
+// Management staff default to Sunday.
+function allowedOffDays(department, level) {
+  const dept = String(department || "").toLowerCase();
+  if (dept.startsWith("admin") || dept.startsWith("warehouse")) return [0];
+  if (level === "Floor Management" || level === "Non-Management") return [1, 2, 3, 4];
+  return [0];
+}
+
 async function uploadFile(file, folder) {
   const ext = file.name.split(".").pop();
   const path = `${folder}/${Date.now()}.${ext}`;
@@ -128,6 +140,12 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
         </Field>
         <Field label="Salary">{inp("salary", "Monthly Salary", "number")}</Field>
         <Field label="Joining Date">{inp("joiningDate", "", "date")}</Field>
+        <Field label="Weekly Off Day">
+          <select value={employee.weeklyOffDay || ""} onChange={e => setEmployee(v => ({ ...v, weeklyOffDay: e.target.value }))} className="px-4 py-2 border rounded-xl w-full text-sm">
+            <option value="">Not set</option>
+            {allowedOffDays(employee.department, employee.level).map(d => <option key={d} value={d}>{DAY_NAMES[d]}</option>)}
+          </select>
+        </Field>
       </Section>
 
       <Section title="Hierarchy & Role">
@@ -233,6 +251,12 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
         <Field label="Status">
           <select value={employee.status} onChange={e => setEmployee(v => ({ ...v, status: e.target.value }))} className="px-4 py-2 border rounded-xl w-full text-sm">
             <option>Active</option><option>Inactive</option>
+          </select>
+        </Field>
+        <Field label="Weekly Off Day">
+          <select value={employee.weeklyOffDay || ""} onChange={e => setEmployee(v => ({ ...v, weeklyOffDay: e.target.value }))} className="px-4 py-2 border rounded-xl w-full text-sm">
+            <option value="">Not set</option>
+            {allowedOffDays(employee.dept, employee.level).map(d => <option key={d} value={d}>{DAY_NAMES[d]}</option>)}
           </select>
         </Field>
       </Section>

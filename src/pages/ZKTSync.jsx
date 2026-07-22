@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import * as XLSX from "xlsx";
 import { Button, Card, CardContent, PageTitle } from "../components/ui.js";
-import { importPendingStorageFiles, importZKTRawPunches, runAttendanceProcessing } from "../services/attendanceService.js";
+import { importPendingStorageFiles, importZKTRawPunches, runAttendanceProcessing, generateEmployeeWorkRosters } from "../services/attendanceService.js";
 
 export default function ZKTSync() {
   const [file, setFile] = useState(null);
@@ -10,6 +10,7 @@ export default function ZKTSync() {
   const [busy, setBusy] = useState(false);
   const [storageBusy, setStorageBusy] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [rosterBusy, setRosterBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -168,19 +169,38 @@ export default function ZKTSync() {
       const chunks = chunkDateRange(fromDate, toDate, PROCESS_CHUNK_DAYS);
       let processedDays = 0;
       let attendanceRows = 0;
+      let needsReview = 0;
+      let absentCount = 0;
       for (let i = 0; i < chunks.length; i++) {
         const [chunkFrom, chunkTo] = chunks[i];
         setMessage(`Processing ${chunkFrom} to ${chunkTo} (${i + 1} of ${chunks.length})...`);
         const result = await runAttendanceProcessing(chunkFrom, chunkTo);
         const first = Array.isArray(result) ? result[0] : result;
         processedDays += Number(first?.processed_days || 0);
-        attendanceRows += Number(first?.attendance_rows || 0);
+        attendanceRows += Number(first?.inserted_or_updated || 0);
+        needsReview += Number(first?.needs_review_count || 0);
+        absentCount += Number(first?.absent_count || 0);
       }
-      setMessage(`Processed ${processedDays} days. Created/updated ${attendanceRows} attendance rows.`);
+      setMessage(`Processed ${processedDays} days. Created/updated ${attendanceRows} attendance rows (${absentCount} absent, ${needsReview} need review).`);
     } catch (err) {
       setError(err.message);
     } finally {
       setProcessing(false);
+    }
+  }
+
+  async function generateRosters() {
+    setMessage("");
+    setError("");
+    setRosterBusy(true);
+    try {
+      const result = await generateEmployeeWorkRosters(fromDate, toDate);
+      const first = Array.isArray(result) ? result[0] : result;
+      setMessage(`Marked ${Number(first?.weekly_off_rows || 0)} weekly-off days across ${Number(first?.processed_days || 0)} days.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRosterBusy(false);
     }
   }
 
@@ -201,6 +221,13 @@ export default function ZKTSync() {
           <input type="file" accept=".xls,.xlsx,.csv" onChange={(e) => setFile(e.target.files?.[0] || null)} className="block w-full text-sm mb-4" />
           {file && <p className="text-sm text-slate-600 mb-4">Selected: <b>{file.name}</b></p>}
           <Button onClick={importFile} disabled={busy} className="rounded-2xl">{busy ? "Importing..." : "Import ZKT File"}</Button>
+        </CardContent>
+      </Card>
+      <Card className="rounded-2xl border border-slate-100 shadow-sm mb-6">
+        <CardContent className="p-6">
+          <h2 className="text-lg font-bold mb-3">Generate Weekly Off Rosters</h2>
+          <p className="text-sm text-slate-600 mb-4">Marks each employee's fixed weekly off day (set on their profile) for the selected date range, so Process Attendance below correctly classifies those days as Weekly Off instead of Absent. Run this before Process Attendance for a new period.</p>
+          <Button onClick={generateRosters} disabled={rosterBusy} className="rounded-2xl">{rosterBusy ? "Generating..." : "Generate Weekly Off Rosters"}</Button>
         </CardContent>
       </Card>
       <Card className="rounded-2xl border border-slate-100 shadow-sm">

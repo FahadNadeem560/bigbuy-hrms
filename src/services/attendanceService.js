@@ -68,7 +68,20 @@ export async function fetchRecentAttendance(limit = 25000) {
 }
 
 export async function runAttendanceProcessing(fromDate, toDate) {
-  const { data, error } = await supabase.rpc("process_zkt_raw_punches", {
+  const { data, error } = await supabase.rpc("run_attendance_processing", {
+    p_from_date: fromDate || null,
+    p_to_date: toDate || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Populates employee_work_rosters.is_weekly_off for the given date range,
+// based on each employee's fixed weekly_off_day (0=Sunday..6=Saturday), so
+// process_daily_attendance can classify those days as Weekly Off instead of
+// Absent. Run this before (or alongside) attendance processing for a period.
+export async function generateEmployeeWorkRosters(fromDate, toDate) {
+  const { data, error } = await supabase.rpc("generate_employee_work_rosters", {
     p_from_date: fromDate || null,
     p_to_date: toDate || null,
   });
