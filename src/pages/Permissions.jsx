@@ -55,12 +55,24 @@ export default function Permissions({ employees, role }) {
   }, [employees, search]);
 
   async function saveField(employeeCode, patch) {
-    if (!canEdit) return;
+    if (!canEdit) return false;
     setPending(p => ({ ...p, [employeeCode]: true }));
     const { error } = await supabase.from("employees").update(patch).eq("employee_code", employeeCode);
     setPending(p => ({ ...p, [employeeCode]: false }));
-    if (error) { say(`Error saving ${employeeCode}: ${error.message}`, true); return; }
+    if (error) { say(`Error saving ${employeeCode}: ${error.message}`, true); return false; }
     say("Saved.");
+    return true;
+  }
+
+  // audit_logs schema is (id, action_type, performed_by, details, created_at) —
+  // no action/entity/entity_id columns despite several other pages in this app
+  // inserting those (silently failing, since .then(()=>{}) swallows the error).
+  function logAudit(actionType, employeeCode, details) {
+    supabase.from("audit_logs").insert({
+      action_type: actionType, performed_by: role,
+      details: `[${employeeCode}] ${details}`,
+      created_at: new Date().toISOString(),
+    }).then(() => {});
   }
 
   function cycleOtEligible(e) {
@@ -77,6 +89,27 @@ export default function Permissions({ employees, role }) {
   function cycleGhEligible(e) {
     const next = e.ghEligible == null ? true : e.ghEligible === true ? false : null;
     saveField(e.id, { gazetted_holiday_eligible: next });
+  }
+
+  async function toggleFieldEmployee(e) {
+    const next = !e.isFieldEmployee;
+    if (!(await saveField(e.id, { is_field_employee: next }))) return;
+    logAudit(next ? "field_employee_enabled" : "field_employee_disabled", e.id, `Field employee ${next ? "enabled" : "disabled"}.`);
+  }
+
+  async function toggleAttendanceExempt(e) {
+    const turningOn = !e.isAttendanceExempt;
+    let reason = null;
+    if (turningOn) {
+      reason = (window.prompt("Reason for attendance exemption (required):", "") || "").trim();
+      if (!reason) { say("Exemption reason is required — exemption not changed.", true); return; }
+    }
+    if (!(await saveField(e.id, { is_attendance_exempt: turningOn, exemption_reason: reason }))) return;
+    logAudit(
+      turningOn ? "exemption_granted" : "exemption_removed",
+      e.id,
+      turningOn ? `Attendance exemption granted. Reason: ${reason}` : "Attendance exemption removed."
+    );
   }
 
   return (
@@ -234,8 +267,9 @@ export default function Permissions({ employees, role }) {
                   <td className="px-3 py-2.5">
                     <button
                       disabled={!canEdit || busy}
-                      onClick={() => saveField(e.id, { is_attendance_exempt: !e.isAttendanceExempt })}
+                      onClick={() => toggleAttendanceExempt(e)}
                       className="disabled:cursor-default"
+                      title={e.isAttendanceExempt && e.exemptionReason ? `Reason: ${e.exemptionReason}` : ""}
                     >
                       <YesNoBadge value={e.isAttendanceExempt} />
                     </button>
@@ -243,7 +277,7 @@ export default function Permissions({ employees, role }) {
                   <td className="px-3 py-2.5">
                     <button
                       disabled={!canEdit || busy}
-                      onClick={() => saveField(e.id, { is_field_employee: !e.isFieldEmployee })}
+                      onClick={() => toggleFieldEmployee(e)}
                       className="disabled:cursor-default"
                     >
                       <YesNoBadge value={e.isFieldEmployee} />
