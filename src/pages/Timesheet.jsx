@@ -235,14 +235,37 @@ export default function Timesheet({ branchFilter, role }) {
       : await supabase.from("attendance").insert({ employee_code: selectedEmp.employee_code, work_date, attendance_date: work_date, ...update });
     if (updErr) { setNotice(`Error: ${updErr.message}`); return; }
 
+    // Create a leave_requests row already Approved (HR/Master is directly
+    // correcting an absent day, not routing through the multi-stage chain)
+    // so it counts toward the employee's leave balance in LeaveManagement.jsx
+    // (enrichedBalances only sums Approved rows from leave_requests — it has
+    // no idea about attendance_status='Leave' otherwise).
+    const now = new Date().toISOString();
+    const { data: leaveReq, error: leaveErr } = await supabase.from("leave_requests").insert({
+      employee_id: selectedEmp.employee_code, employee_code: selectedEmp.employee_code,
+      employee_name: selectedEmp.full_name, leave_type: "Annual",
+      from_date: work_date, to_date: work_date, days: 1,
+      reason: "Marked as Leave from Timesheet (was Absent)",
+      applied_date: work_date, status: "Approved",
+      approved_by: role, approved_at: now, approval_trail: [
+        { level: null, approver: role, action: "Approved (Timesheet correction)", timestamp: now },
+      ],
+    }).select().single();
+    if (leaveErr) { setNotice(`Attendance updated, but leave balance NOT deducted: ${leaveErr.message}`); return; }
+
+    await supabase.from("leave_approvals").insert({
+      leave_request_id: leaveReq.id, stage: "Timesheet Correction",
+      actor_role: role, actor_name: role, action: "Approved",
+    });
+
     await supabase.from("audit_logs").insert({
       action: "attendance_absent_to_leave", entity: "attendance", entity_id: row.id || null,
       performed_by: role,
-      details: `Marked ${selectedEmp.employee_code} ${work_date} as Leave (was Absent).`,
-      created_at: new Date().toISOString(),
+      details: `Marked ${selectedEmp.employee_code} ${work_date} as Leave (was Absent). leave_requests id=${leaveReq.id}.`,
+      created_at: now,
     }).then(() => {});
 
-    setNotice(`${work_date} marked as Leave.`);
+    setNotice(`${work_date} marked as Leave and deducted from balance.`);
     setTimeout(() => setNotice(""), 3000);
     loadTimesheet(selectedEmp);
   }

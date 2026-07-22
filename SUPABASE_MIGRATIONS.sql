@@ -1544,3 +1544,34 @@ CREATE POLICY leave_requests_write ON public.leave_requests FOR ALL TO authentic
     (select app_current_role()) IN ('Master','HR','GM')
     OR ((select app_current_role()) = 'Branch Manager' AND (select public.employee_branch(employee_code)) = (select app_current_branch()))
   );
+
+-- =============================================================
+-- Applied: 2026-07-23 — fix_process_daily_attendance_short_hours
+-- =============================================================
+-- NOTE: public.run_attendance_processing, public.process_daily_attendance,
+-- and public.classify_attendance_day all live in Supabase but were never
+-- added to this file (created directly against the DB, same untracked
+-- pattern as the 2026-07-08 ZKT gap above). This entry only captures the
+-- one-column fix below; the full function bodies still need backfilling
+-- here if they're touched again — pull live defs via pg_get_functiondef
+-- first, don't trust this file for those three functions.
+--
+-- Bug fixed: process_daily_attendance's INSERT ... ON CONFLICT DO UPDATE
+-- into public.attendance never included short_hours in either the column
+-- list or the UPDATE SET clause, so short_hours was never recalculated —
+-- rows kept whatever value the old (pre-Friday-aware) process_zkt_raw_punches
+-- had written, which used a flat 9/10.5 required-hours regardless of day.
+-- On Fridays (reduced required hours: 6.5 Management / 9 Non-Management)
+-- this made short_hours visibly wrong even though required_hours itself
+-- was already being computed correctly for the day.
+--
+-- Fix: added `short_hours` to both the INSERT column/value list and the
+-- ON CONFLICT DO UPDATE SET clause, computed as
+-- greatest(v_day_required_hours - v_class.worked_hours, 0), rounded to 2dp
+-- — matching how Timesheet.jsx already reads/displays the column.
+--
+-- Existing attendance rows with stale short_hours are not backfilled by
+-- this migration; re-run "Process Attendance" (run_attendance_processing)
+-- over the affected date range to recalculate them — safe to re-run per
+-- existing delete+rebuild-per-range behavior.
+-- =============================================================

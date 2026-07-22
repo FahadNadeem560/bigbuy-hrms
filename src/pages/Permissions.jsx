@@ -16,15 +16,35 @@ export default function Permissions({ employees, role }) {
   const [groups, setGroups] = useState([]);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeError, setNoticeError] = useState(false);
   const [pending, setPending] = useState({}); // employee_code -> true while a write is in flight
+  const [groupPending, setGroupPending] = useState({}); // group code -> true while a write is in flight
 
   const canEdit = role === "HR" || role === "Master";
 
-  useEffect(() => {
-    supabase.from("staff_eligibility_groups").select("*").then(({ data }) => setGroups(data || []));
-  }, []);
+  function loadGroups() {
+    supabase.from("staff_eligibility_groups").select("*").order("code").then(({ data }) => setGroups(data || []));
+  }
+
+  useEffect(() => { loadGroups(); }, []);
 
   const groupByCode = useMemo(() => Object.fromEntries((groups || []).map(g => [g.code, g])), [groups]);
+
+  function say(message, isError = false) {
+    setNotice(message);
+    setNoticeError(isError);
+    setTimeout(() => setNotice(""), isError ? 5000 : 2000);
+  }
+
+  async function saveGroupField(code, patch) {
+    if (!canEdit) return;
+    setGroupPending(p => ({ ...p, [code]: true }));
+    const { error } = await supabase.from("staff_eligibility_groups").update(patch).eq("code", code);
+    setGroupPending(p => ({ ...p, [code]: false }));
+    if (error) { say(`Error saving ${code}: ${error.message}`, true); return; }
+    setGroups(gs => gs.map(g => g.code === code ? { ...g, ...patch } : g));
+    say("Saved.");
+  }
 
   const rows = useMemo(() => {
     const list = (employees || []).filter(e => !e.isDeleted);
@@ -39,9 +59,8 @@ export default function Permissions({ employees, role }) {
     setPending(p => ({ ...p, [employeeCode]: true }));
     const { error } = await supabase.from("employees").update(patch).eq("employee_code", employeeCode);
     setPending(p => ({ ...p, [employeeCode]: false }));
-    if (error) { setNotice(`Error: ${error.message}`); return; }
-    setNotice("Saved.");
-    setTimeout(() => setNotice(""), 2000);
+    if (error) { say(`Error saving ${employeeCode}: ${error.message}`, true); return; }
+    say("Saved.");
   }
 
   function cycleOtEligible(e) {
@@ -57,12 +76,77 @@ export default function Permissions({ employees, role }) {
         subtitle="Eligibility checks per employee — overtime, extra day, gazetted holiday, attendance exemption and field status."
       />
 
-      {notice && <div className="mb-3 p-2 rounded-xl bg-blue-50 text-blue-700 text-sm">{notice}</div>}
+      {notice && (
+        <div className={`mb-3 p-2 rounded-xl text-sm ${noticeError ? "bg-red-50 text-red-700" : "bg-blue-50 text-blue-700"}`}>
+          {notice}
+        </div>
+      )}
       {!canEdit && (
         <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-xs">
           View-only — only HR and Master can change eligibility settings here.
         </div>
       )}
+
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
+        <div className="px-4 py-3 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-800 text-sm">Eligibility Group Defaults</h3>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Staff-level defaults. Individual employees can still override OT via the table below.
+          </p>
+        </div>
+        <table className="w-full min-w-[700px] text-sm">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr>
+              {["Staff Level", "Required Hours", "OT Eligible (default)", "Extra Day Eligible", "Gazetted Holiday Eligible"].map(h => (
+                <th key={h} className="text-left px-3 py-3 font-medium">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {groups.length === 0 ? (
+              <tr><td colSpan={5} className="px-4 py-6 text-center text-slate-400">Loading groups…</td></tr>
+            ) : groups.map(g => {
+              const busy = !!groupPending[g.code];
+              return (
+                <tr key={g.code}>
+                  <td className="px-3 py-2.5 font-medium">{GROUP_LABELS[g.code] || g.code}</td>
+                  <td className="px-3 py-2.5">
+                    <input
+                      type="number"
+                      step="0.5"
+                      disabled={!canEdit || busy}
+                      defaultValue={g.required_hours}
+                      onBlur={ev => {
+                        const val = Number(ev.target.value);
+                        if (!isNaN(val) && val !== Number(g.required_hours)) saveGroupField(g.code, { required_hours: val });
+                      }}
+                      className="w-20 px-2 py-1 rounded-lg border border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                    />
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} className="disabled:cursor-default"
+                      onClick={() => saveGroupField(g.code, { overtime_eligible: !g.overtime_eligible })}>
+                      <YesNoBadge value={!!g.overtime_eligible} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} className="disabled:cursor-default"
+                      onClick={() => saveGroupField(g.code, { extra_days_eligible: !g.extra_days_eligible })}>
+                      <YesNoBadge value={!!g.extra_days_eligible} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} className="disabled:cursor-default"
+                      onClick={() => saveGroupField(g.code, { gazetted_holiday_eligible: !g.gazetted_holiday_eligible })}>
+                      <YesNoBadge value={!!g.gazetted_holiday_eligible} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
         <input
@@ -142,7 +226,7 @@ export default function Permissions({ employees, role }) {
 
       {canEdit && (
         <p className="text-xs text-slate-400 mt-2">
-          OT Eligible cycles through: group default → Yes → No → group default. Extra Day / Gazetted Holiday eligibility is set per eligibility group (Policy Settings) and shown here read-only.
+          OT Eligible cycles through: group default → Yes → No → group default. Extra Day / Gazetted Holiday eligibility is set per staff level in the "Eligibility Group Defaults" table above — the badges here just reflect that group's current setting.
         </p>
       )}
     </div>
