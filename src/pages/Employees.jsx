@@ -175,18 +175,11 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
         <Field label="Reference Contact">{inp("referencePersonContact", "Reference Phone")}</Field>
       </Section>
 
-      {role !== "HR" && (
-        <Section title="Banking Details">
-          <Field label="Bank Name">{inp("bankName", "Bank Name")}</Field>
-          <Field label="Account Number">{inp("accountNumber", "Account Number")}</Field>
-          <Field label="IBAN">{inp("iban", "PK00XXXX0000000000000000")}</Field>
-        </Section>
-      )}
-      {role === "HR" && (
-        <div className="mb-5 p-3 bg-amber-50 text-amber-700 text-xs rounded-xl">
-          Banking details are restricted to Finance and Master roles.
-        </div>
-      )}
+      <Section title="Banking Details">
+        <Field label="Bank Name">{inp("bankName", "Bank Name")}</Field>
+        <Field label="Account Number">{inp("accountNumber", "Account Number")}</Field>
+        <Field label="IBAN">{inp("iban", "PK00XXXX0000000000000000")}</Field>
+      </Section>
 
       <Section title="Documents & Photo">
         <Field label="Photo URL">
@@ -275,18 +268,11 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
         <Field label="Reference Contact">{inp("referencePersonContact", "Phone")}</Field>
       </Section>
 
-      {role !== "HR" && (
-        <Section title="Banking Details">
-          <Field label="Bank Name">{inp("bankName", "Bank")}</Field>
-          <Field label="Account Number">{inp("accountNumber", "Account No.")}</Field>
-          <Field label="IBAN">{inp("iban", "IBAN")}</Field>
-        </Section>
-      )}
-      {role === "HR" && (
-        <div className="mb-5 p-3 bg-amber-50 text-amber-700 text-xs rounded-xl">
-          Banking details are restricted to Finance and Master roles.
-        </div>
-      )}
+      <Section title="Banking Details">
+        <Field label="Bank Name">{inp("bankName", "Bank")}</Field>
+        <Field label="Account Number">{inp("accountNumber", "Account No.")}</Field>
+        <Field label="IBAN">{inp("iban", "IBAN")}</Field>
+      </Section>
 
       <div className="mt-4 flex gap-2"><Button onClick={save}>Save Changes</Button><Button variant="outline" onClick={close}>Cancel</Button></div>
     </div>
@@ -299,6 +285,15 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
     [employees]
   );
   const viewOnly = role === "Branch Manager";
+  const [inactivating, setInactivating] = useState(null); // employee id currently prompting for last working day
+  const [lwdInput, setLwdInput] = useState("");
+
+  function confirmInactive(id) {
+    if (!lwdInput) return;
+    updateEmployeeStatus(id, "Inactive", lwdInput);
+    setInactivating(null);
+    setLwdInput("");
+  }
 
   return (
     <div>
@@ -347,11 +342,31 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
                     </span>
                   : <span className="text-slate-300">—</span>}
               </td>
-              <td className="px-4 py-3"><Badge tone={e.status === "Active" ? "green" : "yellow"}>{e.status}</Badge></td>
+              <td className="px-4 py-3">
+                <Badge tone={e.status === "Active" ? "green" : "yellow"}>{e.status}</Badge>
+                {e.status !== "Active" && (
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    {e.lastWorkingDay ? `Last day: ${e.lastWorkingDay}` : "Last day: not recorded"}
+                  </div>
+                )}
+              </td>
               {!viewOnly && (
-                <td className="px-4 py-3 flex gap-2">
-                  <Button variant="outline" onClick={() => setEditingEmployee(e)}>Edit</Button>
-                  {e.status === "Active" && <Button variant="outline" onClick={() => updateEmployeeStatus(e.id, "Inactive")}>Inactive</Button>}
+                <td className="px-4 py-3">
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setEditingEmployee(e)}>Edit</Button>
+                    {e.status === "Active" && (
+                      inactivating === e.id ? null : (
+                        <Button variant="outline" onClick={() => { setInactivating(e.id); setLwdInput(""); }}>Inactive</Button>
+                      )
+                    )}
+                  </div>
+                  {inactivating === e.id && (
+                    <div className="flex gap-2 items-center mt-2">
+                      <input type="date" value={lwdInput} onChange={ev => setLwdInput(ev.target.value)} className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+                      <Button variant="outline" className="text-xs px-2 py-1" disabled={!lwdInput} onClick={() => confirmInactive(e.id)}>Confirm</Button>
+                      <Button variant="outline" className="text-xs px-2 py-1" onClick={() => setInactivating(null)}>Cancel</Button>
+                    </div>
+                  )}
                 </td>
               )}
             </tr>

@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { signInWithEmailPassword, usernameToEmail } from "../services/authService.js";
 
-export default function Login() {
+export default function Login({ deactivated }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState(deactivated ? "This account has been deactivated. Contact an administrator." : "");
 
   async function handleLogin(e) {
     e.preventDefault();

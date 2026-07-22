@@ -232,8 +232,14 @@ export default function BigBuyHRMS({ profile }) {
     } catch (err) { setError(`Update failed: ${err.message}`); }
   }
 
-  async function updateEmployeeStatus(id, status) {
-    try { await updateEmployeeByCode(id, { status }); await loadEmployees(); }
+  async function updateEmployeeStatus(id, status, lastWorkingDay) {
+    try {
+      const payload = status === "Active"
+        ? { status, last_working_day: null }
+        : { status, last_working_day: lastWorkingDay || null };
+      await updateEmployeeByCode(id, payload);
+      await loadEmployees();
+    }
     catch (err) { setError(`Status update failed: ${err.message}`); }
   }
 

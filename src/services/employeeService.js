@@ -34,6 +34,7 @@ export function mapEmployeeRecord(emp) {
     salary: emp.salary || 0,
     eobi: emp.eobi_status || "Pending",
     status: emp.status || "Active",
+    lastWorkingDay: emp.last_working_day || "",
     phone: emp.phone || emp.whatsapp_number || "-",
     whatsappNumber: emp.whatsapp_number || "",
     cnic: emp.cnic || "",

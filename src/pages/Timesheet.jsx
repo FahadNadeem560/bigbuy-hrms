@@ -9,14 +9,47 @@ import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
 const SHORT_TOLERANCE = 1.5;
 const OT_TOLERANCE = 1.5;
 const LATE_WARNING_COUNT = 2;
+const ADJ_TONE = { "Pending Approval": "yellow", "Approved": "green", "Rejected": "red" };
+const DB_FIELD_MAP = {
+  halfDayExempt: "half_day_exempt",
+  lateExempt: "late_exempt",
+  isGazettedHoliday: "is_gazetted_holiday",
+};
 
 function fmt2(n) {
   return Math.round(Number(n || 0) * 100) / 100;
 }
 
+function fmtDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function enumerateDates(from, to) {
+  const dates = [];
+  const cursor = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  while (cursor <= end) {
+    dates.push(fmtDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
 function getDayName(dateStr) {
   if (!dateStr) return "";
   return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" });
+}
+
+function Toggle({ value, onChange, tone = "blue" }) {
+  const tones = { blue: "bg-blue-500", green: "bg-green-500", purple: "bg-purple-500" };
+  return (
+    <button
+      onClick={onChange}
+      className={`relative inline-flex h-5 w-9 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none ${value ? (tones[tone] || tones.blue) : "bg-slate-200"}`}
+    >
+      <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${value ? "translate-x-4" : "translate-x-0"}`} />
+    </button>
+  );
 }
 
 function formatTime(t) {
@@ -27,7 +60,7 @@ function formatTime(t) {
   return s;
 }
 
-export default function Timesheet({ branchFilter }) {
+export default function Timesheet({ branchFilter, role }) {
   const [empSearch, setEmpSearch] = useState("");
   const [department, setDepartment] = useState("");
   const [branch, setBranch] = useState(branchFilter || "All");
@@ -40,11 +73,15 @@ export default function Timesheet({ branchFilter }) {
   const [employees, setEmployees] = useState([]);
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [attendance, setAttendance] = useState([]);
+  const [roster, setRoster] = useState([]);
   const [leaveData, setLeaveData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
+
+  const canToggle = role === "HR" || role === "Master";
 
   useEffect(() => {
     let q = supabase
@@ -95,6 +132,14 @@ export default function Timesheet({ branchFilter }) {
       if (attErr) throw attErr;
       setAttendance(att || []);
 
+      const { data: rst } = await supabase
+        .from("employee_work_rosters")
+        .select("roster_date, is_weekly_off, is_gazetted_holiday")
+        .eq("employee_code", emp.employee_code)
+        .gte("roster_date", fromDate)
+        .lte("roster_date", toDate);
+      setRoster(rst || []);
+
       const { data: lv } = await supabase
         .from("leaves")
         .select("*")
@@ -104,6 +149,7 @@ export default function Timesheet({ branchFilter }) {
     } catch (err) {
       setError(err.message);
       setAttendance([]);
+      setRoster([]);
     } finally {
       setLoading(false);
     }
@@ -116,9 +162,48 @@ export default function Timesheet({ branchFilter }) {
   function clearSelection() {
     setSelectedEmp(null);
     setAttendance([]);
+    setRoster([]);
     setLeaveData(null);
     setEmpSearch("");
     setError("");
+  }
+
+  async function toggleFlag(row, flag, currentValue) {
+    if (!row.id || !canToggle) return;
+    const newValue = !currentValue;
+    const now = new Date().toISOString();
+    const adjStatus = role === "Master" ? "Approved" : "Pending Approval";
+    const dbField = DB_FIELD_MAP[flag];
+    if (!dbField) return;
+
+    const update = { [dbField]: newValue, adjustment_status: adjStatus };
+    if (role === "Master") update.adjustment_approved_by = "Master";
+
+    const { error: updErr } = await supabase.from("attendance").update(update).eq("id", row.id);
+    if (updErr) { setNotice(`Error: ${updErr.message}`); return; }
+
+    await supabase.from("audit_logs").insert({
+      action: "attendance_toggle", entity: "attendance", entity_id: row.id,
+      performed_by: role,
+      details: `${flag} → ${newValue} for ${row.employee_code} on ${row.work_date}. Status: ${adjStatus}`,
+      created_at: now,
+    }).then(() => {});
+
+    if (role === "HR") {
+      await supabase.from("notifications").insert({
+        recipient_role: "Master", type: "attendance_adjustment",
+        title: "Attendance Toggle Pending Approval",
+        message: `HR set ${flag} for ${selectedEmp?.full_name} on ${row.work_date}. Awaiting Master approval.`,
+        is_read: false, created_at: now,
+      }).then(() => {});
+    }
+
+    setAttendance(prev => prev.map(r => r.id === row.id
+      ? { ...r, [dbField]: newValue, adjustment_status: adjStatus, ...(role === "Master" ? { adjustment_approved_by: "Master" } : {}) }
+      : r
+    ));
+    setNotice(`${flag.replace(/([A-Z])/g, " $1").trim()} updated.`);
+    setTimeout(() => setNotice(""), 3000);
   }
 
   const isOtEligible = useMemo(() => {
@@ -148,9 +233,30 @@ export default function Timesheet({ branchFilter }) {
     return { totalOT, payableOT };
   }, [attendance, isOtEligible]);
 
+  const ledger = useMemo(() => {
+    if (!selectedEmp || !fromDate || !toDate) return [];
+    const byDate = {};
+    attendance.forEach((r) => { byDate[r.work_date] = r; });
+    const rosterByDate = {};
+    roster.forEach((r) => { rosterByDate[r.roster_date] = r; });
+    const todayStr = fmtDate(new Date());
+
+    return enumerateDates(fromDate, toDate)
+      .map((date) => {
+        if (byDate[date]) return byDate[date];
+        if (date > todayStr) return null;
+        const rosterEntry = rosterByDate[date];
+        let status = "Absent";
+        if (rosterEntry?.is_weekly_off) status = "Weekly Off";
+        else if (rosterEntry?.is_gazetted_holiday) status = "Gazetted Holiday";
+        return { work_date: date, attendance_status: status, is_synthetic: true };
+      })
+      .filter(Boolean);
+  }, [selectedEmp, attendance, roster, fromDate, toDate]);
+
   function exportExcel() {
     if (!selectedEmp) return;
-    const ledgerRows = attendance.map((r) => ({
+    const ledgerRows = ledger.map((r) => ({
       Date: r.work_date,
       Day: getDayName(r.work_date),
       In: formatTime(r.check_in || r.time_in),
@@ -377,30 +483,36 @@ export default function Timesheet({ branchFilter }) {
               <div className="px-5 pt-4 pb-2 print:px-0 print:pt-0 print:pb-1">
                 <h2 className="font-bold text-slate-800 print:text-sm">Attendance Ledger</h2>
                 <p className="text-xs text-slate-400 mt-0.5 print:hidden">
-                  {fromDate} — {toDate} · {attendance.length} record{attendance.length !== 1 ? "s" : ""}
+                  {fromDate} — {toDate} · {ledger.length} day{ledger.length !== 1 ? "s" : ""}
                 </p>
+                {notice && <p className="text-xs text-blue-700 bg-blue-50 rounded-lg px-3 py-1.5 mt-2 inline-block print:hidden">{notice}</p>}
               </div>
               <table className="w-full min-w-[820px] text-sm print:min-w-0 print:text-[9px]">
                 <thead className="bg-slate-50 text-slate-500 print:bg-slate-200">
                   <tr>
-                    {["Date", "Day", "Shift", "In", "Out", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status"].map((h) => (
-                      <th key={h} className="text-left px-4 py-3 font-medium print:px-1.5 print:py-1">{h}</th>
+                    {["Date", "Day", "Shift", "In", "Out", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status",
+                      ...(canToggle ? ["HD Exempt", "Late Exempt", "Holiday", "Adj Status"] : [])
+                    ].map((h) => (
+                      <th key={h} className={`text-left px-4 py-3 font-medium print:px-1.5 print:py-1 ${canToggle && ["HD Exempt","Late Exempt","Holiday","Adj Status"].includes(h) ? "print:hidden" : ""}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {attendance.length === 0 ? (
+                  {ledger.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-4 py-10 text-center text-slate-400">
+                      <td colSpan={canToggle ? 14 : 10} className="px-4 py-10 text-center text-slate-400">
                         No attendance records found for this period.
                       </td>
                     </tr>
                   ) : (
-                    attendance.map((row, i) => {
+                    ledger.map((row, i) => {
                       const status = row.attendance_status || row.status || "Pending";
                       const shift = row.detected_shift;
+                      const rowClass = status === "Absent" ? "bg-red-50/40"
+                        : (status === "Weekly Off" || status === "Gazetted Holiday") ? "bg-slate-50/60"
+                        : "";
                       return (
-                        <tr key={i} className={status === "Absent" ? "bg-red-50/40" : ""}>
+                        <tr key={row.id || row.work_date || i} className={rowClass}>
                           <td className="px-4 py-3 font-medium text-slate-800 print:px-1.5 print:py-0.5">{row.work_date}</td>
                           <td className="px-4 py-3 text-slate-400 text-xs print:px-1.5 print:py-0.5">{getDayName(row.work_date)}</td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
@@ -410,9 +522,9 @@ export default function Timesheet({ branchFilter }) {
                               </span>
                             ) : "—"}
                           </td>
-                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{formatTime(row.check_in || row.time_in)}</td>
-                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{formatTime(row.check_out || row.time_out)}</td>
-                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.actual_hours ?? row.hours_worked ?? 0}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : formatTime(row.check_in || row.time_in)}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : formatTime(row.check_out || row.time_out)}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : (row.actual_hours ?? row.hours_worked ?? 0)}</td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {Number(row.late_minutes || 0) > 0 ? <span className="text-amber-600 font-medium">{row.late_minutes}</span> : "0"}
                           </td>
@@ -427,12 +539,38 @@ export default function Timesheet({ branchFilter }) {
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             <StatusBadge status={status} />
                           </td>
+                          {canToggle && (
+                            <>
+                              <td className="px-4 py-3 print:hidden">
+                                {row.id ? <Toggle value={!!row.half_day_exempt} tone="purple" onChange={() => toggleFlag(row, "halfDayExempt", row.half_day_exempt)} /> : <span className="text-slate-300">—</span>}
+                              </td>
+                              <td className="px-4 py-3 print:hidden">
+                                {row.id ? <Toggle value={!!row.late_exempt} tone="blue" onChange={() => toggleFlag(row, "lateExempt", row.late_exempt)} /> : <span className="text-slate-300">—</span>}
+                              </td>
+                              <td className="px-4 py-3 print:hidden">
+                                {row.id ? <Toggle value={!!row.is_gazetted_holiday} tone="green" onChange={() => toggleFlag(row, "isGazettedHoliday", row.is_gazetted_holiday)} /> : <span className="text-slate-300">—</span>}
+                              </td>
+                              <td className="px-4 py-3 print:hidden">
+                                {row.adjustment_status
+                                  ? <Badge tone={ADJ_TONE[row.adjustment_status] || "slate"}>{row.adjustment_status}</Badge>
+                                  : <span className="text-slate-300 text-xs">—</span>}
+                              </td>
+                            </>
+                          )}
                         </tr>
                       );
                     })
                   )}
                 </tbody>
               </table>
+              {canToggle && (
+                <div className="px-5 py-3 flex flex-wrap gap-4 text-xs text-slate-500 print:hidden">
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-purple-500 inline-block" /> HD Exempt</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-blue-500 inline-block" /> Late Exempt</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Gazetted Holiday</span>
+                  {role === "HR" && <span className="text-amber-600 font-medium">HR toggles require Master approval.</span>}
+                </div>
+              )}
             </div>
 
           {/* Summary Cards */}
