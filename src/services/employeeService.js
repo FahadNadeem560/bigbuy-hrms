@@ -38,6 +38,8 @@ export function mapEmployeeRecord(emp) {
     weeklyOffDay: emp.weekly_off_day != null ? String(emp.weekly_off_day) : "",
     eligibilityGroup: emp.eligibility_group || "",
     otEligible: emp.ot_eligible,
+    extraDaysEligible: emp.extra_days_eligible,
+    ghEligible: emp.gazetted_holiday_eligible,
     phone: emp.phone || emp.whatsapp_number || "-",
     whatsappNumber: emp.whatsapp_number || "",
     cnic: emp.cnic || "",

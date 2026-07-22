@@ -1575,3 +1575,21 @@ CREATE POLICY leave_requests_write ON public.leave_requests FOR ALL TO authentic
 -- over the affected date range to recalculate them — safe to re-run per
 -- existing delete+rebuild-per-range behavior.
 -- =============================================================
+
+-- =============================================================
+-- Applied: 2026-07-23 — employees: per-employee Extra Day / Gazetted
+-- Holiday eligibility overrides
+-- =============================================================
+-- Mirrors the existing ot_eligible column/pattern: NULL = follow the
+-- employee's staff_eligibility_groups default, true/false = individual
+-- override. Added because Permissions.jsx's "Eligibility Group Defaults"
+-- editor needed a per-employee exception path for these two fields, same
+-- as OT already had. Unlike ot_eligible (which every employee already had
+-- a hardcoded true/false value for, from before this eligibility-group
+-- system existed, silently blocking the group default for ~330 employees
+-- until a one-time data cleanup nulled them all out), these two columns
+-- are brand new and start NULL for everyone — no equivalent cleanup needed.
+ALTER TABLE public.employees
+  ADD COLUMN IF NOT EXISTS extra_days_eligible       BOOLEAN,
+  ADD COLUMN IF NOT EXISTS gazetted_holiday_eligible  BOOLEAN;
+-- =============================================================

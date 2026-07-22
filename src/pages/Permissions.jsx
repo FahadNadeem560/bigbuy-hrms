@@ -69,6 +69,16 @@ export default function Permissions({ employees, role }) {
     saveField(e.id, { ot_eligible: next });
   }
 
+  function cycleExtraDaysEligible(e) {
+    const next = e.extraDaysEligible == null ? true : e.extraDaysEligible === true ? false : null;
+    saveField(e.id, { extra_days_eligible: next });
+  }
+
+  function cycleGhEligible(e) {
+    const next = e.ghEligible == null ? true : e.ghEligible === true ? false : null;
+    saveField(e.id, { gazetted_holiday_eligible: next });
+  }
+
   return (
     <div>
       <PageTitle
@@ -91,7 +101,7 @@ export default function Permissions({ employees, role }) {
         <div className="px-4 py-3 border-b border-slate-100">
           <h3 className="font-semibold text-slate-800 text-sm">Eligibility Group Defaults</h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Staff-level defaults. Individual employees can still override OT via the table below.
+            Staff-level defaults. Individual employees can still override OT, Extra Day and Gazetted Holiday via the table below.
           </p>
         </div>
         <table className="w-full min-w-[700px] text-sm">
@@ -172,6 +182,8 @@ export default function Permissions({ employees, role }) {
             ) : rows.map(e => {
               const group = e.eligibilityGroup ? groupByCode[e.eligibilityGroup] : null;
               const otEffective = e.otEligible != null ? !!e.otEligible : !!group?.overtime_eligible;
+              const extraDaysEffective = e.extraDaysEligible != null ? !!e.extraDaysEligible : !!group?.extra_days_eligible;
+              const ghEffective = e.ghEligible != null ? !!e.ghEligible : !!group?.gazetted_holiday_eligible;
               const busy = !!pending[e.id];
               return (
                 <tr key={e.id}>
@@ -197,8 +209,28 @@ export default function Permissions({ employees, role }) {
                       {e.otEligible == null && <span className="ml-1 text-[10px] text-slate-400">(group default)</span>}
                     </button>
                   </td>
-                  <td className="px-3 py-2.5"><YesNoBadge value={!!group?.extra_days_eligible} /></td>
-                  <td className="px-3 py-2.5"><YesNoBadge value={!!group?.gazetted_holiday_eligible} /></td>
+                  <td className="px-3 py-2.5">
+                    <button
+                      disabled={!canEdit || busy}
+                      onClick={() => cycleExtraDaysEligible(e)}
+                      className="disabled:cursor-default"
+                      title={canEdit ? "Click to cycle: group default / Yes / No" : ""}
+                    >
+                      <YesNoBadge value={extraDaysEffective} />
+                      {e.extraDaysEligible == null && <span className="ml-1 text-[10px] text-slate-400">(group default)</span>}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button
+                      disabled={!canEdit || busy}
+                      onClick={() => cycleGhEligible(e)}
+                      className="disabled:cursor-default"
+                      title={canEdit ? "Click to cycle: group default / Yes / No" : ""}
+                    >
+                      <YesNoBadge value={ghEffective} />
+                      {e.ghEligible == null && <span className="ml-1 text-[10px] text-slate-400">(group default)</span>}
+                    </button>
+                  </td>
                   <td className="px-3 py-2.5">
                     <button
                       disabled={!canEdit || busy}
@@ -226,7 +258,7 @@ export default function Permissions({ employees, role }) {
 
       {canEdit && (
         <p className="text-xs text-slate-400 mt-2">
-          OT Eligible cycles through: group default → Yes → No → group default. Extra Day / Gazetted Holiday eligibility is set per staff level in the "Eligibility Group Defaults" table above — the badges here just reflect that group's current setting.
+          OT Eligible, Extra Day Eligible and Gazetted Holiday Eligible all cycle through: group default → Yes → No → group default. Set the staff-level default in the "Eligibility Group Defaults" table above, then override an individual employee here only when they're an exception to their group.
         </p>
       )}
     </div>
