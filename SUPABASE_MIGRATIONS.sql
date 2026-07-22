@@ -1593,3 +1593,55 @@ ALTER TABLE public.employees
   ADD COLUMN IF NOT EXISTS extra_days_eligible       BOOLEAN,
   ADD COLUMN IF NOT EXISTS gazetted_holiday_eligible  BOOLEAN;
 -- =============================================================
+
+-- =============================================================
+-- Applied: 2026-07-23 — close anon-key access on 10 tables (security)
+-- =============================================================
+-- Found while checking whether EmployeeSelfService.jsx's login was fixed
+-- (it wasn't — still localStorage + plaintext password_plain comparison,
+-- no real Supabase Auth). Checking whether RLS would block that broken
+-- portal surfaced two distinct leftover-policy problems that let the
+-- public anon/publishable key (embedded in the client JS bundle, visible
+-- to anyone) read/write these tables with ZERO login:
+--
+-- 1) employees, attendance, loans, fines, shortages, advances,
+--    loan_changes, one_time_adjustments each had a policy named
+--    "Allow all for service role" but declared TO public USING (true) —
+--    a naming/scoping mistake, not an intentional anon grant. service_role
+--    already has rolbypassrls=true at the Postgres level (confirmed via
+--    pg_roles), so these policies were always redundant for their stated
+--    purpose and only ever served as an accidental anon backdoor.
+--
+-- 2) employees (read/insert/update) and attendance (read) separately had
+--    policies genuinely scoped TO anon — leftovers from the pre-2026-07-08
+--    "no real auth, anon key for everything" era, never cleaned up when
+--    RLS went in. Same for leave_requests and attendance_adjustments
+--    (both full anon CRUD). All four confirmed exploitable live: an
+--    anon-key-only script (no login) read real rows from loans/employees/
+--    attendance before the fix, 0 rows after.
+--
+-- Left three anon-read-only policies in place (attendance_import_batches,
+-- hrms_policy_settings, shift_master) — reference/metadata only, no
+-- personal or financial data, low risk, something may load them pre-login.
+--
+-- Net effect: EmployeeSelfService.jsx / EmployeeLogin.jsx (already
+-- non-functional from a security standpoint — no real Supabase Auth
+-- session, so it was always relying on these anon policies) will now
+-- fail to load employee data entirely until it's migrated to real auth.
+-- That was already a known, flagged limitation — not a new regression.
+DROP POLICY IF EXISTS "Allow all for service role" ON public.employees;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.attendance;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.loans;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.fines;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.shortages;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.advances;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.loan_changes;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.one_time_adjustments;
+DROP POLICY IF EXISTS "Allow anon read employees" ON public.employees;
+DROP POLICY IF EXISTS "Allow anon insert employees" ON public.employees;
+DROP POLICY IF EXISTS "Allow anon update employees" ON public.employees;
+DROP POLICY IF EXISTS "Allow anon read attendance" ON public.attendance;
+DROP POLICY IF EXISTS "Allow anon manage leave requests" ON public.leave_requests;
+DROP POLICY IF EXISTS "Allow anon manage attendance adjustments" ON public.attendance_adjustments;
+-- =============================================================
+-- =============================================================
