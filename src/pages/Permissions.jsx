@@ -19,6 +19,10 @@ export default function Permissions({ employees, role }) {
   const [noticeError, setNoticeError] = useState(false);
   const [pending, setPending] = useState({}); // employee_code -> true while a write is in flight
   const [groupPending, setGroupPending] = useState({}); // group code -> true while a write is in flight
+  // employee_code -> camelCase field patch. The `employees` array is owned by App.jsx
+  // and only refetched on a full reload, so a DB save alone never re-renders this
+  // page's badges — this local overlay is what actually makes a save show up.
+  const [overrides, setOverrides] = useState({});
 
   const canEdit = role === "HR" || role === "Master";
 
@@ -47,19 +51,25 @@ export default function Permissions({ employees, role }) {
   }
 
   const rows = useMemo(() => {
-    const list = (employees || []).filter(e => !e.isDeleted);
+    const list = (employees || [])
+      .filter(e => !e.isDeleted)
+      .map(e => overrides[e.id] ? { ...e, ...overrides[e.id] } : e);
     const q = search.trim().toLowerCase();
     return list
       .filter(e => !q || e.name?.toLowerCase().includes(q) || e.id?.toLowerCase().includes(q) || e.dept?.toLowerCase().includes(q))
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  }, [employees, search]);
+  }, [employees, search, overrides]);
 
-  async function saveField(employeeCode, patch) {
+  // dbPatch: snake_case columns written to Supabase. localPatch: the same
+  // change in the camelCase shape mapEmployeeRecord() produces, merged into
+  // `overrides` on success so the table reflects it without a full reload.
+  async function saveField(employeeCode, dbPatch, localPatch) {
     if (!canEdit) return false;
     setPending(p => ({ ...p, [employeeCode]: true }));
-    const { error } = await supabase.from("employees").update(patch).eq("employee_code", employeeCode);
+    const { error } = await supabase.from("employees").update(dbPatch).eq("employee_code", employeeCode);
     setPending(p => ({ ...p, [employeeCode]: false }));
     if (error) { say(`Error saving ${employeeCode}: ${error.message}`, true); return false; }
+    setOverrides(o => ({ ...o, [employeeCode]: { ...o[employeeCode], ...localPatch } }));
     say("Saved.");
     return true;
   }
@@ -78,22 +88,22 @@ export default function Permissions({ employees, role }) {
   function cycleOtEligible(e) {
     // null (group default) -> true -> false -> null
     const next = e.otEligible == null ? true : e.otEligible === true ? false : null;
-    saveField(e.id, { ot_eligible: next });
+    saveField(e.id, { ot_eligible: next }, { otEligible: next });
   }
 
   function cycleExtraDaysEligible(e) {
     const next = e.extraDaysEligible == null ? true : e.extraDaysEligible === true ? false : null;
-    saveField(e.id, { extra_days_eligible: next });
+    saveField(e.id, { extra_days_eligible: next }, { extraDaysEligible: next });
   }
 
   function cycleGhEligible(e) {
     const next = e.ghEligible == null ? true : e.ghEligible === true ? false : null;
-    saveField(e.id, { gazetted_holiday_eligible: next });
+    saveField(e.id, { gazetted_holiday_eligible: next }, { ghEligible: next });
   }
 
   async function toggleFieldEmployee(e) {
     const next = !e.isFieldEmployee;
-    if (!(await saveField(e.id, { is_field_employee: next }))) return;
+    if (!(await saveField(e.id, { is_field_employee: next }, { isFieldEmployee: next }))) return;
     logAudit(next ? "field_employee_enabled" : "field_employee_disabled", e.id, `Field employee ${next ? "enabled" : "disabled"}.`);
   }
 
@@ -104,7 +114,11 @@ export default function Permissions({ employees, role }) {
       reason = (window.prompt("Reason for attendance exemption (required):", "") || "").trim();
       if (!reason) { say("Exemption reason is required — exemption not changed.", true); return; }
     }
-    if (!(await saveField(e.id, { is_attendance_exempt: turningOn, exemption_reason: reason }))) return;
+    if (!(await saveField(
+      e.id,
+      { is_attendance_exempt: turningOn, exemption_reason: reason },
+      { isAttendanceExempt: turningOn, exemptionReason: reason || "" }
+    ))) return;
     logAudit(
       turningOn ? "exemption_granted" : "exemption_removed",
       e.id,
