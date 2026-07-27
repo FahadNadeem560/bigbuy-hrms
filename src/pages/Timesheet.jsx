@@ -564,7 +564,7 @@ export default function Timesheet({ branchFilter, role }) {
                     {["Date", "Day", "Shift", "In", "Out", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status",
                       ...(canToggle ? ["HD Exempt", "Late Exempt", "Holiday", "Adj Status"] : [])
                     ].map((h) => (
-                      <th key={h} className={`text-left px-4 py-3 font-medium print:px-1.5 print:py-1 ${canToggle && ["HD Exempt","Late Exempt","Holiday","Adj Status"].includes(h) ? "print:hidden" : ""}`}>{h}</th>
+                      <th key={h} className={`text-left px-4 py-3 font-medium print:px-1.5 print:py-1 sticky top-0 z-10 bg-slate-50 print:static print:bg-slate-200 shadow-[0_1px_3px_rgba(0,0,0,0.08)] print:shadow-none ${canToggle && ["HD Exempt","Late Exempt","Holiday","Adj Status"].includes(h) ? "print:hidden" : ""}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>

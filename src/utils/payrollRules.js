@@ -39,6 +39,10 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const policy = getPolicyForLevel(employee.level);
   const monthlySalary = Number(employee.salary || 0);
   const isExempt = !!employee.isAttendanceExempt;
+  // Effective eligibility (individual override wins, else group default). Management/Admin
+  // group has extra_days_eligible = false in staff_eligibility_groups, so extraDaysEligible
+  // resolves to false unless an individual employee override explicitly sets it true.
+  const extraDaysEligible = employee.extraDaysEligible !== false;
 
   // Daily rate = Salary / 30; Hourly rate varies by staff level
   const dailyRate  = monthlySalary / 30;
@@ -48,8 +52,13 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const otHours = (!isExempt && policy.overtimeEligible) ? Number(adjustments.otHours || 0) : 0;
   const overtimeAmount = (!isExempt && policy.overtimeEligible) ? Math.round(hourlyRate * otHours) : 0;
 
-  const extraWorkingDays = Number(adjustments.extraWorkingDays || 0);
+  // Extra working days — skip for exempt employees and for groups/employees not eligible
+  // (e.g. MANAGEMENT_ADMIN).
+  const extraWorkingDays = (!isExempt && extraDaysEligible) ? Number(adjustments.extraWorkingDays || 0) : 0;
   const extraWorkingDaysAmount = Math.round(dailyRate * extraWorkingDays);
+
+  const workedHours = Number(adjustments.workedHours || 0);
+  const requiredHours = Number(adjustments.requiredHours || 0);
 
   // Working days in month
   let numberOfWorkingDays = Number(adjustments.numberOfWorkingDays || 0);
@@ -125,6 +134,8 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     absentDays:    Number(adjustments.absentDays || 0),
     lateCount:     Number(adjustments.lateCount || 0),
     otHours,
+    workedHours,
+    requiredHours,
     leaveDaysUsed: Number(adjustments.leaveDaysUsed || 0),
     extraWorkingDays,
     // Earnings

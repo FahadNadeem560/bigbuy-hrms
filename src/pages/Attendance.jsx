@@ -91,7 +91,9 @@ export default function Attendance({ rows, role, branchFilter, employees }) {
             <table className="w-full min-w-[1100px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
-                  {["Employee","Level","Date","Shift","In","Out","Hours","Late","OT","Status"].map(h => <th key={h} className="text-left px-3 py-3 font-medium">{h}</th>)}
+                  {["Employee","Level","Date","Shift","In","Out","Hours","Late","OT","Status"].map((h, i) => (
+                    <th key={h} className={`text-left px-3 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)] ${i === 0 ? "left-0 z-20" : ""}`}>{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -100,7 +102,7 @@ export default function Attendance({ rows, role, branchFilter, employees }) {
                   : pagedRows.map(row => (
                     <tr key={`${row.id || row.employeeCode}-${row.date}-${row.checkIn}`}
                       className={row.isGazettedHoliday ? "bg-green-50/30" : row.halfDayExempt ? "bg-purple-50/20" : ""}>
-                      <td className="px-3 py-2.5 font-medium">{row.name}</td>
+                      <td className="px-3 py-2.5 font-medium sticky left-0 z-[5] bg-white shadow-[2px_0_4px_rgba(0,0,0,0.06)]">{row.name}</td>
                       <td className="px-3 py-2.5 text-slate-500">{row.level}</td>
                       <td className="px-3 py-2.5">{row.date}</td>
                       <td className="px-3 py-2.5">
