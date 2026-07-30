@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Badge, Button, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } from "../services/leaveApprovalService.js";
+import { approvePaymentStatusRequest, rejectPaymentStatusRequest, PAYMENT_STATUS_LABELS, requiresMasterOnly } from "../services/payrollControlService.js";
 
 // Hierarchy-routed requests carry dynamic stage names ("Pending Floor
 // Manager Approval", "Pending Owner Approval", ...) so this can't be a fixed
@@ -54,6 +55,7 @@ const TABS = [
   ["adjustments",  "One-Time Adjustments"],
   ["settlements",  "Final Settlements"],
   ["increments",   "Salary Increments"],
+  ["payment-status", "Payment Status"],
 ];
 
 export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
@@ -83,6 +85,9 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   // Increments
   const [increments, setIncrements] = useState([]);
 
+  // Payment status change requests
+  const [paymentRequests, setPaymentRequests] = useState([]);
+
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
@@ -97,6 +102,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         { data: adj },
         { data: sett },
         { data: inc },
+        { data: payReqs },
       ] = await Promise.all([
         supabase.from("leave_requests").select("*").like("status", "Pending%").order("created_at", { ascending: false }).limit(200),
         supabase.from("timesheet_signoffs").select("*").order("created_at", { ascending: false }).limit(200),
@@ -105,6 +111,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         supabase.from("one_time_adjustments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
         supabase.from("settlement_requests").select("*").neq("status","Completed").order("created_at", { ascending: false }).limit(200),
         supabase.from("salary_increments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
+        supabase.from("payment_status_requests").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
       ]);
       setLeaveReqs(lv || []);
       setSignoffs(so || []);
@@ -113,6 +120,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       setAdjustments(adj || []);
       setSettlements(sett || []);
       setIncrements(inc || []);
+      setPaymentRequests(payReqs || []);
     } catch (e) {
       setErr(`Load error: ${e.message}`);
     } finally {
@@ -249,6 +257,25 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
     setMsg("Increment rejected."); loadAll();
   }
 
+  // ── Payment status change requests ──
+  async function approvePaymentReq(id) {
+    const req = paymentRequests.find(r => r.id === id);
+    if (!req) return;
+    try {
+      await approvePaymentStatusRequest(req, role, actorName || role);
+      setMsg("Payment status change approved."); loadAll();
+    } catch (e) { setErr(e.message); }
+  }
+
+  async function rejectPaymentReq(id, reason) {
+    const req = paymentRequests.find(r => r.id === id);
+    if (!req) return;
+    try {
+      await rejectPaymentStatusRequest(req, actorName || role, reason);
+      setMsg("Payment status change rejected."); loadAll();
+    } catch (e) { setErr(e.message); }
+  }
+
   const pendingLeave = leaveReqs.filter(r => isPendingLeaveStatus(r.status));
   const pendingCorr  = attCorrs.filter(a => a.status === "Pending Approval");
 
@@ -269,6 +296,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
             {k === "adjustments" && adjustments.length > 0   && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{adjustments.length}</span>}
             {k === "settlements" && settlements.length > 0   && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{settlements.length}</span>}
             {k === "increments"  && increments.length > 0    && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{increments.length}</span>}
+            {k === "payment-status" && paymentRequests.length > 0 && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{paymentRequests.length}</span>}
           </button>
         ))}
       </div>
@@ -472,6 +500,46 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                     </td>
                   </tr>
                 ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── PAYMENT STATUS REQUESTS ── */}
+      {tab === "payment-status" && !loading && (
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payment Status Change Requests</h2><p className="text-xs text-slate-400">{paymentRequests.length} pending</p></div>
+          <table className="w-full min-w-[900px] text-sm">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>{["Employee","Month","From","To","Reason","Requested By","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {paymentRequests.length === 0
+                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No pending payment status requests.</td></tr>
+                : paymentRequests.map(r => {
+                  const masterOnly = requiresMasterOnly(r.current_status, r.requested_status);
+                  const canApprove = ["Master", "GM"].includes(role) && !(masterOnly && role !== "Master");
+                  return (
+                    <tr key={r.id}>
+                      <td className="px-4 py-3 font-medium">{r.employee_name}<div className="text-xs text-slate-400">{r.employee_code}</div></td>
+                      <td className="px-4 py-3">{r.payroll_month}</td>
+                      <td className="px-4 py-3"><Badge tone="slate">{PAYMENT_STATUS_LABELS[r.current_status] || r.current_status}</Badge></td>
+                      <td className="px-4 py-3">
+                        <Badge tone="blue">{PAYMENT_STATUS_LABELS[r.requested_status] || r.requested_status}</Badge>
+                        {masterOnly && <span className="text-[10px] text-purple-600 ml-1">Master only</span>}
+                      </td>
+                      <td className="px-4 py-3 max-w-[180px] truncate">{r.reason || "—"}</td>
+                      <td className="px-4 py-3 text-slate-500">{r.requested_by}</td>
+                      <td className="px-4 py-3">
+                        <ApproveRejectBtns
+                          id={r.id} rejectId={rejectId} setRejectId={setRejectId}
+                          rejectNote={rejectNote} setRejectNote={setRejectNote}
+                          onApprove={approvePaymentReq} onReject={rejectPaymentReq}
+                          disabled={!canApprove} />
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>

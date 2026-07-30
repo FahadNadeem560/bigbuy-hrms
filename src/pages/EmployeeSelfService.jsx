@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { money } from "../utils/format.js";
 import NotificationBell from "../components/NotificationBell.jsx";
 import { approveLeaveStage, rejectLeaveStage, normalizeStage, routeInitialApprover, notifyInitialApprover } from "../services/leaveApprovalService.js";
+import { confirmVerification, flagEmployeeForHR } from "../services/payrollControlService.js";
 
 const BASE_TABS = [
   { id: "attendance",  label: "My Attendance",  icon: "⏱️" },
@@ -79,6 +80,13 @@ export default function EmployeeSelfService() {
   const [teamMsg, setTeamMsg] = useState("");
   const [hasDirectReports, setHasDirectReports] = useState(false);
 
+  // Payroll verification (My Team supervisors)
+  const [payrollVerifications, setPayrollVerifications] = useState([]);
+  const [activeVerification, setActiveVerification] = useState(null);
+  const [verifyPayroll, setVerifyPayroll] = useState([]);
+  const [verifyMsg, setVerifyMsg] = useState("");
+  const [flaggedCodes, setFlaggedCodes] = useState(new Set());
+
   // Data
   const [attendance, setAttendance] = useState([]);
   const [leaveBalance, setLeaveBalance] = useState(null);
@@ -106,8 +114,53 @@ export default function EmployeeSelfService() {
   // Team lookup needs the employee's UUID id (for employee_hierarchy.reports_to_employee_id),
   // which only arrives once the profile row loads — the localStorage session only has employee_code.
   useEffect(() => {
-    if (profile?.id) loadTeam(profile.id);
+    if (profile?.id) { loadTeam(profile.id); loadPayrollVerifications(profile.id); }
   }, [profile?.id]);
+
+  async function loadPayrollVerifications(myId) {
+    try {
+      const { data } = await supabase.from("payroll_verifications").select("*")
+        .eq("supervisor_employee_id", myId).order("payroll_month", { ascending: false });
+      setPayrollVerifications(data || []);
+      const pending = (data || []).find(v => v.status === "Pending") || (data || [])[0] || null;
+      setActiveVerification(pending);
+      if (pending) await loadVerifyPayroll(pending);
+    } catch { /* ignore */ }
+  }
+
+  async function loadVerifyPayroll(verification) {
+    if (!verification || !verification.team_employee_codes?.length) { setVerifyPayroll([]); return; }
+    const [{ data: pay }, { data: emps }] = await Promise.all([
+      supabase.from("payroll").select("employee_code, gross_salary, net_salary")
+        .eq("payroll_month", verification.payroll_month).in("employee_code", verification.team_employee_codes),
+      supabase.from("employees").select("employee_code, full_name").in("employee_code", verification.team_employee_codes),
+    ]);
+    const nameByCode = Object.fromEntries((emps || []).map(e => [e.employee_code, e.full_name]));
+    setVerifyPayroll((pay || []).map(p => ({ ...p, name: nameByCode[p.employee_code] || p.employee_code })));
+    setFlaggedCodes(new Set());
+  }
+
+  async function flagPayrollEmployee(row) {
+    const note = window.prompt(`Flag ${row.name} for HR review — what's the issue?`);
+    if (!note) return;
+    try {
+      await flagEmployeeForHR({
+        month: activeVerification.payroll_month, employeeCode: row.employee_code, employeeName: row.name,
+        supervisorCode: session.employee_code, supervisorName: session.name, note,
+      });
+      setFlaggedCodes(prev => new Set(prev).add(row.employee_code));
+      setVerifyMsg(`${row.name} flagged for HR review.`);
+    } catch (e) { setVerifyMsg(`Error: ${e.message}`); }
+  }
+
+  async function confirmAllPayroll() {
+    if (!activeVerification) return;
+    try {
+      await confirmVerification(activeVerification.id, activeVerification.status === "Confirmed");
+      setVerifyMsg("Payroll verification confirmed.");
+      loadPayrollVerifications(profile.id);
+    } catch (e) { setVerifyMsg(`Error: ${e.message}`); }
+  }
 
   async function loadAll(sess) {
     setLoading(true); setErr("");
@@ -339,6 +392,7 @@ export default function EmployeeSelfService() {
     ...BASE_TABS,
     ...(isFieldEmployee ? [{ id: "logtime", label: "Log My Time", icon: "📍" }] : []),
     ...(isSupervisor ? [{ id: "myteam", label: "My Team", icon: "👥" }] : []),
+    ...(isSupervisor && payrollVerifications.length > 0 ? [{ id: "payroll-verify", label: "Payroll Verification", icon: "🧾" }] : []),
   ];
 
   return (
@@ -977,6 +1031,69 @@ export default function EmployeeSelfService() {
                       Sign Off All
                     </button>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* ───── TAB: Payroll Verification (Supervisor only) ───── */}
+            {tab === "payroll-verify" && isSupervisor && (
+              <div className="space-y-4">
+                {verifyMsg && <div className="p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{verifyMsg}</div>}
+
+                {payrollVerifications.length > 1 && (
+                  <div className="flex flex-wrap gap-2">
+                    {payrollVerifications.map(v => (
+                      <button key={v.id} onClick={() => { setActiveVerification(v); loadVerifyPayroll(v); }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-medium ${activeVerification?.id === v.id ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
+                        {v.payroll_month} {["Confirmed", "Re_Confirmed"].includes(v.status) ? "✓" : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+                  <div className="px-5 pt-4 pb-2 flex items-center justify-between">
+                    <div>
+                      <h2 className="font-bold text-slate-800">Team Payroll — {activeVerification?.payroll_month}</h2>
+                      <p className="text-xs text-slate-400 mt-0.5">Review your team's basic salary and net pay, then confirm.</p>
+                    </div>
+                    <SBadge tone={["Confirmed", "Re_Confirmed"].includes(activeVerification?.status) ? "green" : "yellow"}>
+                      {activeVerification?.status || "Pending"}
+                    </SBadge>
+                  </div>
+                  <table className="w-full min-w-[560px] text-sm">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>{["Employee", "Basic", "Net Pay", "Review"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {verifyPayroll.length === 0
+                        ? <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No payroll rows found for your team this month.</td></tr>
+                        : verifyPayroll.map(r => (
+                          <tr key={r.employee_code}>
+                            <td className="px-4 py-3 font-medium">{r.name}<div className="text-xs text-slate-400">{r.employee_code}</div></td>
+                            <td className="px-4 py-3">{money(r.gross_salary)}</td>
+                            <td className="px-4 py-3 font-semibold">{money(r.net_salary)}</td>
+                            <td className="px-4 py-3">
+                              {flaggedCodes.has(r.employee_code)
+                                ? <SBadge tone="yellow">⚠️ Flagged</SBadge>
+                                : (
+                                  <div className="flex gap-2">
+                                    <span className="text-emerald-600 text-xs">✅ Looks correct</span>
+                                    <button onClick={() => flagPayrollEmployee(r)} className="text-amber-600 text-xs hover:underline">⚠️ Flag for HR review</button>
+                                  </div>
+                                )}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {verifyPayroll.length > 0 && (
+                  <button onClick={confirmAllPayroll}
+                    className="px-6 py-2.5 bg-slate-950 text-white rounded-xl text-sm font-medium hover:bg-slate-800 transition">
+                    {["Confirmed", "Re_Confirmed"].includes(activeVerification?.status) ? "Re-Confirm All" : "Confirm All"}
+                  </button>
                 )}
               </div>
             )}

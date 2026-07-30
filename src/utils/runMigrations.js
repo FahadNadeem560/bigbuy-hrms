@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-06-20-v7";
+const MIGRATION_VERSION = "2026-07-31-v8";
 let ran = false;
 
 export async function runMigrations() {
@@ -138,6 +138,75 @@ async function applyIncrementalMigrations() {
     `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS half_leaves NUMERIC DEFAULT 0`,
     `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS effective_from DATE`,
     `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS earned NUMERIC DEFAULT 0`,
+    // v8: Payroll Control System — payment status, lock, holdover, cash incentives, verification
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'Normal'`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS payment_status_changed_by TEXT`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS payment_status_changed_at TIMESTAMPTZ`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS payment_status_approved_by TEXT`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS payment_status_reason TEXT`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS paid_by TEXT`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS holdover_from_month TEXT`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS holdover_amount NUMERIC DEFAULT 0`,
+    `ALTER TABLE payroll ADD COLUMN IF NOT EXISTS holdover_approved_by TEXT`,
+    `CREATE TABLE IF NOT EXISTS payroll_locks (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      payroll_month TEXT NOT NULL UNIQUE,
+      locked_at TIMESTAMPTZ DEFAULT NOW(),
+      locked_by TEXT,
+      unlocked_at TIMESTAMPTZ,
+      unlocked_by TEXT,
+      unlock_reason TEXT,
+      is_locked BOOLEAN DEFAULT TRUE
+    )`,
+    `CREATE TABLE IF NOT EXISTS cash_incentives (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      employee_id UUID REFERENCES employees(id),
+      employee_code TEXT,
+      employee_name TEXT,
+      branch TEXT,
+      department TEXT,
+      amount NUMERIC NOT NULL,
+      payroll_month TEXT NOT NULL,
+      given_by TEXT,
+      given_by_role TEXT,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS payroll_verifications (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      payroll_month TEXT NOT NULL,
+      supervisor_employee_id UUID REFERENCES employees(id),
+      supervisor_name TEXT,
+      branch TEXT,
+      team_employee_codes TEXT[],
+      status TEXT DEFAULT 'Pending',
+      confirmed_at TIMESTAMPTZ,
+      changes_notes TEXT,
+      re_confirmed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS payment_status_requests (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      employee_id UUID REFERENCES employees(id),
+      employee_code TEXT,
+      employee_name TEXT,
+      payroll_month TEXT,
+      requested_by TEXT,
+      current_status TEXT,
+      requested_status TEXT,
+      reason TEXT,
+      status TEXT DEFAULT 'Pending',
+      approved_by TEXT,
+      approved_at TIMESTAMPTZ,
+      rejection_reason TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.payroll_locks TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.cash_incentives TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.payroll_verifications TO anon, authenticated`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.payment_status_requests TO anon, authenticated`,
   ];
 
   for (const sql of stmts) {

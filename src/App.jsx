@@ -30,6 +30,7 @@ import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMas
 import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
 import { escalateStaleApprovals } from "./services/leaveApprovalService.js";
+import { checkAutoLockPreviousMonth, sendHoldReminderIfNeeded } from "./services/payrollControlService.js";
 import { signOut } from "./services/authService.js";
 import { getBranchFilter, isBranchRestricted } from "./utils/branchFilter.js";
 
@@ -173,6 +174,8 @@ export default function BigBuyHRMS({ profile }) {
   useEffect(() => {
     runMigrations().then(() => { loadEmployees(); loadAttendance(); checkTemporaryEmployees(); });
     escalateStaleApprovals().catch(() => {});
+    checkAutoLockPreviousMonth().catch(() => {});
+    sendHoldReminderIfNeeded().catch(() => {});
   }, []);
 
   async function saveEmployee() {
@@ -344,7 +347,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "workforce"   && <WorkforceHub role={role} branchFilter={branchRestriction} />}
 
       {/* Payroll & Finance */}
-      {active === "payroll-automation" && <PayrollAutomation role={role} />}
+      {active === "payroll-automation" && <PayrollAutomation role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
       {active === "payroll"            && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
       {active === "salary-reports"     && <SalaryReports />}
       {active === "allowances"         && <AllowancesHub role={role} />}

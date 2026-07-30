@@ -4,11 +4,22 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { calculatePayrollForEmployee, getWorkingDaysInMonth } from "../utils/payrollRules.js";
 import * as XLSX from "xlsx";
+import {
+  PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, PAYMENT_STATUS_TONES,
+  canTransitionPaymentStatus, requiresMasterOnly, requestPaymentStatusChange,
+  getPayrollLock, lockPayrollMonth, unlockPayrollMonth, mergePersistentPayrollFields,
+  fetchCashIncentives, generateVerificationsForMonth, fetchVerifications,
+  getVerificationProgress, respondToFlag,
+} from "../services/payrollControlService.js";
+import PayrollHold from "./PayrollHold.jsx";
+import CashIncentives from "./CashIncentives.jsx";
+import FinanceReconciliation from "./FinanceReconciliation.jsx";
 
-const STATUS_TONES = { Draft: "yellow", Approved: "blue", Published: "green", Locked: "purple", Paid: "green" };
+const STATUS_TONES = { Draft: "yellow", Approved: "blue", Published: "green", Locked: "purple", Paid: "green", Completed: "green" };
 const SETTLEMENT_TONES = { Payable: "green", Hold: "yellow", "No FNF": "red", FNF: "purple" };
 const SETTLEMENT_OPTIONS = ["Payable", "Hold", "No FNF", "FNF"];
 const SETTLEMENT_REVIEW_TONES = { "Not Submitted": "slate", "Pending Approval": "yellow", Approved: "green", Rejected: "red" };
+const TABS = [["register", "Payroll Register"], ["hold", "Hold & F&F"], ["cash", "Cash Incentives"], ["finance", "Finance Reconciliation"]];
 
 // ── Publish confirmation modal ────────────────────────────────
 function PublishModal({ month, onConfirm, onCancel }) {
@@ -30,6 +41,84 @@ function PublishModal({ month, onConfirm, onCancel }) {
         <div className="flex gap-3">
           <Button onClick={onConfirm} className="rounded-2xl flex-1 bg-emerald-600 hover:bg-emerald-700">Yes, Publish</Button>
           <Button variant="outline" onClick={onCancel} className="rounded-2xl flex-1">Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Unlock confirmation modal (Master only) ───────────────────
+function UnlockModal({ month, onConfirm, onCancel }) {
+  const [reason, setReason] = useState("");
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <div className="text-2xl mb-3">🔓</div>
+        <h2 className="font-bold text-slate-800 text-lg mb-2">Unlock Payroll</h2>
+        <p className="text-slate-600 text-sm mb-4">
+          You are unlocking <strong>{month}</strong> payroll. All changes will be logged. Enter a reason to proceed:
+        </p>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+          placeholder="Reason for unlocking…"
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm resize-none mb-4" />
+        <div className="flex gap-3">
+          <Button onClick={() => onConfirm(reason)} disabled={!reason.trim()} className="rounded-2xl flex-1 bg-amber-600 hover:bg-amber-700">Unlock</Button>
+          <Button variant="outline" onClick={onCancel} className="rounded-2xl flex-1">Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Payment status request modal ───────────────────────────────
+function PaymentStatusModal({ row, month, role, onClose, onSubmitted }) {
+  const [target, setTarget] = useState("");
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!row) return null;
+  const options = PAYMENT_STATUSES.filter(s => s !== row.paymentStatus && canTransitionPaymentStatus(row.paymentStatus, s));
+  async function submit() {
+    if (!target) return setErr("Choose a new status.");
+    if (!reason.trim()) return setErr("Reason is required.");
+    setBusy(true); setErr("");
+    try {
+      await requestPaymentStatusChange({
+        employeeId: row.id || null, employeeCode: row.employeeCode, employeeName: row.name,
+        payrollMonth: month, requestedBy: role, currentStatus: row.paymentStatus, requestedStatus: target, reason,
+      });
+      onSubmitted();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+        <h2 className="font-bold text-slate-800 text-lg mb-1">Request Payment Status Change</h2>
+        <p className="text-sm text-slate-500 mb-4">{row.name} · {row.employeeCode} · {month}</p>
+        <div className="mb-3">
+          <p className="text-xs text-slate-500 mb-1">Current Status</p>
+          <Badge tone={PAYMENT_STATUS_TONES[row.paymentStatus]}>{PAYMENT_STATUS_LABELS[row.paymentStatus]}</Badge>
+        </div>
+        <div className="mb-3">
+          <p className="text-xs text-slate-500 mb-1">New Status</p>
+          <select value={target} onChange={e => setTarget(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="">— Select —</option>
+            {options.map(s => (
+              <option key={s} value={s}>{PAYMENT_STATUS_LABELS[s]}{requiresMasterOnly(row.paymentStatus, s) ? " (Master approval only)" : ""}</option>
+            ))}
+          </select>
+          {options.length === 0 && <p className="text-xs text-amber-600 mt-1">No further transitions allowed from {PAYMENT_STATUS_LABELS[row.paymentStatus]}.</p>}
+        </div>
+        <div className="mb-4">
+          <p className="text-xs text-slate-500 mb-1">Reason (mandatory)</p>
+          <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm resize-none" placeholder="Why is this status changing?" />
+        </div>
+        {err && <div className="mb-3 p-2 rounded-xl bg-red-50 text-red-700 text-xs">{err}</div>}
+        <div className="flex gap-3">
+          <Button onClick={submit} disabled={busy || options.length === 0} className="rounded-2xl flex-1">{busy ? "Submitting…" : "Submit for Approval"}</Button>
+          <Button variant="outline" onClick={onClose} className="rounded-2xl flex-1">Cancel</Button>
         </div>
       </div>
     </div>
@@ -123,9 +212,99 @@ function PayslipModal({ row, month, onClose }) {
   );
 }
 
+// ── Payroll Summary Panel (bifurcation) ─────────────────────────
+function SummaryPanel({ month, displayRows, cashIncentiveTotal, role }) {
+  const buckets = useMemo(() => {
+    const acc = { Normal: { count: 0, amt: 0 }, FnF: { count: 0, amt: 0 }, Hold: { count: 0, amt: 0 }, No_FnF: { count: 0, amt: 0 } };
+    let holdoverCount = 0, holdoverAmt = 0;
+    displayRows.forEach(r => {
+      const b = acc[r.paymentStatus] || acc.Normal;
+      b.count++; b.amt += r.finalSalary;
+      if (r.holdoverAmount > 0) { holdoverCount++; holdoverAmt += r.holdoverAmount; }
+    });
+    const totalGenerated = displayRows.length;
+    const totalGeneratedAmt = displayRows.reduce((s, r) => s + r.finalSalary, 0);
+    const totalPayable = acc.Normal.amt + acc.FnF.amt;
+    const totalPayableCount = acc.Normal.count + acc.FnF.count;
+    const financeTotal = totalPayable + holdoverAmt + cashIncentiveTotal;
+    return { acc, holdoverCount, holdoverAmt, totalGenerated, totalGeneratedAmt, totalPayable, totalPayableCount, financeTotal };
+  }, [displayRows, cashIncentiveTotal]);
+
+  if (displayRows.length === 0) return null;
+  const Row = ({ label, count, amt, bold, highlight, sub }) => (
+    <tr className={highlight ? "bg-emerald-50 font-bold" : bold ? "font-semibold bg-slate-50" : ""}>
+      <td className={`px-4 py-2 text-sm ${sub ? "pl-8 text-slate-500" : "text-slate-700"}`}>{label}</td>
+      <td className="px-4 py-2 text-sm text-right">{count != null ? count : ""}</td>
+      <td className="px-4 py-2 text-sm text-right">{money(amt)}</td>
+    </tr>
+  );
+  return (
+    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
+      <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payroll Summary — {month}</h2></div>
+      <table className="w-full text-sm min-w-[480px]">
+        <thead className="bg-slate-50 text-slate-500">
+          <tr><th className="text-left px-4 py-2 font-medium">Category</th><th className="text-right px-4 py-2 font-medium">Employees</th><th className="text-right px-4 py-2 font-medium">Amount</th></tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          <Row label="Total Generated" count={buckets.totalGenerated} amt={buckets.totalGeneratedAmt} bold />
+          <Row label="Normal (Payable)" count={buckets.acc.Normal.count} amt={buckets.acc.Normal.amt} />
+          <Row label="F&F Settlement" count={buckets.acc.FnF.count} amt={buckets.acc.FnF.amt} />
+          <Row label="Hold" count={buckets.acc.Hold.count} amt={buckets.acc.Hold.amt} />
+          <Row label="No F&F" count={buckets.acc.No_FnF.count} amt={buckets.acc.No_FnF.amt} />
+          <Row label="TOTAL PAYABLE ✅" count={buckets.totalPayableCount} amt={buckets.totalPayable} highlight />
+          <Row label="Previous Month Holdover" count={buckets.holdoverCount} amt={buckets.holdoverAmt} sub />
+          {["Master", "GM"].includes(role) && buckets.acc && cashIncentiveTotal > 0 && (
+            <Row label="Cash Incentives (Confidential)" amt={cashIncentiveTotal} sub />
+          )}
+          <Row label="FINANCE TOTAL" amt={buckets.financeTotal} bold />
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Verification progress tracker + flags panel ─────────────────
+function VerificationPanel({ month, role, verifications, flagNotifications, onRespond }) {
+  const progress = getVerificationProgress(verifications, flagNotifications);
+  if (verifications.length === 0) return null;
+  const pct = progress.total > 0 ? Math.round((progress.confirmed / progress.total) * 100) : 0;
+  return (
+    <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-bold text-slate-800 text-sm">Verification Progress</h3>
+        <span className="text-xs text-slate-500">{progress.confirmed} of {progress.total} supervisors done</span>
+      </div>
+      <div className="h-2 bg-slate-100 rounded-full overflow-hidden mb-2">
+        <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+      </div>
+      <p className="text-xs text-slate-500">
+        {progress.flagsRaised} flag{progress.flagsRaised !== 1 ? "s" : ""} raised · {progress.pendingHRResponse} pending HR response
+        {progress.confirmed === progress.total && progress.total > 0 && <span className="text-emerald-600 font-medium ml-2">All supervisors have verified. Ready to publish.</span>}
+      </p>
+      {["HR", "Master"].includes(role) && flagNotifications.filter(n => !n.is_read).length > 0 && (
+        <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+          {flagNotifications.filter(n => !n.is_read).map(n => (
+            <div key={n.id} className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 rounded-xl p-2.5">
+              <span className="text-xs text-amber-800">{n.message}</span>
+              <div className="flex gap-1.5">
+                <Button onClick={() => onRespond(n, "Change made for the flagged employee.")} className="rounded-lg text-[11px] py-1 px-2">Change Made</Button>
+                <Button variant="outline" onClick={() => {
+                  const reason = window.prompt("Reason for rejecting the flag?");
+                  if (reason) onRespond(n, `Flag rejected — reason: ${reason}`);
+                }} className="rounded-lg text-[11px] py-1 px-2">Reject Flag</Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────
-export default function PayrollAutomation({ role }) {
+export default function PayrollAutomation({ role, actorName }) {
   const now = new Date();
+  const [tab, setTab] = useState("register");
   const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
   const [employees, setEmployees] = useState([]);
   const [loans, setLoans] = useState([]);
@@ -138,7 +317,9 @@ export default function PayrollAutomation({ role }) {
   const [generating, setGenerating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [showUnlockModal, setShowUnlockModal] = useState(false);
   const [selectedPayslip, setSelectedPayslip] = useState(null);
+  const [paymentStatusRow, setPaymentStatusRow] = useState(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [commissionAddOns, setCommissionAddOns] = useState({});
@@ -148,6 +329,11 @@ export default function PayrollAutomation({ role }) {
   const [statusFilter, setStatusFilter] = useState("All");
   const [collapsedBranches, setCollapsedBranches] = useState(() => new Set());
   const [collapsedDepts, setCollapsedDepts] = useState(() => new Set());
+  const [lockInfo, setLockInfo] = useState(null);
+  const [verifications, setVerifications] = useState([]);
+  const [flagNotifications, setFlagNotifications] = useState([]);
+  const [cashIncentiveTotal, setCashIncentiveTotal] = useState(0);
+  const [marking, setMarking] = useState(false);
 
   function toggleBranchCollapsed(branch) {
     setCollapsedBranches(prev => {
@@ -167,11 +353,12 @@ export default function PayrollAutomation({ role }) {
     setSearchText(""); setBranchFilter(""); setDeptFilter(""); setStatusFilter("All");
   }
 
-  const isPublished = payrollStatus === "Published" || payrollStatus === "Locked";
-  const canGenerate = ["Master", "HR"].includes(role) && !isPublished;
-  const canRefresh  = ["Master", "HR"].includes(role) && !isPublished;
-  const canPublish  = role === "Master" && !isPublished && payrollRows.length > 0;
-  const canApprove  = role === "Master" && payrollStatus === "Draft";
+  const isPublished = payrollStatus === "Published" || payrollStatus === "Locked" || payrollStatus === "Completed";
+  const isLocked = !!lockInfo?.is_locked;
+  const canGenerate = ["Master", "HR"].includes(role) && !isPublished && !isLocked;
+  const canRefresh  = ["Master", "HR"].includes(role) && !isPublished && !isLocked;
+  const canPublish  = role === "Master" && !isPublished && payrollRows.length > 0 && !isLocked;
+  const canApprove  = role === "Master" && payrollStatus === "Draft" && !isLocked;
 
   // Finance only sees Published payroll
   const financeBlocked = role === "Finance" && !isPublished;
@@ -180,13 +367,15 @@ export default function PayrollAutomation({ role }) {
   // submits the whole month as one batch for Master/GM to approve. Layered
   // on top of Publish — Finance still needs Published *and* this approved
   // before they can generate any payslip.
-  const canEditSettlement = ["HR", "Master"].includes(role) && isPublished
+  const canEditSettlement = ["HR", "Master"].includes(role) && isPublished && !isLocked
     && ["Not Submitted", "Rejected"].includes(settlementReviewStatus);
   const canSubmitSettlement = canEditSettlement && payrollRows.length > 0;
   const canReviewSettlement = ["Master", "GM"].includes(role) && settlementReviewStatus === "Pending Approval";
+  const canRequestPaymentStatus = ["HR", "Master"].includes(role) && !isLocked;
+  const canMarkPaid = role === "Finance" && isPublished && !isLocked;
 
   useEffect(() => { loadBase(); }, []);
-  useEffect(() => { loadPayroll(); }, [month]);
+  useEffect(() => { loadPayroll(); loadLockAndExtras(); }, [month]);
 
   async function loadBase() {
     const [{ data: emps }, { data: lns }] = await Promise.all([
@@ -195,6 +384,19 @@ export default function PayrollAutomation({ role }) {
     ]);
     setEmployees(emps || []);
     setLoans(lns || []);
+  }
+
+  async function loadLockAndExtras() {
+    const [lock, verifs, cashRows] = await Promise.all([
+      getPayrollLock(month),
+      fetchVerifications(month),
+      fetchCashIncentives(month),
+    ]);
+    setLockInfo(lock);
+    setVerifications(verifs);
+    setCashIncentiveTotal(cashRows.reduce((s, r) => s + Number(r.amount || 0), 0));
+    const { data: flags } = await supabase.from("notifications").select("*").eq("type", `payroll_flag_${month}`).order("created_at", { ascending: false });
+    setFlagNotifications(flags || []);
   }
 
   async function loadPayroll() {
@@ -303,14 +505,15 @@ export default function PayrollAutomation({ role }) {
     setGenerating(true); setErr(""); setMsg("");
     try {
       const rows = await buildPayrollRows();
-      const payloadRows = buildPayloadRows(rows);
+      let payloadRows = buildPayloadRows(rows);
+      payloadRows = await mergePersistentPayrollFields(month, payloadRows);
       await supabase.from("payroll").delete().eq("payroll_month", month);
       if (payloadRows.length > 0) {
         const { error } = await supabase.from("payroll").insert(payloadRows);
         if (error) {
           const minimal = payloadRows.map(r => ({
             employee_code: r.employee_code,
-            payroll_month: r.payroll_month, gross_salary: r.gross_salary,
+            payroll_month: month, gross_salary: r.gross_salary,
             net_salary: r.net_salary, status: r.status, generated_at: r.generated_at,
           }));
           const { error: minimalError } = await supabase.from("payroll").insert(minimal);
@@ -324,8 +527,10 @@ export default function PayrollAutomation({ role }) {
           }
         }
       }
+      const verifCount = await generateVerificationsForMonth(month).catch(() => 0);
       await loadPayroll();
-      setMsg(`Payroll generated for ${rows.length} employees.`);
+      await loadLockAndExtras();
+      setMsg(`Payroll generated for ${rows.length} employees.${verifCount > 0 ? ` Sent to ${verifCount} supervisor(s) for verification.` : ""}`);
     } catch (e) { setErr(e.message); }
     finally { setGenerating(false); }
   }
@@ -433,6 +638,15 @@ export default function PayrollAutomation({ role }) {
     setMsg(`Payroll published by ${role}.`);
   }
 
+  async function doUnlock(reason) {
+    try {
+      await unlockPayrollMonth(month, actorName || role, reason);
+      await loadLockAndExtras();
+      setShowUnlockModal(false);
+      setMsg(`Payroll unlocked for ${month}. Reason logged: ${reason}`);
+    } catch (e) { setErr(e.message); }
+  }
+
   async function updateEmployeeSettlementStatus(code, status) {
     if (!canEditSettlement) return;
     await supabase.from("payroll").update({
@@ -492,6 +706,47 @@ export default function PayrollAutomation({ role }) {
     setMsg("Settlement statuses rejected. HR can review and resubmit.");
   }
 
+  async function markPaid(code) {
+    await supabase.from("payroll").update({
+      is_paid: true, paid_at: new Date().toISOString(), paid_by: actorName || role,
+    }).eq("payroll_month", month).eq("employee_code", code);
+    setPayrollRows(prev => prev.map(r => (r.employee_code === code) ? { ...r, is_paid: true, paid_at: new Date().toISOString(), paid_by: actorName || role } : r));
+    checkCompletion();
+  }
+
+  async function markAllPaid() {
+    if (!canMarkPaid) return;
+    setMarking(true);
+    try {
+      const payable = filteredRows.filter(r => ["Normal", "FnF"].includes(r.paymentStatus) && !r.isPaid);
+      for (const r of payable) await markPaid(r.employeeCode);
+      setMsg(`Marked ${payable.length} employees as Paid.`);
+    } finally { setMarking(false); }
+  }
+
+  async function checkCompletion() {
+    const { data } = await supabase.from("payroll").select("employee_code, payment_status, is_paid").eq("payroll_month", month);
+    if (!data || data.length === 0) return;
+    const payable = data.filter(r => ["Normal", "FnF"].includes(r.payment_status || "Normal"));
+    const allPaid = payable.length > 0 && payable.every(r => r.is_paid);
+    if (allPaid && payrollStatus !== "Completed") {
+      await supabase.from("payroll").update({ status: "Completed" }).eq("payroll_month", month);
+      setPayrollStatus("Completed");
+      await Promise.all(["HR", "Master"].map(r => supabase.from("notifications").insert({
+        recipient_role: r, type: "payroll", title: "Payroll Completed",
+        message: `${month} payroll is complete — all Normal/F&F employees have been paid.`, is_read: false,
+      }))).catch(() => {});
+    }
+  }
+
+  async function handleFlagRespond(notification, message) {
+    try {
+      await respondToFlag(notification, message);
+      await loadLockAndExtras();
+      setMsg("Response sent to supervisor.");
+    } catch (e) { setErr(e.message); }
+  }
+
   function exportExcel() {
     const rows = filteredRows.map(r => ({
       "Branch": r.branch, "Department": r.department,
@@ -507,6 +762,7 @@ export default function PayrollAutomation({ role }) {
       "Advance": r.advanceDeduction, "Loan Deduction": r.loanDeduction,
       "Tax": r.taxDeduction, "EOBI": r.eobiDeduction, "Other Deductions": r.otherDeductions,
       "Total Deductions": r.totalDeductions, "Net Pay": r.finalSalary,
+      "Payment Status": PAYMENT_STATUS_LABELS[r.paymentStatus] || r.paymentStatus,
       "Status": r.status || payrollStatus,
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -549,6 +805,9 @@ export default function PayrollAutomation({ role }) {
       employeeCode: code, name: r.name || r.employee_name || emp.full_name || code, level: r.level || emp.staff_level || "—",
       status: r.status || payrollStatus,
       settlementStatus: r.settlement_status || "Payable",
+      paymentStatus: r.payment_status || "Normal",
+      isPaid: !!r.is_paid, paidAt: r.paid_at, paidBy: r.paid_by,
+      holdoverFromMonth: r.holdover_from_month || null, holdoverAmount: Number(r.holdover_amount || 0),
       branch: r.branch || emp.branch || "—",
       department: r.department || r.dept || emp.department || "—",
       isAttendanceExempt: !!(r.isAttendanceExempt || r.is_attendance_exempt),
@@ -602,6 +861,8 @@ export default function PayrollAutomation({ role }) {
 
   function sumRows(rows, field) { return rows.reduce((s, r) => s + (r[field] || 0), 0); }
 
+  const holdCount = useMemo(() => displayRows.filter(r => r.paymentStatus === "Hold").length, [displayRows]);
+
   // Branch (A-Z) → Department (A-Z) → Employee Name (A-Z)
   const groupedData = useMemo(() => {
     const byBranch = {};
@@ -628,8 +889,15 @@ export default function PayrollAutomation({ role }) {
     <td {...rest} className={`px-3 py-3 text-sm whitespace-nowrap ${sticky ? "sticky left-0 z-[5] bg-white shadow-[2px_0_4px_rgba(0,0,0,0.06)]" : ""} ${className}`}>{children}</td>
   );
 
+  const visibleTabs = TABS.filter(([k]) => {
+    if (k === "cash") return ["Master", "GM"].includes(role);
+    if (k === "hold") return ["Master", "HR", "GM"].includes(role);
+    if (k === "finance") return ["Finance", "Master"].includes(role);
+    return true;
+  });
+
   // Finance blocked from Draft payroll
-  if (financeBlocked) {
+  if (financeBlocked && tab === "register") {
     return (
       <div>
         <PageTitle title="Payroll Processing" subtitle="Payroll for Finance view." />
@@ -646,6 +914,13 @@ export default function PayrollAutomation({ role }) {
               })}
             </select>
           </div>
+          {visibleTabs.length > 1 && (
+            <div className="flex flex-wrap gap-2 justify-center mt-4">
+              {visibleTabs.filter(([k]) => k !== "register").map(([k, l]) => (
+                <button key={k} onClick={() => setTab(k)} className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-amber-200 text-amber-700 hover:bg-amber-100">{l}</button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -654,10 +929,33 @@ export default function PayrollAutomation({ role }) {
   return (
     <div>
       {showPublishModal && <PublishModal month={month} onConfirm={publishPayroll} onCancel={() => setShowPublishModal(false)} />}
+      {showUnlockModal && <UnlockModal month={month} onConfirm={doUnlock} onCancel={() => setShowUnlockModal(false)} />}
       <PayslipModal row={selectedPayslip} month={month} onClose={() => setSelectedPayslip(null)} />
+      {paymentStatusRow && (
+        <PaymentStatusModal row={paymentStatusRow} month={month} role={role}
+          onClose={() => setPaymentStatusRow(null)}
+          onSubmitted={() => { setPaymentStatusRow(null); setMsg("Payment status change submitted for approval."); }} />
+      )}
 
       <PageTitle title="Payroll Processing" subtitle="Auto-calculate payroll from attendance and policy." />
 
+      {visibleTabs.length > 1 && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {visibleTabs.map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+              {l}{k === "hold" && holdCount > 0 && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{holdCount}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tab === "hold" && <PayrollHold role={role} actorName={actorName} month={month} setMonth={setMonth} />}
+      {tab === "cash" && <CashIncentives role={role} actorName={actorName} month={month} setMonth={setMonth} />}
+      {tab === "finance" && <FinanceReconciliation role={role} month={month} setMonth={setMonth} />}
+
+      {tab === "register" && (
+      <>
       {/* Controls */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -668,6 +966,11 @@ export default function PayrollAutomation({ role }) {
           </div>
           <div className="flex items-center gap-2 mt-4">
             <Badge tone={STATUS_TONES[payrollStatus] || "slate"}>{payrollStatus}</Badge>
+            {isLocked && (
+              <span title={`Payroll locked on ${lockInfo?.locked_at?.slice(0, 10)}. Contact Master to unlock.`}>
+                <Badge tone="purple">🔒 LOCKED</Badge>
+              </span>
+            )}
             {isPublished && publishedBy && (
               <span className="text-xs text-slate-500">Published by {publishedBy} · {publishedAt?.slice(0, 10)}</span>
             )}
@@ -689,6 +992,16 @@ export default function PayrollAutomation({ role }) {
             {canPublish && (
               <Button onClick={() => setShowPublishModal(true)} className="rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white">
                 Publish Payroll
+              </Button>
+            )}
+            {role === "Master" && isLocked && (
+              <Button onClick={() => setShowUnlockModal(true)} variant="outline" className="rounded-2xl border-purple-200 text-purple-700">
+                Unlock Payroll
+              </Button>
+            )}
+            {canMarkPaid && filteredRows.some(r => ["Normal", "FnF"].includes(r.paymentStatus) && !r.isPaid) && (
+              <Button onClick={markAllPaid} disabled={marking} className="rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white">
+                {marking ? "Marking…" : "Mark All Paid"}
               </Button>
             )}
             {displayRows.length > 0 && (
@@ -730,8 +1043,20 @@ export default function PayrollAutomation({ role }) {
         </div>
       )}
 
+      {holdCount > 0 && ["HR", "Master", "GM"].includes(role) && (
+        <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-sm">
+          ⚠️ {holdCount} employee{holdCount > 1 ? "s are" : " is"} on Hold status. Review in the Hold & F&F tab.
+        </div>
+      )}
+
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
+
+      <SummaryPanel month={month} displayRows={displayRows} cashIncentiveTotal={cashIncentiveTotal} role={role} />
+
+      {["HR", "Master"].includes(role) && (
+        <VerificationPanel month={month} role={role} verifications={verifications} flagNotifications={flagNotifications} onRespond={handleFlagRespond} />
+      )}
 
       {/* Summary Cards */}
       {displayRows.length > 0 && (
@@ -794,7 +1119,7 @@ export default function PayrollAutomation({ role }) {
             <p className="text-xs text-slate-400 mt-0.5">{filteredRows.length} of {displayRows.length} employees</p>
           </div>
         </div>
-        <table className="w-full text-sm" style={{ minWidth: "2900px" }}>
+        <table className="w-full text-sm" style={{ minWidth: "3050px" }}>
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <TH sticky>Employee</TH><TH>Level</TH>
@@ -824,13 +1149,14 @@ export default function PayrollAutomation({ role }) {
               <TH className="text-red-500">Other Ded</TH>
               <TH className="text-red-700 bg-red-50">Total Ded</TH>
               <TH className="text-slate-900 bg-slate-100">Net Pay</TH>
+              <TH>Payment Status</TH>
               <TH>Settlement</TH>
               <TH>Payslip</TH>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.length === 0 ? (
-              <tr><td colSpan={31} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={32} className="px-4 py-8 text-center text-slate-400">
                 {displayRows.length === 0
                   ? (role === "Finance" ? "No published payroll for this month." : 'No payroll data. Click "Generate Payroll" to calculate.')
                   : "No employees match the current filters."}
@@ -841,7 +1167,7 @@ export default function PayrollAutomation({ role }) {
               return (
                 <React.Fragment key={branch}>
                   <tr className="bg-slate-800 text-white cursor-pointer select-none" onClick={() => toggleBranchCollapsed(branch)}>
-                    <TD colSpan={31} className="font-bold py-2">
+                    <TD colSpan={32} className="font-bold py-2">
                       {branchCollapsed ? "▶" : "▼"} {branch}
                       <span className="font-normal text-slate-300 text-xs ml-2">
                         ({branchRows.length} employees · Basic {money(sumRows(branchRows, "basicSalary"))} · Net {money(sumRows(branchRows, "finalSalary"))})
@@ -854,7 +1180,7 @@ export default function PayrollAutomation({ role }) {
                     return (
                       <React.Fragment key={deptKey}>
                         <tr className="bg-slate-100 cursor-pointer select-none" onClick={() => toggleDeptCollapsed(deptKey)}>
-                          <TD colSpan={31} className="font-semibold text-slate-600 py-1.5 pl-8">
+                          <TD colSpan={32} className="font-semibold text-slate-600 py-1.5 pl-8">
                             {deptCollapsed ? "▶" : "▼"} {dept}
                             <span className="font-normal text-slate-400 text-xs ml-2">
                               ({rows.length} · Basic {money(sumRows(rows, "basicSalary"))} · Net {money(sumRows(rows, "finalSalary"))})
@@ -867,6 +1193,7 @@ export default function PayrollAutomation({ role }) {
                               <div className="font-medium">{r.name}</div>
                               <div className="text-xs text-slate-400">{r.employeeCode}</div>
                               {r.isAttendanceExempt && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 rounded">EXEMPTED</span>}
+                              {r.holdoverAmount > 0 && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded ml-1">+{money(r.holdoverAmount)} holdover</span>}
                             </TD>
                             <TD>{r.level}</TD>
                             {/* Attendance */}
@@ -891,7 +1218,7 @@ export default function PayrollAutomation({ role }) {
                                   value={commissionAddOns[r.employeeCode] ?? r.commissionAddOn ?? 0}
                                   onChange={e => handleCommissionChange(r.employeeCode, e.target.value)}
                                   className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-right text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
-                                  disabled={!["HR", "Master"].includes(role)} />
+                                  disabled={!["HR", "Master"].includes(role) || isLocked} />
                               )}
                             </TD>
                             <TD className="text-emerald-600">{r.fuelAllowance ? money(r.fuelAllowance) : "—"}</TD>
@@ -910,6 +1237,16 @@ export default function PayrollAutomation({ role }) {
                             <TD className="font-semibold text-red-700 bg-red-50">{money(r.totalDeductions)}</TD>
                             <TD className="font-bold text-slate-900 bg-slate-50 text-right">{money(r.finalSalary)}</TD>
                             <TD>
+                              {canRequestPaymentStatus ? (
+                                <button onClick={() => setPaymentStatusRow(r)}
+                                  className="cursor-pointer" title="Click to request a status change">
+                                  <Badge tone={PAYMENT_STATUS_TONES[r.paymentStatus]}>{PAYMENT_STATUS_LABELS[r.paymentStatus]}</Badge>
+                                </button>
+                              ) : (
+                                <Badge tone={PAYMENT_STATUS_TONES[r.paymentStatus]}>{PAYMENT_STATUS_LABELS[r.paymentStatus]}</Badge>
+                              )}
+                            </TD>
+                            <TD>
                               {canEditSettlement ? (
                                 <select value={r.settlementStatus} onChange={e => updateEmployeeSettlementStatus(r.employeeCode, e.target.value)}
                                   className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white">
@@ -920,13 +1257,20 @@ export default function PayrollAutomation({ role }) {
                               )}
                             </TD>
                             <TD>
-                              {role === "Finance" && settlementReviewStatus !== "Approved" ? (
-                                <span className="text-xs text-amber-500">Awaiting Approval</span>
-                              ) : role === "Finance" && ["Hold", "No FNF"].includes(r.settlementStatus) ? (
-                                <span className="text-xs text-slate-400">{r.settlementStatus === "No FNF" ? "No Payment" : "On Hold"}</span>
-                              ) : (
-                                <Button variant="outline" onClick={() => setSelectedPayslip(r)} className="rounded-xl text-xs py-1 px-3">View</Button>
-                              )}
+                              <div className="flex flex-col gap-1 items-start">
+                                {role === "Finance" && settlementReviewStatus !== "Approved" ? (
+                                  <span className="text-xs text-amber-500">Awaiting Approval</span>
+                                ) : role === "Finance" && ["Hold", "No FNF"].includes(r.settlementStatus) ? (
+                                  <span className="text-xs text-slate-400">{r.settlementStatus === "No FNF" ? "No Payment" : "On Hold"}</span>
+                                ) : (
+                                  <Button variant="outline" onClick={() => setSelectedPayslip(r)} className="rounded-xl text-xs py-1 px-3">View</Button>
+                                )}
+                                {r.isPaid ? (
+                                  <span className="text-[10px] text-emerald-600 font-medium">✓ Paid {r.paidAt?.slice(0, 10)}</span>
+                                ) : canMarkPaid && ["Normal", "FnF"].includes(r.paymentStatus) ? (
+                                  <button onClick={() => markPaid(r.employeeCode)} className="text-[10px] text-blue-600 hover:underline">Mark Paid</button>
+                                ) : null}
+                              </div>
                             </TD>
                           </tr>
                         ))}
@@ -962,11 +1306,14 @@ export default function PayrollAutomation({ role }) {
                 <TD className="text-slate-900 bg-slate-100">{money(filteredTotals.netPay)}</TD>
                 <TD />
                 <TD />
+                <TD />
               </tr>
             </tfoot>
           )}
         </table>
       </div>
+      </>
+      )}
     </div>
   );
 }
