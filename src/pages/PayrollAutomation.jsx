@@ -16,9 +16,6 @@ import CashIncentives from "./CashIncentives.jsx";
 import FinanceReconciliation from "./FinanceReconciliation.jsx";
 
 const STATUS_TONES = { Draft: "yellow", Approved: "blue", Published: "green", Locked: "purple", Paid: "green", Completed: "green" };
-const SETTLEMENT_TONES = { Payable: "green", Hold: "yellow", "No FNF": "red", FNF: "purple" };
-const SETTLEMENT_OPTIONS = ["Payable", "Hold", "No FNF", "FNF"];
-const SETTLEMENT_REVIEW_TONES = { "Not Submitted": "slate", "Pending Approval": "yellow", Approved: "green", Rejected: "red" };
 const TABS = [["register", "Payroll Register"], ["hold", "Hold & F&F"], ["cash", "Cash Incentives"], ["finance", "Finance Reconciliation"]];
 
 // ── Publish confirmation modal ────────────────────────────────
@@ -312,8 +309,6 @@ export default function PayrollAutomation({ role, actorName }) {
   const [payrollStatus, setPayrollStatus] = useState("Draft");
   const [publishedBy, setPublishedBy] = useState("");
   const [publishedAt, setPublishedAt] = useState("");
-  const [settlementReviewStatus, setSettlementReviewStatus] = useState("Not Submitted");
-  const [settlementRejectionReason, setSettlementRejectionReason] = useState("");
   const [generating, setGenerating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
@@ -363,14 +358,6 @@ export default function PayrollAutomation({ role, actorName }) {
   // Finance only sees Published payroll
   const financeBlocked = role === "Finance" && !isPublished;
 
-  // Settlement status (Payable/Hold/No FNF/FNF): HR sets per-employee, then
-  // submits the whole month as one batch for Master/GM to approve. Layered
-  // on top of Publish — Finance still needs Published *and* this approved
-  // before they can generate any payslip.
-  const canEditSettlement = ["HR", "Master"].includes(role) && isPublished && !isLocked
-    && ["Not Submitted", "Rejected"].includes(settlementReviewStatus);
-  const canSubmitSettlement = canEditSettlement && payrollRows.length > 0;
-  const canReviewSettlement = ["Master", "GM"].includes(role) && settlementReviewStatus === "Pending Approval";
   const canRequestPaymentStatus = ["HR", "Master"].includes(role) && !isLocked;
   const canMarkPaid = role === "Finance" && isPublished && !isLocked;
 
@@ -406,8 +393,6 @@ export default function PayrollAutomation({ role, actorName }) {
       setPayrollStatus(data[0]?.status || "Draft");
       setPublishedBy(data[0]?.published_by || "");
       setPublishedAt(data[0]?.published_at || "");
-      setSettlementReviewStatus(data[0]?.settlement_review_status || "Not Submitted");
-      setSettlementRejectionReason(data[0]?.settlement_rejection_reason || "");
       const saved = {};
       data.forEach(r => { if (r.commission_addon) saved[r.employee_code] = Number(r.commission_addon); });
       setCommissionAddOns(saved);
@@ -415,7 +400,6 @@ export default function PayrollAutomation({ role, actorName }) {
       setPayrollRows([]);
       setPayrollStatus("Draft");
       setPublishedBy(""); setPublishedAt("");
-      setSettlementReviewStatus("Not Submitted"); setSettlementRejectionReason("");
     }
   }
 
@@ -647,65 +631,6 @@ export default function PayrollAutomation({ role, actorName }) {
     } catch (e) { setErr(e.message); }
   }
 
-  async function updateEmployeeSettlementStatus(code, status) {
-    if (!canEditSettlement) return;
-    await supabase.from("payroll").update({
-      settlement_status: status, settlement_set_by: role, settlement_set_at: new Date().toISOString(),
-    }).eq("payroll_month", month).eq("employee_code", code);
-    setPayrollRows(prev => prev.map(r =>
-      (r.employeeCode || r.employee_code) === code ? { ...r, settlement_status: status } : r));
-  }
-
-  async function submitSettlementForApproval() {
-    if (!canSubmitSettlement) return;
-    const ts = new Date().toISOString();
-    await supabase.from("payroll").update({
-      settlement_review_status: "Pending Approval", settlement_submitted_by: role, settlement_submitted_at: ts,
-    }).eq("payroll_month", month);
-    setSettlementReviewStatus("Pending Approval");
-    await Promise.all(["Master", "GM"].map(r => supabase.from("notifications").insert({
-      recipient_role: r, type: "payroll_settlement",
-      title: "Settlement Statuses Pending Approval",
-      message: `${role} submitted settlement statuses for ${month} payroll for approval.`,
-      is_read: false, created_at: ts,
-    }))).catch(() => {});
-    setMsg("Settlement statuses submitted for Master/GM approval.");
-  }
-
-  async function approveSettlementBatch() {
-    if (!canReviewSettlement) return;
-    const ts = new Date().toISOString();
-    await supabase.from("payroll").update({
-      settlement_review_status: "Approved", settlement_approved_by: role, settlement_approved_at: ts,
-    }).eq("payroll_month", month);
-    setSettlementReviewStatus("Approved");
-    await supabase.from("notifications").insert({
-      recipient_role: "Finance", type: "payroll_settlement",
-      title: "Settlement Statuses Approved",
-      message: `${role} approved settlement statuses for ${month} payroll. Payslips can now be generated.`,
-      is_read: false, created_at: ts,
-    }).then(() => {});
-    setMsg("Settlement statuses approved. Finance can now generate payslips.");
-  }
-
-  async function rejectSettlementBatch() {
-    if (!canReviewSettlement) return;
-    const reason = window.prompt("Reason for rejecting the settlement statuses?");
-    if (!reason) return;
-    await supabase.from("payroll").update({
-      settlement_review_status: "Rejected", settlement_rejection_reason: reason,
-    }).eq("payroll_month", month);
-    setSettlementReviewStatus("Rejected");
-    setSettlementRejectionReason(reason);
-    await supabase.from("notifications").insert({
-      recipient_role: "HR", type: "payroll_settlement",
-      title: "Settlement Statuses Rejected",
-      message: `${role} rejected the ${month} settlement statuses. Reason: ${reason}`,
-      is_read: false, created_at: new Date().toISOString(),
-    }).then(() => {});
-    setMsg("Settlement statuses rejected. HR can review and resubmit.");
-  }
-
   async function markPaid(code) {
     await supabase.from("payroll").update({
       is_paid: true, paid_at: new Date().toISOString(), paid_by: actorName || role,
@@ -804,7 +729,6 @@ export default function PayrollAutomation({ role, actorName }) {
     return {
       employeeCode: code, name: r.name || r.employee_name || emp.full_name || code, level: r.level || emp.staff_level || "—",
       status: r.status || payrollStatus,
-      settlementStatus: r.settlement_status || "Payable",
       paymentStatus: r.payment_status || "Normal",
       isPaid: !!r.is_paid, paidAt: r.paid_at, paidBy: r.paid_by,
       holdoverFromMonth: r.holdover_from_month || null, holdoverAmount: Number(r.holdover_amount || 0),
@@ -1009,31 +933,6 @@ export default function PayrollAutomation({ role, actorName }) {
             )}
           </div>
         </div>
-
-        {isPublished && (
-          <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-slate-100">
-            <div>
-              <p className="text-xs text-slate-500 mb-1">Settlement Status Review</p>
-              <Badge tone={SETTLEMENT_REVIEW_TONES[settlementReviewStatus] || "slate"}>{settlementReviewStatus}</Badge>
-            </div>
-            {settlementReviewStatus === "Rejected" && settlementRejectionReason && (
-              <span className="text-xs text-red-600">Reason: {settlementRejectionReason}</span>
-            )}
-            <div className="flex gap-2 ml-auto flex-wrap">
-              {canSubmitSettlement && (
-                <Button onClick={submitSettlementForApproval} className="rounded-2xl">Submit Settlement for Approval</Button>
-              )}
-              {canReviewSettlement && (
-                <>
-                  <Button onClick={approveSettlementBatch} className="rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white">
-                    Approve Settlement
-                  </Button>
-                  <Button variant="outline" onClick={rejectSettlementBatch} className="rounded-2xl">Reject Settlement</Button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {isPublished && role !== "Finance" && (
@@ -1150,13 +1049,12 @@ export default function PayrollAutomation({ role, actorName }) {
               <TH className="text-red-700 bg-red-50">Total Ded</TH>
               <TH className="text-slate-900 bg-slate-100">Net Pay</TH>
               <TH>Payment Status</TH>
-              <TH>Settlement</TH>
               <TH>Payslip</TH>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.length === 0 ? (
-              <tr><td colSpan={32} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={31} className="px-4 py-8 text-center text-slate-400">
                 {displayRows.length === 0
                   ? (role === "Finance" ? "No published payroll for this month." : 'No payroll data. Click "Generate Payroll" to calculate.')
                   : "No employees match the current filters."}
@@ -1167,7 +1065,7 @@ export default function PayrollAutomation({ role, actorName }) {
               return (
                 <React.Fragment key={branch}>
                   <tr className="bg-slate-800 text-white cursor-pointer select-none" onClick={() => toggleBranchCollapsed(branch)}>
-                    <TD colSpan={32} className="font-bold py-2">
+                    <TD colSpan={31} className="font-bold py-2">
                       {branchCollapsed ? "▶" : "▼"} {branch}
                       <span className="font-normal text-slate-300 text-xs ml-2">
                         ({branchRows.length} employees · Basic {money(sumRows(branchRows, "basicSalary"))} · Net {money(sumRows(branchRows, "finalSalary"))})
@@ -1180,7 +1078,7 @@ export default function PayrollAutomation({ role, actorName }) {
                     return (
                       <React.Fragment key={deptKey}>
                         <tr className="bg-slate-100 cursor-pointer select-none" onClick={() => toggleDeptCollapsed(deptKey)}>
-                          <TD colSpan={32} className="font-semibold text-slate-600 py-1.5 pl-8">
+                          <TD colSpan={31} className="font-semibold text-slate-600 py-1.5 pl-8">
                             {deptCollapsed ? "▶" : "▼"} {dept}
                             <span className="font-normal text-slate-400 text-xs ml-2">
                               ({rows.length} · Basic {money(sumRows(rows, "basicSalary"))} · Net {money(sumRows(rows, "finalSalary"))})
@@ -1247,21 +1145,9 @@ export default function PayrollAutomation({ role, actorName }) {
                               )}
                             </TD>
                             <TD>
-                              {canEditSettlement ? (
-                                <select value={r.settlementStatus} onChange={e => updateEmployeeSettlementStatus(r.employeeCode, e.target.value)}
-                                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white">
-                                  {SETTLEMENT_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                              ) : (
-                                <Badge tone={SETTLEMENT_TONES[r.settlementStatus] || "slate"}>{r.settlementStatus}</Badge>
-                              )}
-                            </TD>
-                            <TD>
                               <div className="flex flex-col gap-1 items-start">
-                                {role === "Finance" && settlementReviewStatus !== "Approved" ? (
-                                  <span className="text-xs text-amber-500">Awaiting Approval</span>
-                                ) : role === "Finance" && ["Hold", "No FNF"].includes(r.settlementStatus) ? (
-                                  <span className="text-xs text-slate-400">{r.settlementStatus === "No FNF" ? "No Payment" : "On Hold"}</span>
+                                {role === "Finance" && ["Hold", "No_FnF"].includes(r.paymentStatus) ? (
+                                  <span className="text-xs text-slate-400">{r.paymentStatus === "No_FnF" ? "No Payment" : "On Hold"}</span>
                                 ) : (
                                   <Button variant="outline" onClick={() => setSelectedPayslip(r)} className="rounded-xl text-xs py-1 px-3">View</Button>
                                 )}
@@ -1304,7 +1190,6 @@ export default function PayrollAutomation({ role, actorName }) {
                 <TD>{money(sumRows(filteredRows, "otherDeductions"))}</TD>
                 <TD className="text-red-700 bg-red-50">{money(filteredTotals.totalDeductions)}</TD>
                 <TD className="text-slate-900 bg-slate-100">{money(filteredTotals.netPay)}</TD>
-                <TD />
                 <TD />
                 <TD />
               </tr>
