@@ -2128,4 +2128,78 @@ begin
 end;
 $function$;
 -- =============================================================
+
+-- =============================================================
+-- Applied: 2026-07-30 — security: close anon-key access on users/leaves/
+-- leave_requests/payroll
+-- =============================================================
+-- Same leftover-policy mistake as the 2026-07-23 fix — a policy literally
+-- named "Allow all for service role" but declared TO public USING (true),
+-- so it actually applied to anon too. These four tables were missed in
+-- that earlier pass. Confirmed live and exploitable: an anon-key-only
+-- request (no login) could read public.users, leaves, leave_requests, and
+-- payroll before this fix. All four already have properly-scoped
+-- `authenticated`-role policies covering real app access.
+-- =============================================================
+DROP POLICY IF EXISTS "Allow all for service role" ON public.users;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.leaves;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.leave_requests;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.payroll;
+-- =============================================================
+
+-- =============================================================
+-- Applied: 2026-07-30 — Timesheet Adj Time In/Out (HR -> Master/GM
+-- approval) + payroll settlement status (Payable/Hold/No FNF/FNF)
+-- =============================================================
+-- User asked for three things: (1) a quick per-day time-correction action
+-- on the Timesheet page that routes to Master/GM for approval instead of
+-- applying instantly, (2) a per-employee payroll settlement status that
+-- Finance can't act on until HR sets it and Master/GM approves the batch,
+-- (3) sign-pad/thumb-impression capture on payment — deferred, needs
+-- hardware/SDK details from the user before it's buildable.
+--
+-- While building (1), discovered attendance_adjustments already had a
+-- pending-approval-shaped schema (status default 'Pending', approved_by,
+-- rejection_reason) but the only two consumers — AttendanceAdjustment.jsx's
+-- save function and ApprovalQueue.jsx's Attendance Corrections tab — were
+-- both written against column names that don't exist on the live table
+-- (work_date/original_in/adjusted_in instead of the real attendance_date/
+-- original_check_in/adjusted_check_in etc). Every save and every display
+-- in that flow was silently broken. Fixed both call sites to use the real
+-- columns; AttendanceAdjustment.jsx's "+ New Adjustment" keeps its
+-- existing instant-apply behavior (now explicitly stamps status=Approved
+-- instead of relying on the table's default), while the new Timesheet
+-- button creates a status='Pending Approval' row and ApprovalQueue's
+-- approve action now actually applies the correction to public.attendance
+-- (previously it only flipped the adjustment's own status and never
+-- touched attendance at all).
+--
+-- attendance_adjustments: added approved_at (approved_by/status/
+-- rejection_reason already existed).
+ALTER TABLE public.attendance_adjustments
+  ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+
+-- payroll: per-employee settlement_status (Payable/Hold/No FNF/FNF) plus a
+-- month-level batch review state (settlement_review_status: Not Submitted
+-- -> Pending Approval -> Approved/Rejected) gating Finance's payslip
+-- button. This is layered ON TOP of the existing Draft/Approved/Published
+-- flow, not a replacement — Finance still needs Published *and* this
+-- approved before any payslip. Historical rows are grandfathered to
+-- 'Approved' so already-published past payroll isn't retroactively locked.
+ALTER TABLE public.payroll
+  ADD COLUMN IF NOT EXISTS settlement_status text DEFAULT 'Payable',
+  ADD COLUMN IF NOT EXISTS settlement_notes text,
+  ADD COLUMN IF NOT EXISTS settlement_set_by text,
+  ADD COLUMN IF NOT EXISTS settlement_set_at timestamptz,
+  ADD COLUMN IF NOT EXISTS settlement_review_status text DEFAULT 'Not Submitted',
+  ADD COLUMN IF NOT EXISTS settlement_submitted_by text,
+  ADD COLUMN IF NOT EXISTS settlement_submitted_at timestamptz,
+  ADD COLUMN IF NOT EXISTS settlement_approved_by text,
+  ADD COLUMN IF NOT EXISTS settlement_approved_at timestamptz,
+  ADD COLUMN IF NOT EXISTS settlement_rejection_reason text;
+
+UPDATE public.payroll
+SET settlement_review_status = 'Approved'
+WHERE settlement_review_status = 'Not Submitted';
+-- =============================================================
 -- =============================================================

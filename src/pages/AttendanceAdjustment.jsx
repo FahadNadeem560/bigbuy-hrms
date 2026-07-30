@@ -112,11 +112,11 @@ export default function AttendanceAdjustment({ role }) {
   const filtered = useMemo(() => {
     const empMap = Object.fromEntries(employees.map(e => [e.employee_code, e]));
     return adjustments.filter(a => {
-      const emp = empMap[a.employee_code || a.employee_id];
+      const emp = empMap[a.employee_code];
       const branchMatch = filterBranch === "All" || emp?.branch === filterBranch;
       const deptMatch = !filterDept || emp?.department?.toLowerCase().includes(filterDept.toLowerCase());
-      const fromMatch = !filterFrom || (a.work_date || a.adjustment_date || "") >= filterFrom;
-      const toMatch = !filterTo || (a.work_date || a.adjustment_date || "") <= filterTo;
+      const fromMatch = !filterFrom || (a.attendance_date || "") >= filterFrom;
+      const toMatch = !filterTo || (a.attendance_date || "") <= filterTo;
       return branchMatch && deptMatch && fromMatch && toMatch;
     });
   }, [adjustments, employees, filterBranch, filterDept, filterFrom, filterTo]);
@@ -168,12 +168,22 @@ export default function AttendanceAdjustment({ role }) {
     if (!form.adjusted_in && !form.adjusted_out) return setErr("Enter at least one corrected time.");
     setErr("");
     const now = new Date().toISOString();
+    // Column names here must match the live attendance_adjustments table
+    // (attendance_date, original_check_in/out, adjusted_check_in/out) — not
+    // work_date/original_in/adjusted_in, which don't exist on this table and
+    // previously made every save fail silently against a schema mismatch.
     const payload = {
-      employee_code: form.employee.employee_code, employee_id: form.employee.employee_code,
-      employee_name: form.employee.full_name, work_date: form.work_date,
-      original_in: form.original_in || null, original_out: form.original_out || null,
-      adjusted_in: form.adjusted_in || null, adjusted_out: form.adjusted_out || null,
-      reason: form.reason, adjusted_by: role || "HR", created_at: now,
+      employee_code: form.employee.employee_code,
+      attendance_date: form.work_date,
+      original_check_in: form.original_in ? `${form.work_date}T${form.original_in}:00` : null,
+      original_check_out: form.original_out ? `${form.work_date}T${form.original_out}:00` : null,
+      adjusted_check_in: form.adjusted_in ? `${form.work_date}T${form.adjusted_in}:00` : null,
+      adjusted_check_out: form.adjusted_out ? `${form.work_date}T${form.adjusted_out}:00` : null,
+      reason: form.reason, adjusted_by: role || "HR", adjusted_at: now,
+      // This page applies the correction immediately (unlike the Timesheet's
+      // quick-adjust button, which routes through Master/GM approval) — mark
+      // it pre-approved so it reads consistently in the Adjustment Register.
+      status: "Approved", approved_by: role || "HR", approved_at: now,
     };
     const { error } = await supabase.from("attendance_adjustments").insert(payload);
     if (error) return setErr(error.message);
@@ -356,28 +366,32 @@ export default function AttendanceAdjustment({ role }) {
               <p className="text-xs text-slate-400 mt-0.5">{filtered.length} records</p>
             </div>
             {loading ? <p className="px-5 py-8 text-slate-400 text-sm">Loading...</p> : (
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full min-w-[980px] text-sm">
                 <thead className="bg-slate-50 text-slate-500">
-                  <tr>{["Date","Employee","Orig In","Orig Out","Adj In","Adj Out","Reason","By","Timestamp"].map(h => (
+                  <tr>{["Date","Employee","Orig In","Orig Out","Adj In","Adj Out","Reason","By","Status","Timestamp"].map(h => (
                     <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filtered.length === 0
-                    ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No adjustments found.</td></tr>
-                    : filtered.map((a, i) => (
+                    ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No adjustments found.</td></tr>
+                    : filtered.map((a, i) => {
+                      const emp = employees.find(e => e.employee_code === a.employee_code);
+                      const statusTone = a.status === "Approved" ? "green" : a.status === "Rejected" ? "red" : "yellow";
+                      return (
                       <tr key={i}>
-                        <td className="px-4 py-3 font-medium">{a.work_date || a.adjustment_date}</td>
-                        <td className="px-4 py-3">{a.employee_name || a.employee_code || a.employee_id}</td>
-                        <td className="px-4 py-3">{a.original_in || "—"}</td>
-                        <td className="px-4 py-3">{a.original_out || "—"}</td>
-                        <td className="px-4 py-3 text-blue-600 font-medium">{a.adjusted_in || "—"}</td>
-                        <td className="px-4 py-3 text-blue-600 font-medium">{a.adjusted_out || "—"}</td>
+                        <td className="px-4 py-3 font-medium">{a.attendance_date}</td>
+                        <td className="px-4 py-3">{emp?.full_name || a.employee_code}</td>
+                        <td className="px-4 py-3">{formatTime(a.original_check_in)}</td>
+                        <td className="px-4 py-3">{formatTime(a.original_check_out)}</td>
+                        <td className="px-4 py-3 text-blue-600 font-medium">{formatTime(a.adjusted_check_in)}</td>
+                        <td className="px-4 py-3 text-blue-600 font-medium">{formatTime(a.adjusted_check_out)}</td>
                         <td className="px-4 py-3 max-w-[140px] truncate">{a.reason || "—"}</td>
                         <td className="px-4 py-3">{a.adjusted_by || "—"}</td>
-                        <td className="px-4 py-3 text-slate-400 text-xs">{a.created_at?.slice(0, 16) || "—"}</td>
+                        <td className="px-4 py-3"><Badge tone={statusTone}>{a.status || "Pending"}</Badge></td>
+                        <td className="px-4 py-3 text-slate-400 text-xs">{a.adjusted_at?.slice(0, 16) || "—"}</td>
                       </tr>
-                    ))}
+                      );})}
                 </tbody>
               </table>
             )}

@@ -60,6 +60,41 @@ function formatTime(t) {
   return s;
 }
 
+function AdjustTimeModal({ row, form, setForm, onSubmit, onClose, submitting }) {
+  if (!row) return null;
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl p-6 shadow-xl w-full max-w-sm">
+        <h3 className="font-bold text-slate-800 mb-1">Adjust Time — {row.work_date}</h3>
+        <p className="text-xs text-slate-400 mb-4">Routed to Master/GM for approval — not applied until approved.</p>
+        <div className="space-y-3">
+          <div>
+            <p className="text-xs text-slate-500 mb-1">Corrected In</p>
+            <input type="time" value={form.in} onChange={e => setForm(f => ({ ...f, in: e.target.value }))}
+              className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <p className="text-xs text-slate-500 mb-1">Corrected Out</p>
+            <input type="time" value={form.out} onChange={e => setForm(f => ({ ...f, out: e.target.value }))}
+              className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <p className="text-xs text-slate-500 mb-1">Reason</p>
+            <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
+              placeholder="Reason for correction..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          </div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          <Button onClick={onSubmit} disabled={submitting} className="rounded-xl flex-1">
+            {submitting ? "Submitting…" : "Submit for Approval"}
+          </Button>
+          <Button variant="outline" onClick={onClose} className="rounded-xl flex-1">Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Timesheet({ branchFilter, role }) {
   const [empSearch, setEmpSearch] = useState("");
   const [department, setDepartment] = useState("");
@@ -96,6 +131,12 @@ export default function Timesheet({ branchFilter, role }) {
   const [notice, setNotice] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
+
+  // Adj Time In/Out (HR proposes, Master/GM approve via the Approval Queue)
+  const [pendingAdjByDate, setPendingAdjByDate] = useState({});
+  const [adjustRow, setAdjustRow] = useState(null);
+  const [adjustForm, setAdjustForm] = useState({ in: "", out: "", reason: "" });
+  const [adjustSubmitting, setAdjustSubmitting] = useState(false);
 
   const canToggle = role === "HR" || role === "Master";
 
@@ -162,6 +203,17 @@ export default function Timesheet({ branchFilter, role }) {
         .eq("employee_id", emp.employee_code)
         .maybeSingle();
       setLeaveData(lv || null);
+
+      if (canToggle) {
+        const { data: adjs } = await supabase
+          .from("attendance_adjustments")
+          .select("attendance_date")
+          .eq("employee_code", emp.employee_code)
+          .eq("status", "Pending Approval")
+          .gte("attendance_date", from)
+          .lte("attendance_date", to);
+        setPendingAdjByDate(Object.fromEntries((adjs || []).map((a) => [a.attendance_date, true])));
+      }
     } catch (err) {
       setError(err.message);
       setAttendance([]);
@@ -169,6 +221,48 @@ export default function Timesheet({ branchFilter, role }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function openAdjustModal(row) {
+    const curIn = formatTime(row.check_in || row.time_in);
+    const curOut = formatTime(row.check_out || row.time_out);
+    setAdjustForm({ in: curIn === "-" ? "" : curIn, out: curOut === "-" ? "" : curOut, reason: "" });
+    setAdjustRow(row);
+  }
+
+  async function submitAdjustment() {
+    if (!adjustRow || !selectedEmp) return;
+    if (!adjustForm.in && !adjustForm.out) { setNotice("Enter at least one corrected time."); return; }
+    setAdjustSubmitting(true);
+    const work_date = adjustRow.work_date;
+    const now = new Date().toISOString();
+    const payload = {
+      employee_code: selectedEmp.employee_code,
+      attendance_date: work_date,
+      original_check_in: adjustRow.is_synthetic ? null : (adjustRow.check_in || adjustRow.time_in || null),
+      original_check_out: adjustRow.is_synthetic ? null : (adjustRow.check_out || adjustRow.time_out || null),
+      adjusted_check_in: adjustForm.in ? `${work_date}T${adjustForm.in}:00` : null,
+      adjusted_check_out: adjustForm.out ? `${work_date}T${adjustForm.out}:00` : null,
+      reason: adjustForm.reason, adjusted_by: role, adjusted_at: now,
+      status: "Pending Approval",
+    };
+    const { error: insErr } = await supabase.from("attendance_adjustments").insert(payload);
+    if (insErr) { setNotice(`Error: ${insErr.message}`); setAdjustSubmitting(false); return; }
+
+    await Promise.all(["Master", "GM"].map((r) =>
+      supabase.from("notifications").insert({
+        recipient_role: r, type: "attendance_adjustment",
+        title: "Time Adjustment Pending Approval",
+        message: `${role} requested a time correction for ${selectedEmp.full_name} on ${work_date}.`,
+        is_read: false, created_at: now,
+      })
+    )).catch(() => {});
+
+    setPendingAdjByDate((prev) => ({ ...prev, [work_date]: true }));
+    setAdjustRow(null);
+    setAdjustSubmitting(false);
+    setNotice(`Time adjustment for ${work_date} submitted for Master/GM approval.`);
+    setTimeout(() => setNotice(""), 3000);
   }
 
   function reloadWithDates() {
@@ -376,6 +470,10 @@ export default function Timesheet({ branchFilter, role }) {
 
   return (
     <div>
+      <AdjustTimeModal
+        row={adjustRow} form={adjustForm} setForm={setAdjustForm}
+        onSubmit={submitAdjustment} onClose={() => setAdjustRow(null)} submitting={adjustSubmitting}
+      />
       <PageTitle
         title="Employee Timesheet"
         subtitle="Attendance ledger with late, short hours, OT and leave summary."
@@ -566,16 +664,16 @@ export default function Timesheet({ branchFilter, role }) {
                 <thead className="bg-slate-50 text-slate-500 print:bg-slate-200">
                   <tr>
                     {["Date", "Day", "Shift", "In", "Out", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status",
-                      ...(canToggle ? ["HD Exempt", "Late Exempt", "Holiday", "Adj Status"] : [])
+                      ...(canToggle ? ["HD Exempt", "Late Exempt", "Holiday", "Adj Status", "Adjust"] : [])
                     ].map((h) => (
-                      <th key={h} className={`text-left px-4 py-3 font-medium print:px-1.5 print:py-1 sticky top-0 z-10 bg-slate-50 print:static print:bg-slate-200 shadow-[0_1px_3px_rgba(0,0,0,0.08)] print:shadow-none ${canToggle && ["HD Exempt","Late Exempt","Holiday","Adj Status"].includes(h) ? "print:hidden" : ""}`}>{h}</th>
+                      <th key={h} className={`text-left px-4 py-3 font-medium print:px-1.5 print:py-1 sticky top-0 z-10 bg-slate-50 print:static print:bg-slate-200 shadow-[0_1px_3px_rgba(0,0,0,0.08)] print:shadow-none ${canToggle && ["HD Exempt","Late Exempt","Holiday","Adj Status","Adjust"].includes(h) ? "print:hidden" : ""}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {ledger.length === 0 ? (
                     <tr>
-                      <td colSpan={canToggle ? 14 : 10} className="px-4 py-10 text-center text-slate-400">
+                      <td colSpan={canToggle ? 15 : 10} className="px-4 py-10 text-center text-slate-400">
                         No attendance records found for this period.
                       </td>
                     </tr>
@@ -635,6 +733,16 @@ export default function Timesheet({ branchFilter, role }) {
                                   ? <Badge tone={ADJ_TONE[row.adjustment_status] || "slate"}>{row.adjustment_status}</Badge>
                                   : <span className="text-slate-300 text-xs">—</span>}
                               </td>
+                              <td className="px-4 py-3 print:hidden">
+                                {pendingAdjByDate[row.work_date] ? (
+                                  <Badge tone="yellow">Pending Approval</Badge>
+                                ) : (
+                                  <button onClick={() => openAdjustModal(row)}
+                                    className="text-xs px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 transition">
+                                    Adjust
+                                  </button>
+                                )}
+                              </td>
                             </>
                           )}
                         </tr>
@@ -651,7 +759,7 @@ export default function Timesheet({ branchFilter, role }) {
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{shortSummary.totalShort}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{otSummary.totalOT}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1"></td>
-                      {canToggle && <td colSpan={4} className="px-4 py-3 print:hidden"></td>}
+                      {canToggle && <td colSpan={5} className="px-4 py-3 print:hidden"></td>}
                     </tr>
                   </tfoot>
                 )}

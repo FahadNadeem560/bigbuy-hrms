@@ -9,6 +9,12 @@ import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } fr
 // whitelist — anything still "Pending ..." counts.
 const isPendingLeaveStatus = (s) => !!s?.startsWith("Pending");
 
+function formatAdjTime(t) {
+  if (!t) return "—";
+  const s = String(t);
+  return s.includes("T") ? s.slice(11, 16) : s.slice(0, 5);
+}
+
 function StageBadge({ status }) {
   const map = {
     "Pending Supervisor": { tone: "yellow", label: "Awaiting Supervisor" },
@@ -95,7 +101,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         supabase.from("leave_requests").select("*").like("status", "Pending%").order("created_at", { ascending: false }).limit(200),
         supabase.from("timesheet_signoffs").select("*").order("created_at", { ascending: false }).limit(200),
         supabase.from("employees").select("employee_code,full_name,department,branch,supervisor_id").order("full_name"),
-        supabase.from("attendance_adjustments").select("*").in("status", ["Pending Supervisor","Pending HR"]).order("created_at", { ascending: false }).limit(200),
+        supabase.from("attendance_adjustments").select("*").eq("status", "Pending Approval").order("adjusted_at", { ascending: false }).limit(200),
         supabase.from("one_time_adjustments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
         supabase.from("settlement_requests").select("*").neq("status","Completed").order("created_at", { ascending: false }).limit(200),
         supabase.from("salary_increments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
@@ -153,16 +159,56 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
     }
   }
 
-  // ── Attendance correction actions ──
+  // ── Attendance correction actions (single-stage: Master/GM approve or reject) ──
   async function approveAttCorr(id) {
     const item = attCorrs.find(a => a.id === id);
-    const newStatus = item?.status === "Pending Supervisor" ? "Pending HR" : "Completed";
-    await supabase.from("attendance_adjustments").update({ status: newStatus, approved_by: role }).eq("id", id);
-    setMsg(`Correction ${newStatus === "Completed" ? "approved" : "forwarded to HR"}.`); loadAll();
+    if (!item) return;
+    const now = new Date().toISOString();
+
+    await supabase.from("attendance_adjustments").update({
+      status: "Approved", approved_by: role, approved_at: now,
+    }).eq("id", id);
+
+    // Apply the corrected times to the live attendance record — mirrors the
+    // instant-apply logic on the Attendance Adjustments page, just gated
+    // behind this approval instead of happening immediately. Locking the row
+    // protects it from being overwritten by the next ZKT re-sync.
+    const workedHours = (item.adjusted_check_in && item.adjusted_check_out)
+      ? Math.max(0, Math.round(((new Date(item.adjusted_check_out) - new Date(item.adjusted_check_in)) / 3600000) * 100) / 100)
+      : null;
+    const attUpdate = {
+      check_in: item.adjusted_check_in, check_out: item.adjusted_check_out,
+      first_check_in: item.adjusted_check_in, last_check_out: item.adjusted_check_out,
+      ...(workedHours !== null ? { actual_hours: workedHours, worked_hours: workedHours } : {}),
+      is_manual_entry: true, manual_entry_by: item.adjusted_by || "HR",
+      adjustment_status: "Adjusted", adjustment_approved_by: role,
+      review_status: "Locked",
+    };
+    const { data: existing } = await supabase.from("attendance").select("id")
+      .eq("employee_code", item.employee_code).eq("work_date", item.attendance_date).maybeSingle();
+    if (existing) {
+      await supabase.from("attendance").update(attUpdate).eq("id", existing.id);
+    } else {
+      await supabase.from("attendance").insert({
+        employee_code: item.employee_code, work_date: item.attendance_date, attendance_date: item.attendance_date,
+        ...attUpdate,
+      });
+    }
+
+    await notify(item.adjusted_by, "attendance_adjustment", "Time Adjustment Approved",
+      `${role} approved your time adjustment for ${item.employee_code} on ${item.attendance_date}.`);
+    setMsg("Time adjustment approved and applied."); loadAll();
   }
 
   async function rejectAttCorr(id, reason) {
-    await supabase.from("attendance_adjustments").update({ status: "Rejected", rejection_reason: reason }).eq("id", id);
+    const item = attCorrs.find(a => a.id === id);
+    await supabase.from("attendance_adjustments").update({
+      status: "Rejected", rejection_reason: reason, approved_by: role, approved_at: new Date().toISOString(),
+    }).eq("id", id);
+    if (item) {
+      await notify(item.adjusted_by, "attendance_adjustment", "Time Adjustment Rejected",
+        `${role} rejected your time adjustment for ${item.employee_code} on ${item.attendance_date}. Reason: ${reason}`);
+    }
     setMsg("Correction rejected."); loadAll();
   }
 
@@ -204,7 +250,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   }
 
   const pendingLeave = leaveReqs.filter(r => isPendingLeaveStatus(r.status));
-  const pendingCorr  = attCorrs.filter(a => ["Pending Supervisor","Pending HR"].includes(a.status));
+  const pendingCorr  = attCorrs.filter(a => a.status === "Pending Approval");
 
   return (
     <div>
@@ -310,12 +356,12 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                 ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending attendance corrections.</td></tr>
                 : pendingCorr.map(a => (
                   <tr key={a.id}>
-                    <td className="px-4 py-3 font-medium">{a.employee_name || a.employee_code}</td>
-                    <td className="px-4 py-3">{a.work_date}</td>
-                    <td className="px-4 py-3">{a.original_in || "—"}</td>
-                    <td className="px-4 py-3">{a.original_out || "—"}</td>
-                    <td className="px-4 py-3 text-emerald-700">{a.adjusted_in || "—"}</td>
-                    <td className="px-4 py-3 text-emerald-700">{a.adjusted_out || "—"}</td>
+                    <td className="px-4 py-3 font-medium">{empMap[a.employee_code]?.full_name || a.employee_code}</td>
+                    <td className="px-4 py-3">{a.attendance_date}</td>
+                    <td className="px-4 py-3">{formatAdjTime(a.original_check_in)}</td>
+                    <td className="px-4 py-3">{formatAdjTime(a.original_check_out)}</td>
+                    <td className="px-4 py-3 text-emerald-700">{formatAdjTime(a.adjusted_check_in)}</td>
+                    <td className="px-4 py-3 text-emerald-700">{formatAdjTime(a.adjusted_check_out)}</td>
                     <td className="px-4 py-3 max-w-[120px] truncate">{a.reason || "—"}</td>
                     <td className="px-4 py-3"><StageBadge status={a.status} /></td>
                     <td className="px-4 py-3">
@@ -323,7 +369,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         id={a.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveAttCorr} onReject={rejectAttCorr}
-                        disabled={a.status === "Pending Supervisor" && role !== "Master"} />
+                        disabled={!["Master","GM"].includes(role)} />
                     </td>
                   </tr>
                 ))}
