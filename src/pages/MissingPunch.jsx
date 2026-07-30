@@ -18,7 +18,8 @@ function issueTone(t) {
   return "purple";
 }
 
-export default function MissingPunch() {
+export default function MissingPunch({ role }) {
+  const canEdit = role !== "Audit";
   const [rows, setRows] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -135,7 +136,7 @@ export default function MissingPunch() {
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
       {/* Inline Edit Panel */}
-      {editing && (
+      {editing && canEdit && (
         <div className="bg-white border border-blue-200 rounded-2xl p-5 shadow-sm mb-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-bold text-slate-800">Fix Punch — {editing.employee_code} on {editing.work_date}</h3>
@@ -183,7 +184,9 @@ export default function MissingPunch() {
                       <td className="px-4 py-3">{r.check_out ? String(r.check_out).slice(11, 16) : <span className="text-red-400">Missing</span>}</td>
                       <td className="px-4 py-3"><Badge tone={issueTone(issue)}>{issue}</Badge></td>
                       <td className="px-4 py-3">
-                        <Button variant="outline" onClick={() => startEdit(r)} className="rounded-xl text-xs py-1 px-3">Fix</Button>
+                        {canEdit
+                          ? <Button variant="outline" onClick={() => startEdit(r)} className="rounded-xl text-xs py-1 px-3">Fix</Button>
+                          : <span className="text-slate-300 text-xs">—</span>}
                       </td>
                     </tr>
                   );

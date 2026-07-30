@@ -1,11 +1,11 @@
 export const MENU_ITEMS = [
   // Core HR
-  { key: "dashboard",   label: "Dashboard",           icon: "🏢", section: "Core HR",          roles: ["Master","HR","Finance","GM","Branch Manager"] },
+  { key: "dashboard",   label: "Dashboard",           icon: "🏢", section: "Core HR",          roles: ["Master","HR","Finance","GM","Branch Manager","Audit"] },
   { key: "employees",   label: "Employees",            icon: "👥", section: "Core HR",          roles: ["Master","HR","GM","Branch Manager"] },
   { key: "departments", label: "Departments",          icon: "🏗️", section: "Core HR",          roles: ["Master","HR","GM"] },
 
   // Attendance — Finance excluded (per spec)
-  { key: "attendance",  label: "Attendance",           icon: "⏱️", section: "Attendance",       roles: ["Master","HR","Employee","GM","Branch Manager"] },
+  { key: "attendance",  label: "Attendance",           icon: "⏱️", section: "Attendance",       roles: ["Master","HR","Employee","GM","Branch Manager","Audit"] },
   { key: "roster",      label: "Roster",               icon: "📅", section: "Attendance",       roles: ["Master","HR","GM"] },
   { key: "zkt",         label: "ZKT Sync",             icon: "🛰️", section: "Attendance",       roles: ["Master","HR"] },
 
@@ -20,8 +20,8 @@ export const MENU_ITEMS = [
   { key: "shortages",   label: "Shortages",            icon: "🔻", section: "HR Tools",          roles: ["Master","HR","GM"] },
 
   // Payroll & Finance
-  { key: "payroll-automation", label: "Payroll",       icon: "💰", section: "Payroll & Finance", roles: ["Master","HR","Finance","GM"] },
-  { key: "salary-reports",     label: "Salary Reports",icon: "📊", section: "Payroll & Finance", roles: ["Master","HR","Finance","GM"] },
+  { key: "payroll-automation", label: "Payroll",       icon: "💰", section: "Payroll & Finance", roles: ["Master","HR","Finance","GM","Audit"] },
+  { key: "salary-reports",     label: "Salary Reports",icon: "📊", section: "Payroll & Finance", roles: ["Master","HR","Finance","GM","Audit"] },
   { key: "allowances",         label: "Allowances",    icon: "📌", section: "Payroll & Finance", roles: ["Master","HR","Finance","GM"] },
   { key: "payroll-extras",     label: "Adjustments & Tax", icon: "🧾", section: "Payroll & Finance", roles: ["Master","HR","GM"] },
   { key: "loans",              label: "Loans & Advances", icon: "💳", section: "Payroll & Finance", roles: ["Master","HR","Finance","Employee","GM"] },

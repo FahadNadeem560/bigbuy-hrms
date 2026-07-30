@@ -140,7 +140,7 @@ export default function Attendance({ rows, role, branchFilter, employees }) {
 
       {mainTab === "timesheet"   && <Timesheet branchFilter={branchFilter} role={role} />}
       {mainTab === "adjustments" && <AttendanceAdjustment role={role} />}
-      {mainTab === "missing"     && <MissingPunch />}
+      {mainTab === "missing"     && <MissingPunch role={role} />}
       {mainTab === "alerts"      && <AttendanceAlerts />}
     </div>
   );

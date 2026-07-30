@@ -47,6 +47,7 @@ function toTimeInput(t) {
 }
 
 export default function AttendanceAdjustment({ role }) {
+  const canEdit = role !== "Audit";
   const [tab, setTab] = useState("field");
   const [adjustments, setAdjustments] = useState([]);
   const [fieldEntries, setFieldEntries] = useState([]);
@@ -233,7 +234,7 @@ export default function AttendanceAdjustment({ role }) {
   return (
     <div>
       <PageTitle title="Attendance Adjustments" subtitle="Manual corrections, field employee time entries and audit trail."
-        action={<Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Adjustment"}</Button>} />
+        action={canEdit && <Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Adjustment"}</Button>} />
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
@@ -253,7 +254,7 @@ export default function AttendanceAdjustment({ role }) {
         </div>
       )}
 
-      {showForm && (
+      {showForm && canEdit && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-4">New Attendance Adjustment</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -329,12 +330,13 @@ export default function AttendanceAdjustment({ role }) {
                           }`}>{r.manual_entry_status || "Pending"}</span>
                         </td>
                         <td className="px-4 py-3">
-                          {isPending && (
+                          {isPending && canEdit && (
                             <div className="flex gap-2">
                               <Button onClick={() => approveFieldEntry(r)} className="rounded-xl text-xs py-1 px-2">Approve</Button>
                               <Button variant="outline" onClick={() => setRejectId(r.id)} className="rounded-xl text-xs py-1 px-2">Reject</Button>
                             </div>
                           )}
+                          {isPending && !canEdit && <span className="text-amber-500 text-xs">Pending</span>}
                           {!isPending && <span className="text-slate-400 text-xs">{r.manual_entry_approved_by || "—"}</span>}
                         </td>
                       </tr>

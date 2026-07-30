@@ -2202,4 +2202,136 @@ UPDATE public.payroll
 SET settlement_review_status = 'Approved'
 WHERE settlement_review_status = 'Not Submitted';
 -- =============================================================
+
+-- =============================================================
+-- 2026-07-30: close_anon_key_access_19_more_tables
+-- =============================================================
+-- Same leftover-policy mistake as the 2026-07-23 and 2026-07-30 fixes: a
+-- policy literally named "Allow all for service role" but declared
+-- TO public USING (true), applying to anon (and everyone else) instead of
+-- just service_role (which bypasses RLS at the Postgres level and never
+-- needed this policy anyway). A full sweep found 42 tables still carrying
+-- it. These 19 already have adequate authenticated + role-scoped policies
+-- covering real app functionality (16 of them), or an already-reviewed,
+-- deliberately-kept anon-read-only policy for low-risk reference data
+-- (attendance_import_batches, hrms_policy_settings, shift_master — see
+-- the 2026-07-23 entry above), so dropping this one is pure removal of an
+-- accidental full read/write backdoor, not a functional change.
+--
+-- The remaining 23 tables found in this same sweep have NO other policy
+-- at all — dropping this on those would deny all access outright and
+-- break live functionality (notifications, attendance_adjustments,
+-- timesheet_signoffs, salary_increments/salary_structures, and 18 more).
+-- Those need purpose-built replacement policies first; tracked as a
+-- separate, deliberate follow-up rather than rushed here.
+DROP POLICY IF EXISTS "Allow all for service role" ON public.attendance_import_batches;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.attendance_import_rejections;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.audit_logs;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.employee_bank_details;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.employee_import_batches;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.employee_message_queue;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.employee_shift_assignments;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.employee_work_rosters;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.gazetted_holidays;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.hrms_policy_settings;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.payroll_import_batches;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.payroll_monthly_snapshots;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.payroll_outlier_rules;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.salary_collection_codes;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.shift_definitions;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.shift_master;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.staff_eligibility_groups;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.zkt_locations;
+DROP POLICY IF EXISTS "Allow all for service role" ON public.zkt_raw_punches;
+-- =============================================================
+
+-- =============================================================
+-- 2026-07-30: add_audit_role_readonly_access
+-- =============================================================
+-- New internal-audit role: read-only access to Attendance + Payroll +
+-- Salary Reports data (per user's explicit scope choice — not a
+-- full-system audit, and no employee personal-details module). Every
+-- change below only touches SELECT-only policies (or adds a new
+-- SELECT-only policy where the only existing coverage was bundled into an
+-- ALL policy) — 'Audit' is never added to any INSERT/UPDATE/DELETE/ALL
+-- policy, so this role has zero write capability at the database level
+-- regardless of what the frontend does or doesn't render.
+--
+-- Note: attendance_adjustments, salary_increments, and salary_structures
+-- are part of the 23-table "no other policy" group tracked as a separate
+-- follow-up (still temporarily open to everyone via the legacy public
+-- policy, not yet replaced with proper role-scoped policies). Audit
+-- incidentally has access to those via that same temporary opening; when
+-- that follow-up designs real replacement policies for those three
+-- tables, 'Audit' needs to be included then too.
+
+ALTER POLICY attendance_select ON public.attendance
+  USING (
+    ((SELECT app_current_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'GM'::text, 'Audit'::text]))
+    OR (((SELECT app_current_role()) = 'Branch Manager'::text) AND ((SELECT employee_branch(attendance.employee_code)) = (SELECT app_current_branch())))
+  );
+
+ALTER POLICY attendance_select_authorized ON public.attendance
+  USING (
+    ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'Audit'::text]))
+    OR (employee_code = (SELECT private.current_employee_code()))
+  );
+
+ALTER POLICY employees_select ON public.employees
+  USING (
+    ((SELECT app_current_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'GM'::text, 'Audit'::text]))
+    OR (((SELECT app_current_role()) = 'Branch Manager'::text) AND (branch = (SELECT app_current_branch())))
+  );
+
+ALTER POLICY employees_select_authorized ON public.employees
+  USING (
+    ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'Audit'::text]))
+    OR (employee_code = (SELECT private.current_employee_code()))
+  );
+
+ALTER POLICY leaves_select_authorized ON public.leaves
+  USING (
+    ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Audit'::text]))
+    OR (employee_code = (SELECT private.current_employee_code()))
+  );
+
+ALTER POLICY payroll_select ON public.payroll
+  USING (((SELECT app_current_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'GM'::text, 'Audit'::text])));
+
+ALTER POLICY payroll_select_authorized ON public.payroll
+  USING (
+    ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master'::text, 'Finance'::text, 'Audit'::text]))
+    OR (employee_code = (SELECT private.current_employee_code()))
+  );
+
+ALTER POLICY loans_select_authorized ON public.loans
+  USING (
+    ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'Audit'::text]))
+    OR (employee_code = (SELECT private.current_employee_code()))
+  );
+
+ALTER POLICY staff_eligibility_select_staff ON public.staff_eligibility_groups
+  USING (((SELECT private.current_hrms_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'Audit'::text])));
+
+ALTER POLICY employee_rosters_select_authorized ON public.employee_work_rosters
+  USING (
+    ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master'::text, 'HR'::text, 'Finance'::text, 'Audit'::text]))
+    OR (employee_code = (SELECT private.current_employee_code()))
+  );
+
+-- fines/shortages/advances only had a single bundled ALL policy each
+-- (read+write together) — adding Audit to that would grant write access,
+-- so add a dedicated SELECT-only policy instead.
+CREATE POLICY fines_select_audit ON public.fines
+  FOR SELECT TO authenticated
+  USING (((SELECT private.current_hrms_role()) = 'Audit'::text));
+
+CREATE POLICY shortages_select_audit ON public.shortages
+  FOR SELECT TO authenticated
+  USING (((SELECT private.current_hrms_role()) = 'Audit'::text));
+
+CREATE POLICY advances_select_audit ON public.advances
+  FOR SELECT TO authenticated
+  USING (((SELECT private.current_hrms_role()) = 'Audit'::text));
+-- =============================================================
 -- =============================================================

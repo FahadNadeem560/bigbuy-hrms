@@ -891,7 +891,7 @@ export default function PayrollAutomation({ role }) {
                                   value={commissionAddOns[r.employeeCode] ?? r.commissionAddOn ?? 0}
                                   onChange={e => handleCommissionChange(r.employeeCode, e.target.value)}
                                   className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-right text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
-                                  disabled={role === "Finance"} />
+                                  disabled={!["HR", "Master"].includes(role)} />
                               )}
                             </TD>
                             <TD className="text-emerald-600">{r.fuelAllowance ? money(r.fuelAllowance) : "—"}</TD>
