@@ -309,15 +309,22 @@ export default function PayrollAutomation({ role }) {
         const { error } = await supabase.from("payroll").insert(payloadRows);
         if (error) {
           const minimal = payloadRows.map(r => ({
-            employee_code: r.employee_code, employee_name: r.employee_name,
+            employee_code: r.employee_code,
             payroll_month: r.payroll_month, gross_salary: r.gross_salary,
             net_salary: r.net_salary, status: r.status, generated_at: r.generated_at,
           }));
-          await supabase.from("payroll").insert(minimal);
+          const { error: minimalError } = await supabase.from("payroll").insert(minimal);
+          if (minimalError) {
+            // Both attempts failed — the delete already went through, so the
+            // table is now empty for this month. Do NOT report success or
+            // show the freshly computed rows: that would display data the
+            // database doesn't actually have, and it'll vanish the next time
+            // this page loads (which is exactly the bug being fixed here).
+            throw new Error(`Save failed: ${minimalError.message}`);
+          }
         }
       }
-      setPayrollRows(rows);
-      setPayrollStatus("Draft");
+      await loadPayroll();
       setMsg(`Payroll generated for ${rows.length} employees.`);
     } catch (e) { setErr(e.message); }
     finally { setGenerating(false); }
@@ -330,23 +337,33 @@ export default function PayrollAutomation({ role }) {
       const rows = await buildPayrollRows();
       const payloadRows = buildPayloadRows(rows);
       // Update existing payroll records (don't delete — preserve status)
+      let failed = 0;
+      let firstError = "";
       for (const r of payloadRows) {
-        await supabase.from("payroll")
+        const { error } = await supabase.from("payroll")
           .update({ ...r, generated_at: new Date().toISOString() })
           .eq("payroll_month", month)
           .eq("employee_code", r.employee_code);
+        if (error) { failed++; firstError = firstError || error.message; }
       }
       await loadPayroll();
       const ts = new Date().toLocaleTimeString("en-PK");
-      setMsg(`Payroll refreshed for ${rows.length} employees at ${ts}.`);
+      if (failed > 0) {
+        setErr(`${failed} of ${payloadRows.length} rows failed to save: ${firstError}`);
+      }
+      setMsg(`Payroll refreshed for ${rows.length - failed} of ${rows.length} employees at ${ts}.`);
     } catch (e) { setErr(e.message); }
     finally { setRefreshing(false); }
   }
 
   function buildPayloadRows(rows) {
+    // employee_name is deliberately NOT included here — the live payroll
+    // table has no such column (confirmed via PGRST204 "Could not find the
+    // 'employee_name' column" on every insert/update). The name is always
+    // available by joining employee_code back to the employees table on
+    // display (see displayRows below), so nothing is lost by omitting it.
     return rows.map(r => ({
       employee_code: r.employeeCode,
-      employee_name: r.name,
       payroll_month: month,
       gross_salary: r.gross,
       number_of_working_days: r.numberOfWorkingDays,
@@ -529,7 +546,7 @@ export default function PayrollAutomation({ role }) {
       fineDeduction + shortageDeduction + advanceDeduction + loanDeduction + taxDeduction + eobiDeduction + otherDeductions;
 
     return {
-      employeeCode: code, name: r.name || r.employee_name, level: r.level || "—",
+      employeeCode: code, name: r.name || r.employee_name || emp.full_name || code, level: r.level || emp.staff_level || "—",
       status: r.status || payrollStatus,
       settlementStatus: r.settlement_status || "Payable",
       branch: r.branch || emp.branch || "—",
