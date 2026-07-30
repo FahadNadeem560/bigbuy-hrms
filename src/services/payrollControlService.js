@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabaseClient.js";
+import { queueWhatsappMessage, MESSAGE_TYPES } from "./whatsappService.js";
 
 // ══════════════════════════ Payment Status ══════════════════════════
 export const PAYMENT_STATUSES = ["Normal", "Hold", "No_FnF", "FnF"];
@@ -61,6 +62,10 @@ export async function approvePaymentStatusRequest(request, approverRole, approve
     title: "Payment Status Change Approved",
     message: `${approverName} approved ${request.employee_name} (${request.employee_code}) → ${PAYMENT_STATUS_LABELS[request.requested_status]} for ${request.payroll_month}.`,
     is_read: false,
+  }).catch(() => {});
+  queueWhatsappMessage({
+    employeeCode: request.employee_code, messageType: MESSAGE_TYPES.PAYMENT_STATUS_CHANGED,
+    templateVariables: [request.employee_name, request.payroll_month, PAYMENT_STATUS_LABELS[request.requested_status]],
   }).catch(() => {});
 }
 

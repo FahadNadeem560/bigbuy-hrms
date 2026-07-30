@@ -4,6 +4,7 @@ import { Badge, Button, PageTitle, Table } from "../components/ui";
 import { BRANCH_CODE_MAP } from "../constants/branches";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies";
 import { money } from "../utils/format";
+import { sendOnboardingOtp } from "../services/whatsappService.js";
 
 function cnicExpiryStatus(expiryDate) {
   if (!expiryDate) return null;
@@ -234,6 +235,16 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
       onChange={e => setEmployee(v => ({ ...v, [field]: e.target.value }))}
       className="px-4 py-2 border rounded-xl w-full text-sm" />
   );
+  const [otpMsg, setOtpMsg] = useState("");
+  const [otpBusy, setOtpBusy] = useState(false);
+  async function resendVerification() {
+    setOtpBusy(true); setOtpMsg("");
+    try {
+      await sendOnboardingOtp(employee.id);
+      setOtpMsg("Verification code sent via WhatsApp.");
+    } catch (e) { setOtpMsg(`Error: ${e.message}`); }
+    finally { setOtpBusy(false); }
+  }
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 mb-4 p-5">
@@ -276,6 +287,14 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
         <Field label="Personal Phone">{inp("personalPhone", "Personal")}</Field>
         <Field label="Work Phone">{inp("workPhone", "Work")}</Field>
         <Field label="Email">{inp("email", "Email", "email")}</Field>
+        <Field label="WhatsApp Verification">
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={resendVerification} disabled={otpBusy} className="text-xs py-1.5 px-3">
+              {otpBusy ? "Sending…" : "Resend Verification Code"}
+            </Button>
+            {otpMsg && <span className={`text-xs ${otpMsg.startsWith("Error") ? "text-red-600" : "text-emerald-600"}`}>{otpMsg}</span>}
+          </div>
+        </Field>
       </Section>
 
       <Section title="Addresses">

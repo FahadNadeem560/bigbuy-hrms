@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-07-31-v8";
+const MIGRATION_VERSION = "2026-07-31-v9";
 let ran = false;
 
 export async function runMigrations() {
@@ -207,6 +207,10 @@ async function applyIncrementalMigrations() {
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.cash_incentives TO anon, authenticated`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.payroll_verifications TO anon, authenticated`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.payment_status_requests TO anon, authenticated`,
+    // v9: WhatsApp workflow — onboarding OTP columns (employee_message_queue already existed, unused)
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS whatsapp_otp_code TEXT`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS whatsapp_otp_expires_at TIMESTAMPTZ`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.employee_message_queue TO anon, authenticated`,
   ];
 
   for (const sql of stmts) {

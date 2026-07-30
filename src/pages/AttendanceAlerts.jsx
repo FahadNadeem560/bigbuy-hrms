@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Badge, Button, PageTitle } from "../components/ui.jsx";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
+import { queueWhatsappMessage, MESSAGE_TYPES } from "../services/whatsappService.js";
 
 const ALERT_TYPES = {
   CONSECUTIVE_ABSENT: { label: "Consecutive Absences", icon: "❌", tone: "red" },
@@ -121,6 +122,15 @@ export default function AttendanceAlerts() {
     setAlerts(a => a.map(al => al.id === id ? { ...al, status } : al));
   }
 
+  const [notifiedIds, setNotifiedIds] = useState(() => new Set());
+  function notifyAlert(alert) {
+    queueWhatsappMessage({
+      employeeCode: alert.employee_code, messageType: MESSAGE_TYPES.ATTENDANCE_ALERT,
+      templateVariables: [alert.employee_name, alert.detail],
+    }).catch(() => {});
+    setNotifiedIds(prev => new Set(prev).add(alert.id));
+  }
+
   const filtered = useMemo(() => alerts.filter(a => {
     const typeOk = filterType === "All" || a.type === filterType;
     const statusOk = filterStatus === "All" || a.status === filterStatus;
@@ -211,14 +221,19 @@ export default function AttendanceAlerts() {
                     <td className="px-4 py-3">{a.date}</td>
                     <td className="px-4 py-3"><Badge tone={STATUS_TONES[a.status]}>{a.status}</Badge></td>
                     <td className="px-4 py-3">
-                      {a.status === "New" && (
-                        <Button variant="outline" onClick={() => updateAlertStatus(a.id, "Acknowledged")}
-                          className="rounded-xl text-xs py-1 px-2">Acknowledge</Button>
-                      )}
-                      {a.status === "Acknowledged" && (
-                        <Button variant="outline" onClick={() => updateAlertStatus(a.id, "Resolved")}
-                          className="rounded-xl text-xs py-1 px-2">Resolve</Button>
-                      )}
+                      <div className="flex gap-1.5 flex-wrap">
+                        {a.status === "New" && (
+                          <Button variant="outline" onClick={() => updateAlertStatus(a.id, "Acknowledged")}
+                            className="rounded-xl text-xs py-1 px-2">Acknowledge</Button>
+                        )}
+                        {a.status === "Acknowledged" && (
+                          <Button variant="outline" onClick={() => updateAlertStatus(a.id, "Resolved")}
+                            className="rounded-xl text-xs py-1 px-2">Resolve</Button>
+                        )}
+                        {notifiedIds.has(a.id)
+                          ? <span className="text-[11px] text-emerald-600 self-center">✓ Notified</span>
+                          : <Button variant="outline" onClick={() => notifyAlert(a)} className="rounded-xl text-xs py-1 px-2">Notify via WhatsApp</Button>}
+                      </div>
                     </td>
                   </tr>
                 );

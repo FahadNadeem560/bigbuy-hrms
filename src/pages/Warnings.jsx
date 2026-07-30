@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
+import { queueWhatsappMessage, MESSAGE_TYPES } from "../services/whatsappService.js";
 
 const WARNING_TYPES = ["Late Attendance", "Attendance", "Conduct", "Performance", "Insubordination", "Policy Violation"];
 const LEVELS = ["Verbal Warning", "Written Warning", "Final Warning", "Termination"];
@@ -98,6 +99,10 @@ export default function Warnings() {
       details: JSON.stringify(payload), performed_by: "HR", created_at: new Date().toISOString(),
     });
     if (error) return setErr(error.message);
+    queueWhatsappMessage({
+      employeeCode: form.employee.employee_code, messageType: MESSAGE_TYPES.WARNING_ISSUED,
+      templateVariables: [form.employee.full_name, form.level, form.warning_type],
+    }).catch(() => {});
     setMsg(`Warning issued to ${form.employee.full_name}.`);
     setForm(BLANK); setShowForm(false); loadAll();
   }

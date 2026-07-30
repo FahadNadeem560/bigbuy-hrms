@@ -31,6 +31,7 @@ import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
 import { escalateStaleApprovals } from "./services/leaveApprovalService.js";
 import { checkAutoLockPreviousMonth, sendHoldReminderIfNeeded } from "./services/payrollControlService.js";
+import { sendOnboardingOtp, sweepPendingWhatsapp } from "./services/whatsappService.js";
 import { signOut } from "./services/authService.js";
 import { getBranchFilter, isBranchRestricted } from "./utils/branchFilter.js";
 
@@ -176,6 +177,7 @@ export default function BigBuyHRMS({ profile }) {
     escalateStaleApprovals().catch(() => {});
     checkAutoLockPreviousMonth().catch(() => {});
     sendHoldReminderIfNeeded().catch(() => {});
+    sweepPendingWhatsapp().catch(() => {});
   }, []);
 
   async function saveEmployee() {
@@ -212,6 +214,7 @@ export default function BigBuyHRMS({ profile }) {
     };
     try {
       await createEmployee(payload); await loadEmployees();
+      if (payload.phone) sendOnboardingOtp(code).catch(() => {});
       setShowEmployeeForm(false); setNewEmployee(BLANK_EMPLOYEE);
     } catch (err) { setError(`Save failed: ${err.message}`); }
   }

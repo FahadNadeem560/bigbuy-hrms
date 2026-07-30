@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabaseClient.js";
+import { queueWhatsappMessage, MESSAGE_TYPES } from "./whatsappService.js";
 
 // Fixed 3-stage chain, kept only so leave requests created before the org
 // hierarchy rollout (which never got a current_approver_id) keep resolving
@@ -246,6 +247,10 @@ async function notifyApplicantApproved(request) {
     title: "Leave Approved",
     message: `${request.employee_name}'s ${request.leave_type} leave has been approved.`,
   });
+  queueWhatsappMessage({
+    employeeCode: request.employee_code, messageType: MESSAGE_TYPES.LEAVE_APPROVED,
+    templateVariables: [request.employee_name, request.leave_type, request.from_date || request.start_date, request.to_date || request.end_date],
+  }).catch(() => {});
 }
 
 async function notifyNextApprover(next, request) {
@@ -348,6 +353,10 @@ export async function rejectLeaveStage(request, actorRole, actorName, reason) {
     title: "Leave Rejected",
     message: `${request.employee_name}'s ${request.leave_type} leave was rejected by ${actorName || actorRole}${reason ? `: ${reason}` : "."}`,
   });
+  queueWhatsappMessage({
+    employeeCode: request.employee_code, messageType: MESSAGE_TYPES.LEAVE_REJECTED,
+    templateVariables: [request.employee_name, request.leave_type, reason || "Not specified"],
+  }).catch(() => {});
   await logAudit(request, actorRole, actorName, "leave_rejected", currentStage, reason);
   return rejectStatus;
 }

@@ -14,6 +14,7 @@ import {
 import PayrollHold from "./PayrollHold.jsx";
 import CashIncentives from "./CashIncentives.jsx";
 import FinanceReconciliation from "./FinanceReconciliation.jsx";
+import { queueWhatsappMessage, MESSAGE_TYPES } from "../services/whatsappService.js";
 
 const STATUS_TONES = { Draft: "yellow", Approved: "blue", Published: "green", Locked: "purple", Paid: "green", Completed: "green" };
 const TABS = [["register", "Payroll Register"], ["hold", "Hold & F&F"], ["cash", "Cash Incentives"], ["finance", "Finance Reconciliation"]];
@@ -620,6 +621,12 @@ export default function PayrollAutomation({ role, actorName }) {
     setPublishedAt(ts);
     setShowPublishModal(false);
     setMsg(`Payroll published by ${role}.`);
+    displayRows.filter(r => ["Normal", "FnF"].includes(r.paymentStatus)).forEach(r => {
+      queueWhatsappMessage({
+        employeeCode: r.employeeCode, messageType: MESSAGE_TYPES.PAYSLIP_READY,
+        templateVariables: [r.name, month],
+      }).catch(() => {});
+    });
   }
 
   async function doUnlock(reason) {
@@ -636,6 +643,13 @@ export default function PayrollAutomation({ role, actorName }) {
       is_paid: true, paid_at: new Date().toISOString(), paid_by: actorName || role,
     }).eq("payroll_month", month).eq("employee_code", code);
     setPayrollRows(prev => prev.map(r => (r.employee_code === code) ? { ...r, is_paid: true, paid_at: new Date().toISOString(), paid_by: actorName || role } : r));
+    const paidRow = displayRows.find(r => r.employeeCode === code);
+    if (paidRow) {
+      queueWhatsappMessage({
+        employeeCode: code, messageType: MESSAGE_TYPES.PAYMENT_MADE,
+        templateVariables: [paidRow.name, money(paidRow.finalSalary), month],
+      }).catch(() => {});
+    }
     checkCompletion();
   }
 

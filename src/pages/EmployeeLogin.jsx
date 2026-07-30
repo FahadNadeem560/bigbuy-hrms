@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient.js";
+import { sendOnboardingOtp, verifyOnboardingOtp } from "../services/whatsappService.js";
 
 export default function EmployeeLogin() {
   const [employeeId, setEmployeeId] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [stage, setStage] = useState("credentials"); // "credentials" | "verify"
+  const [pendingSession, setPendingSession] = useState(null);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpMsg, setOtpMsg] = useState("");
+  const [otpBusy, setOtpBusy] = useState(false);
 
   useEffect(() => {
     // If already logged in, go straight to portal
@@ -44,7 +50,7 @@ export default function EmployeeLogin() {
       // Fetch employee details
       const empCode = user.employee_code;
       const { data: emp } = empCode
-        ? await supabase.from("employees").select("full_name, branch, department, designation, phone, staff_level").eq("employee_code", empCode).maybeSingle()
+        ? await supabase.from("employees").select("full_name, branch, department, designation, phone, staff_level, whatsapp_number, whatsapp_verified").eq("employee_code", empCode).maybeSingle()
         : { data: null };
 
       const session = {
@@ -56,6 +62,23 @@ export default function EmployeeLogin() {
         designation: emp?.designation || "",
         staff_level: emp?.staff_level || "",
       };
+
+      // First-time WhatsApp verification gate — skipped entirely if the
+      // employee has no WhatsApp number on file (nothing to verify against).
+      const needsVerification = empCode && !emp?.whatsapp_verified && (emp?.whatsapp_number || emp?.phone);
+      if (needsVerification) {
+        setPendingSession(session);
+        setStage("verify");
+        setLoading(false);
+        setOtpBusy(true);
+        try {
+          await sendOnboardingOtp(empCode);
+          setOtpMsg("A verification code was sent to your WhatsApp.");
+        } catch (e) { setOtpMsg(`Error sending code: ${e.message}`); }
+        finally { setOtpBusy(false); }
+        return;
+      }
+
       localStorage.setItem("employeeSession", JSON.stringify(session));
       window.location.hash = "#employee-portal";
     } catch (e) {
@@ -63,6 +86,30 @@ export default function EmployeeLogin() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function resendOtp() {
+    if (!pendingSession?.employee_code) return;
+    setOtpBusy(true); setOtpMsg("");
+    try {
+      await sendOnboardingOtp(pendingSession.employee_code);
+      setOtpMsg("A new code was sent to your WhatsApp.");
+    } catch (e) { setOtpMsg(`Error: ${e.message}`); }
+    finally { setOtpBusy(false); }
+  }
+
+  async function submitOtp(e) {
+    e.preventDefault();
+    if (!pendingSession?.employee_code) return;
+    setOtpBusy(true); setOtpMsg("");
+    const result = await verifyOnboardingOtp(pendingSession.employee_code, otpCode);
+    if (result.success) {
+      localStorage.setItem("employeeSession", JSON.stringify(pendingSession));
+      window.location.hash = "#employee-portal";
+    } else {
+      setOtpMsg(result.error);
+    }
+    setOtpBusy(false);
   }
 
   return (
@@ -78,49 +125,94 @@ export default function EmployeeLogin() {
 
       {/* Login Card */}
       <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl p-8">
-        <h2 className="text-xl font-bold text-slate-900 mb-1">Welcome back</h2>
-        <p className="text-slate-500 text-sm mb-6">Sign in with your employee credentials</p>
+        {stage === "credentials" ? (
+          <>
+            <h2 className="text-xl font-bold text-slate-900 mb-1">Welcome back</h2>
+            <p className="text-slate-500 text-sm mb-6">Sign in with your employee credentials</p>
 
-        {err && (
-          <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700 text-sm border border-red-100">
-            {err}
-          </div>
+            {err && (
+              <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700 text-sm border border-red-100">
+                {err}
+              </div>
+            )}
+
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Employee ID</label>
+                <input
+                  value={employeeId}
+                  onChange={e => setEmployeeId(e.target.value)}
+                  placeholder="BB-PAF-0012"
+                  autoComplete="username"
+                  spellCheck={false}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-slate-950 text-white py-3 rounded-xl font-semibold text-sm transition hover:bg-slate-800 active:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed mt-2">
+                {loading ? "Signing in…" : "Sign In"}
+              </button>
+            </form>
+
+            <p className="text-xs text-slate-400 text-center mt-5">
+              Don't have credentials? Contact your HR department.
+            </p>
+          </>
+        ) : (
+          <>
+            <h2 className="text-xl font-bold text-slate-900 mb-1">Verify your WhatsApp</h2>
+            <p className="text-slate-500 text-sm mb-6">First-time login — enter the 6-digit code sent to your WhatsApp to finish setting up your account.</p>
+
+            {otpMsg && (
+              <div className={`mb-4 p-3 rounded-xl text-sm border ${otpMsg.startsWith("Error") || otpMsg.includes("Incorrect") || otpMsg.includes("expired") ? "bg-red-50 text-red-700 border-red-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"}`}>
+                {otpMsg}
+              </div>
+            )}
+
+            <form onSubmit={submitOtp} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Verification Code</label>
+                <input
+                  value={otpCode}
+                  onChange={e => setOtpCode(e.target.value)}
+                  placeholder="123456"
+                  inputMode="numeric"
+                  maxLength={6}
+                  autoFocus
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 font-mono tracking-widest text-center text-lg"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={otpBusy || otpCode.length < 6}
+                className="w-full bg-slate-950 text-white py-3 rounded-xl font-semibold text-sm transition hover:bg-slate-800 active:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed">
+                {otpBusy ? "Verifying…" : "Verify & Continue"}
+              </button>
+            </form>
+
+            <div className="flex justify-between items-center mt-4">
+              <button onClick={resendOtp} disabled={otpBusy} className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-700">
+                Resend code
+              </button>
+              <button onClick={() => { setStage("credentials"); setOtpCode(""); setOtpMsg(""); }} className="text-xs text-slate-400 hover:text-slate-600">
+                ← Back
+              </button>
+            </div>
+          </>
         )}
-
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Employee ID</label>
-            <input
-              value={employeeId}
-              onChange={e => setEmployeeId(e.target.value)}
-              placeholder="BB-PAF-0012"
-              autoComplete="username"
-              spellCheck={false}
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 font-mono"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Enter your password"
-              autoComplete="current-password"
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-slate-950 text-white py-3 rounded-xl font-semibold text-sm transition hover:bg-slate-800 active:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed mt-2">
-            {loading ? "Signing in…" : "Sign In"}
-          </button>
-        </form>
-
-        <p className="text-xs text-slate-400 text-center mt-5">
-          Don't have credentials? Contact your HR department.
-        </p>
       </div>
 
       {/* Back to HR link */}
