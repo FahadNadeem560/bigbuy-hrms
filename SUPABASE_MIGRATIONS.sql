@@ -1644,4 +1644,488 @@ DROP POLICY IF EXISTS "Allow anon read attendance" ON public.attendance;
 DROP POLICY IF EXISTS "Allow anon manage leave requests" ON public.leave_requests;
 DROP POLICY IF EXISTS "Allow anon manage attendance adjustments" ON public.attendance_adjustments;
 -- =============================================================
+
+-- =============================================================
+-- Applied: 2026-07-30 — fix_process_daily_attendance_cross_day_punch_pairing
+-- =============================================================
+-- Backfills the full process_daily_attendance body into this file (the
+-- 2026-07-23 short_hours entry above flagged this as still owed — pull
+-- live defs via pg_get_functiondef before trusting old copies of this one).
+--
+-- Bug found investigating a user report that ID 00003's attendance looked
+-- wrong for several days in July. Root cause: for employees with no fixed
+-- shift (Management/Admin, v_start/v_end null), the punch-matching window
+-- ran a full 36h past midnight (to catch a genuine overnight checkout).
+-- That was wide enough to swallow the *next* day's ordinary morning
+-- check-in as if it were "today's" late checkout — corrupting both days:
+--   - Jul 1: device swapped the C/In and C/Out labels on the same day's
+--     two punches; the reversed-pair fallback only triggered when a
+--     status was missing entirely, not when both existed but reversed —
+--     so it showed a "Half Day / missing checkout" for a normal ~7h day.
+--   - Jul 3-4: a mislabeled punch on the morning of Jul 4 got pulled into
+--     Jul 3's window and won MAX(punch_time where status=C/Out), silently
+--     discarding Jul 3's real checkout and fabricating a 20.87-hour
+--     "Present" shift with no review flag.
+--   - Jul 5 (a real weekly-off day, zero punches): Jul 6's check-in punch
+--     bled backward into Jul 5's window, fabricating a phantom "Half Day"
+--     record on the employee's actual day off.
+--
+-- Fix (three changes to the existing function):
+--   1. Narrowed the shift-less lookahead window from 36h/noon-next-day to
+--      6h/06:00-next-day — still covers a genuine overnight checkout,
+--      no longer reaches into the next day's normal start time.
+--   2. The earliest/latest-by-position fallback (added previously for
+--      terminals that mislabel every punch as C/Out) now also triggers
+--      when the status-matched pair comes back *reversed*, not just when
+--      one side is null.
+--   3. Added a 16h sanity cap: any pairing implying a shift longer than
+--      that forces needs_review = true with an exception_reason instead
+--      of silently passing as "Present".
+--
+-- Verified against the reported employee's whole week (all six days now
+-- match reality exactly) and re-ran process_daily_attendance for the full
+-- Jan 1 - Jul 31 2026 range across all employees, month by month, to
+-- avoid the statement-timeout issue from the 2026-07-29 index incident.
+-- 52 records that had been merging two days into one bogus long shift are
+-- now correctly split and flagged for review.
+-- =============================================================
+CREATE OR REPLACE FUNCTION public.process_daily_attendance(p_from_date date, p_to_date date)
+ RETURNS TABLE(processed_days integer, inserted_or_updated integer, needs_review_count integer, absent_count integer, half_day_count integer)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'private', 'pg_temp'
+AS $function$
+declare
+  v_employee record;
+  v_day date;
+  v_roster record;
+  v_shift public.shift_definitions%rowtype;
+  v_shift_code text;
+  v_group text;
+  v_required_hours numeric;
+  v_day_required_hours numeric;
+  v_friday_override numeric;
+  v_start timestamp without time zone;
+  v_end timestamp without time zone;
+  v_first_in timestamp without time zone;
+  v_last_out timestamp without time zone;
+  v_punch_count integer;
+  v_pos_first timestamp without time zone;
+  v_pos_last timestamp without time zone;
+  v_class record;
+  v_source_locations text;
+  v_rows integer := 0;
+  v_days integer := 0;
+  v_review integer := 0;
+  v_absent integer := 0;
+  v_half integer := 0;
+  v_weekly_off boolean;
+  v_gh boolean;
+  v_day_type text;
+  v_existing_locked boolean;
+begin
+  if p_from_date is null or p_to_date is null or p_to_date < p_from_date then
+    raise exception 'Invalid attendance processing date range';
+  end if;
+
+  -- Resolve mapping for any new raw punches before calculation.
+  perform public.refresh_zkt_punch_employee_mapping();
+
+  for v_employee in
+    select e.employee_code,
+           e.zkt_employee_no,
+           e.eligibility_group,
+           e.assigned_shift_code,
+           e.status,
+           e.branch,
+           e.joining_date,
+           e.last_working_day,
+           e.single_punch_ok
+      from public.employees e
+     where e.zkt_employee_no is not null
+       and e.zkt_employee_no <> ''
+       and (coalesce(e.status, 'Active') = 'Active' or e.last_working_day is not null)
+  loop
+    v_group := coalesce(nullif(v_employee.eligibility_group, ''), 'SALES_SUPPORT');
+    select required_hours into v_required_hours
+      from public.staff_eligibility_groups
+     where code = v_group and is_active = true;
+
+    if v_required_hours is null then
+      continue;
+    end if;
+
+    for v_day in select generate_series(p_from_date, p_to_date, interval '1 day')::date loop
+      v_days := v_days + 1;
+
+      if v_employee.joining_date is not null and v_day < v_employee.joining_date then
+        continue;
+      end if;
+
+      if coalesce(v_employee.status, 'Active') <> 'Active'
+         and v_employee.last_working_day is not null
+         and v_day > v_employee.last_working_day then
+        continue;
+      end if;
+
+      -- Friday required-hours override: read from hrms_policy_settings
+      -- (the values HR/Master configure on the Policy Settings page) instead
+      -- of always using the flat staff_eligibility_groups.required_hours.
+      v_day_required_hours := v_required_hours;
+      if extract(dow from v_day) = 5 then
+        select value::numeric into v_friday_override
+          from public.hrms_policy_settings
+         where key = case when v_group = 'MANAGEMENT_ADMIN' then 'friday_hours_management' else 'friday_hours_non_management' end
+         limit 1;
+        if v_friday_override is not null then
+          v_day_required_hours := v_friday_override;
+        end if;
+      end if;
+
+      select r.shift_code, r.is_weekly_off, r.is_gazetted_holiday, r.day_type
+        into v_roster
+        from public.employee_work_rosters r
+       where r.employee_code = v_employee.employee_code
+         and r.roster_date = v_day
+       limit 1;
+
+      v_weekly_off := coalesce(v_roster.is_weekly_off, false);
+      v_gh := coalesce(v_roster.is_gazetted_holiday, exists(select 1 from public.gazetted_holidays g where g.holiday_date = v_day and g.is_active = true));
+      v_day_type := coalesce(v_roster.day_type, case when v_weekly_off then 'Weekly Off' when v_gh then 'Gazetted Holiday' else 'Working Day' end);
+      v_shift_code := private.resolve_employee_shift(v_employee.employee_code, v_day, v_employee.assigned_shift_code);
+
+      select * into v_shift from public.shift_definitions where shift_code = v_shift_code and is_active = true;
+      if not found then
+        v_shift.shift_code := v_shift_code;
+        v_shift.start_time := '00:00'::time;
+        v_shift.end_time := '00:00'::time;
+        v_shift.scheduled_hours := v_day_required_hours;
+        v_shift.crosses_midnight := false;
+      end if;
+
+      if v_group = 'MANAGEMENT_ADMIN' then
+        v_start := null;
+        v_end := null;
+      else
+        v_start := v_day::timestamp + v_shift.start_time;
+        v_end := v_day::timestamp + v_shift.end_time;
+        if v_shift.crosses_midnight or v_shift.end_time < v_shift.start_time then
+          v_end := v_end + interval '1 day';
+        end if;
+      end if;
+
+      -- Punch window: for shift-based employees this stays anchored to their
+      -- shift (start-4h .. end+8h). For shift-less employees (Management/Admin)
+      -- it used to run a full 36h past midnight (to catch a genuine overnight
+      -- checkout), but that was wide enough to swallow the *next* day's
+      -- mid-morning check-in as if it were "today's" late checkout, corrupting
+      -- both days. Narrowed to a 6h early-morning grace window (00:00-06:00
+      -- next day) - still covers a real overnight checkout, no longer bleeds
+      -- into the next day's normal start time.
+      select
+        min(p.punch_time) filter (where lower(coalesce(p.punch_status,'')) in ('c/in','in','check in','check-in','checkin')),
+        max(p.punch_time) filter (where lower(coalesce(p.punch_status,'')) in ('c/out','out','check out','check-out','checkout')),
+        string_agg(distinct coalesce(p.location_id,''), ',' order by coalesce(p.location_id,''))
+      into v_first_in, v_last_out, v_source_locations
+      from public.zkt_raw_punches p
+      where p.employee_code = v_employee.employee_code
+        and p.punch_time >= case when v_start is null then v_day::timestamp else v_start - interval '4 hours' end
+        and p.punch_time < case when v_end is null then (v_day + 1)::timestamp + interval '6 hours' else v_end + interval '8 hours' end;
+
+      -- Some ZKT terminals/export batches mislabel punch_status (e.g. every
+      -- punch that day comes through as C/Out, an unrecognized code, or even
+      -- the in/out labels swapped between two punches) so the status-based
+      -- filter above can't find a matching in/out punch, or finds them
+      -- reversed, even though real punches exist. When that happens and
+      -- there are 2+ punches that day, fall back to earliest/latest punch
+      -- time by position instead of trusting the (proven unreliable) status
+      -- label. Genuine single-punch days are left alone so they still
+      -- correctly flag as a missing pair.
+      if v_first_in is null or v_last_out is null
+         or (v_first_in is not null and v_last_out is not null and v_last_out < v_first_in) then
+        select count(*), min(p.punch_time), max(p.punch_time)
+          into v_punch_count, v_pos_first, v_pos_last
+          from public.zkt_raw_punches p
+         where p.employee_code = v_employee.employee_code
+           and p.punch_time >= case when v_start is null then v_day::timestamp else v_start - interval '4 hours' end
+           and p.punch_time < case when v_end is null then (v_day + 1)::timestamp + interval '6 hours' else v_end + interval '8 hours' end;
+
+        if v_punch_count >= 2 then
+          v_first_in := v_pos_first;
+          v_last_out := v_pos_last;
+        end if;
+      end if;
+
+      if v_last_out is not null and v_first_in is not null and v_last_out < v_first_in then
+        v_last_out := null;
+      end if;
+
+      select * into v_class
+      from public.classify_attendance_day(
+        v_group,
+        v_day_required_hours,
+        v_start,
+        v_end,
+        v_first_in,
+        v_last_out,
+        v_weekly_off,
+        v_gh
+      );
+
+      -- Employees who structurally only ever produce one ZKT scan per shift
+      -- (e.g. a night guard with no terminal access when leaving) should not
+      -- be perpetually flagged/under-credited just because a second scan
+      -- can never exist. If they showed up at all (at least one punch that
+      -- day) and the normal classification under-credits them, give full
+      -- required-hours credit instead.
+      if v_employee.single_punch_ok
+         and (v_first_in is not null or v_last_out is not null)
+         and v_class.worked_hours < v_day_required_hours then
+        v_class.worked_hours := v_day_required_hours;
+        v_class.attendance_status := 'Present';
+        v_class.late_minutes := 0;
+        v_class.early_out_minutes := 0;
+        v_class.overtime_hours := 0;
+        v_class.needs_review := false;
+        v_class.exception_reason := null;
+      end if;
+
+      -- Sanity cap: a punch pairing that implies a 16+ hour shift almost
+      -- always means two different shifts got merged into one (a stray
+      -- cross-day punch, a missed break punch, etc). Never let that pass
+      -- silently as "Present" - force it into review instead.
+      if v_first_in is not null and v_last_out is not null
+         and (extract(epoch from (v_last_out - v_first_in)) / 3600.0) > 16 then
+        v_class.needs_review := true;
+        v_class.exception_reason := trim(both '; ' from coalesce(v_class.exception_reason || '; ', '') || 'Unusually long shift duration - please verify punches');
+      end if;
+
+      select exists(
+        select 1 from public.attendance a
+         where a.employee_code = v_employee.employee_code
+           and a.work_date = v_day
+           and coalesce(a.review_status,'') = 'Locked'
+      ) into v_existing_locked;
+
+      if not v_existing_locked then
+        insert into public.attendance (
+          employee_code, attendance_date, work_date, source, eligibility_group, shift_code,
+          first_check_in, last_check_out, check_in, check_out, actual_hours,
+          worked_hours, required_hours, short_hours,
+          late_minutes, early_out_minutes, overtime_hours,
+          extra_day_eligible, gh_eligible, is_weekly_off, is_gazetted_holiday,
+          attendance_status, exception_reason, needs_review, calculated_at,
+          zkt_location_id, review_status
+        ) values (
+          v_employee.employee_code, v_day, v_day, 'ZKT CSV', v_group, v_shift_code,
+          v_first_in, v_last_out, v_first_in, v_last_out, v_class.worked_hours,
+          v_class.worked_hours, v_day_required_hours,
+          round(greatest(v_day_required_hours - v_class.worked_hours, 0)::numeric, 2),
+          v_class.late_minutes, v_class.early_out_minutes, v_class.overtime_hours,
+          v_class.extra_day_eligible, v_class.gh_eligible, v_weekly_off, v_gh,
+          v_class.attendance_status, v_class.exception_reason, v_class.needs_review, now(),
+          v_source_locations, case when v_class.needs_review then 'Pending Review' else 'Calculated' end
+        )
+        on conflict (employee_code, work_date) where employee_code is not null and work_date is not null
+        do update set
+          attendance_date = excluded.attendance_date,
+          source = excluded.source,
+          eligibility_group = excluded.eligibility_group,
+          shift_code = excluded.shift_code,
+          first_check_in = excluded.first_check_in,
+          last_check_out = excluded.last_check_out,
+          check_in = excluded.check_in,
+          check_out = excluded.check_out,
+          actual_hours = excluded.actual_hours,
+          worked_hours = excluded.worked_hours,
+          required_hours = excluded.required_hours,
+          short_hours = excluded.short_hours,
+          late_minutes = excluded.late_minutes,
+          early_out_minutes = excluded.early_out_minutes,
+          overtime_hours = excluded.overtime_hours,
+          extra_day_eligible = excluded.extra_day_eligible,
+          gh_eligible = excluded.gh_eligible,
+          is_weekly_off = excluded.is_weekly_off,
+          is_gazetted_holiday = excluded.is_gazetted_holiday,
+          attendance_status = excluded.attendance_status,
+          exception_reason = excluded.exception_reason,
+          needs_review = excluded.needs_review,
+          calculated_at = excluded.calculated_at,
+          zkt_location_id = excluded.zkt_location_id,
+          review_status = excluded.review_status;
+        v_rows := v_rows + 1;
+        if v_class.needs_review then v_review := v_review + 1; end if;
+        if v_class.attendance_status = 'Absent' then v_absent := v_absent + 1; end if;
+        if v_class.attendance_status = 'Half Day' then v_half := v_half + 1; end if;
+      end if;
+    end loop;
+  end loop;
+
+  return query select v_days, v_rows, v_review, v_absent, v_half;
+end;
+$function$;
+-- =============================================================
+
+-- =============================================================
+-- Applied: 2026-07-30 — salary increment auto-logging + two-way sync
+-- =============================================================
+-- User asked: does changing an employee's salary automatically show up in
+-- Increment History? It didn't — employees.salary and salary_increments
+-- were two completely disconnected tables, editable independently in
+-- either direction, with no DB trigger and no shared code path. Wired all
+-- three directions:
+--
+-- 1) Employees page (or any other direct UPDATE of employees.salary,
+--    including the bulk Employee Master import) -> auto-logs a
+--    salary_increments row via an AFTER UPDATE trigger. Guards: only
+--    fires on an actual value change, and only when there was a prior
+--    non-null salary to compare against (skips brand-new employees
+--    getting their first salary set - that's provisioning, not a raise).
+--
+-- 2) IncrementHistory.jsx "+ Add Increment" (individual + bulk by
+--    dept/branch) -> now calls apply_salary_increment(), which updates
+--    the employee's live salary and writes the history row in the same
+--    transaction. old_salary is always read fresh from the employees
+--    table server-side, never trusted from the client, so the history
+--    can't drift from whatever the DB actually has.
+--
+-- 3) IncrementHistory.jsx "Import History" (.xlsx backfill) -> after
+--    inserting the parsed rows, calls sync_employee_current_salary() once
+--    per touched employee_code. That function re-reads each employee's
+--    FULL increment history (not just the rows in this file) and sets
+--    their live salary to the newest Approved record whose effective_from
+--    has already arrived - so out-of-chronological-order rows in the
+--    import file, or interaction with pre-existing records, still resolve
+--    correctly. Future-dated records are left alone until their date
+--    arrives (no scheduler exists to flip them automatically on that date
+--    yet - out of scope of this change).
+--
+-- Both (2) and (3)'s UPDATEs run with app.suppress_increment_trigger set
+-- (local to the transaction) so the (1) trigger doesn't double-log the
+-- same change as a second "System (Auto)" row.
+--
+-- Verified live end-to-end for all three paths using disposable test
+-- employees (created, exercised through the real UI/RPC, then deleted):
+-- salary increase/decrease/no-op via the trigger, individual Add
+-- Increment, bulk Add Increment, and an actual .xlsx upload through the
+-- Import History button with out-of-order dates plus a future-dated row -
+-- in every case exactly one salary_increments row resulted (no
+-- trigger double-log) and employees.salary matched the expected value.
+-- =============================================================
+CREATE OR REPLACE FUNCTION public.log_salary_increment_on_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+begin
+  if coalesce(current_setting('app.suppress_increment_trigger', true), 'false') = 'true' then
+    return new;
+  end if;
+
+  if new.salary is distinct from old.salary and old.salary is not null and new.salary is not null then
+    insert into public.salary_increments (
+      employee_code, employee_name, old_salary, new_salary, effective_from,
+      increment_amount, increment_percentage, type, status,
+      submitted_by, approved_by, approved_at, created_at
+    ) values (
+      new.employee_code, new.full_name, old.salary, new.salary, current_date,
+      new.salary - old.salary,
+      case when old.salary > 0 then round(((new.salary - old.salary) / old.salary) * 10000)/100 else null end,
+      case when new.salary >= old.salary then 'Increment' else 'Downward Revision' end,
+      'Approved',
+      'System (Auto)', 'System (Auto)', now(), now()
+    );
+  end if;
+  return new;
+end;
+$function$;
+
+DROP TRIGGER IF EXISTS trg_log_salary_increment ON public.employees;
+CREATE TRIGGER trg_log_salary_increment
+AFTER UPDATE ON public.employees
+FOR EACH ROW
+EXECUTE FUNCTION public.log_salary_increment_on_change();
+
+CREATE OR REPLACE FUNCTION public.apply_salary_increment(
+  p_employee_code text,
+  p_new_salary numeric,
+  p_effective_from date DEFAULT CURRENT_DATE,
+  p_type text DEFAULT 'Increment',
+  p_approved_by text DEFAULT 'HR',
+  p_submitted_by text DEFAULT 'HR'
+)
+RETURNS public.salary_increments
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_old_salary numeric;
+  v_name text;
+  v_amount numeric;
+  v_pct numeric;
+  v_row public.salary_increments;
+begin
+  select salary, full_name into v_old_salary, v_name
+    from public.employees where employee_code = p_employee_code
+    for update;
+
+  if not found then
+    raise exception 'Employee % not found', p_employee_code;
+  end if;
+
+  perform set_config('app.suppress_increment_trigger', 'true', true);
+  update public.employees set salary = p_new_salary where employee_code = p_employee_code;
+
+  v_amount := p_new_salary - coalesce(v_old_salary, 0);
+  v_pct := case when coalesce(v_old_salary, 0) > 0 then round((v_amount / v_old_salary) * 10000) / 100 else null end;
+
+  insert into public.salary_increments (
+    employee_code, employee_name, old_salary, new_salary, effective_from,
+    increment_amount, increment_percentage, type, status,
+    submitted_by, approved_by, approved_at, created_at
+  ) values (
+    p_employee_code, v_name, v_old_salary, p_new_salary, p_effective_from,
+    v_amount, v_pct, coalesce(p_type, 'Increment'), 'Approved',
+    coalesce(p_submitted_by, 'HR'), coalesce(p_approved_by, 'HR'), now(), now()
+  )
+  returning * into v_row;
+
+  return v_row;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.sync_employee_current_salary(p_employee_code text)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_latest_salary numeric;
+  v_current numeric;
+begin
+  select new_salary into v_latest_salary
+    from public.salary_increments
+   where employee_code = p_employee_code
+     and coalesce(status, 'Approved') = 'Approved'
+     and effective_from is not null
+     and effective_from <= current_date
+   order by effective_from desc, created_at desc
+   limit 1;
+
+  if v_latest_salary is null then
+    return;
+  end if;
+
+  select salary into v_current from public.employees where employee_code = p_employee_code;
+
+  if v_current is distinct from v_latest_salary then
+    perform set_config('app.suppress_increment_trigger', 'true', true);
+    update public.employees set salary = v_latest_salary where employee_code = p_employee_code;
+  end if;
+end;
+$function$;
+-- =============================================================
 -- =============================================================

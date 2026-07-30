@@ -297,6 +297,10 @@ export default function Timesheet({ branchFilter, role }) {
     return { totalOT, payableOT };
   }, [attendance, isOtEligible]);
 
+  const totalWorkedHours = useMemo(() => {
+    return fmt2(attendance.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
+  }, [attendance]);
+
   const ledger = useMemo(() => {
     if (!selectedEmp || !fromDate || !toDate) return [];
     const byDate = {};
@@ -638,6 +642,19 @@ export default function Timesheet({ branchFilter, role }) {
                     })
                   )}
                 </tbody>
+                {ledger.length > 0 && (
+                  <tfoot>
+                    <tr className="bg-slate-50 font-semibold border-t-2 border-slate-200 print:bg-slate-100">
+                      <td colSpan={5} className="px-4 py-3 text-right text-slate-600 print:px-1.5 print:py-1">Totals</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1">{totalWorkedHours}</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1">{lateSummary.totalLateMins}</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1">{shortSummary.totalShort}</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1">{otSummary.totalOT}</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1"></td>
+                      {canToggle && <td colSpan={4} className="px-4 py-3 print:hidden"></td>}
+                    </tr>
+                  </tfoot>
+                )}
               </table>
               {canToggle && (
                 <div className="px-5 py-3 flex flex-wrap gap-4 text-xs text-slate-500 print:hidden">

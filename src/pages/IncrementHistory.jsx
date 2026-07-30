@@ -174,15 +174,26 @@ function ImportPanel({ employees, onDone }) {
       }
 
       let inserted = 0;
+      let synced = 0;
       if (toInsert.length > 0) {
         const { error } = await supabase.from("salary_increments").insert(toInsert);
         if (error) throw new Error(error.message);
         inserted = toInsert.length;
+
+        // Reconcile each touched employee's live salary against their full
+        // history (not just this file) — the newest Approved, non-future
+        // record wins, regardless of what order the rows were imported in.
+        const touchedCodes = [...new Set(toInsert.map(r => r.employee_code))];
+        const syncResults = await Promise.all(
+          touchedCodes.map(code => supabase.rpc("sync_employee_current_salary", { p_employee_code: code }))
+        );
+        synced = syncResults.filter(r => !r.error).length;
       }
 
       setSummary({
         total: dataRows.length,
         inserted,
+        synced,
         skippedDupes,
         failed,
         preview: toInsert.slice(0, 10),
@@ -211,10 +222,11 @@ function ImportPanel({ employees, onDone }) {
 
       {summary && !summary.error && (
         <div className="space-y-3">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {[
               { label: "Total Rows", val: summary.total, color: "text-slate-700" },
               { label: "Imported", val: summary.inserted, color: "text-emerald-600" },
+              { label: "Employees Synced", val: summary.synced || 0, color: "text-blue-600" },
               { label: "Skipped (Dupes)", val: summary.skippedDupes, color: "text-amber-600" },
               { label: "Failed", val: summary.failed.length, color: "text-red-600" },
             ].map(({ label, val, color }) => (
@@ -310,24 +322,18 @@ export default function IncrementHistory() {
   async function addIncrement() {
     if (!form.employee || !form.prevSalary || !form.newSalary) return setErr("Employee, previous and new salary are required.");
     setErr("");
-    const amount = Number(form.newSalary) - Number(form.prevSalary);
-    const { error } = await supabase.from("salary_increments").insert({
-      employee_code: String(form.employee.employee_code),
-      employee_name: form.employee.full_name,
-      old_salary: Number(form.prevSalary),
-      new_salary: Number(form.newSalary),
-      effective_from: form.date,
-      increment_amount: amount,
-      increment_percentage: pct,
-      type: form.type || "Increment",
-      status: "Approved",
-      submitted_by: "HR",
-      approved_by: form.approvedBy,
-      approved_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
+    // apply_salary_increment updates the employee's live salary and writes
+    // the history row in one transaction, so the two can't drift apart.
+    const { error } = await supabase.rpc("apply_salary_increment", {
+      p_employee_code: String(form.employee.employee_code),
+      p_new_salary: Number(form.newSalary),
+      p_effective_from: form.date,
+      p_type: form.type || "Increment",
+      p_approved_by: form.approvedBy,
+      p_submitted_by: "HR",
     });
     if (error) return setErr(error.message);
-    setMsg(`Increment recorded for ${form.employee.full_name}: ${money(form.prevSalary)} → ${money(form.newSalary)} (+${pct}%)`);
+    setMsg(`Increment recorded for ${form.employee.full_name}: ${money(form.prevSalary)} → ${money(form.newSalary)} (+${pct}%). Employee salary updated.`);
     setForm(BLANK);
     setShowForm(false);
     load();
@@ -341,31 +347,26 @@ export default function IncrementHistory() {
       const dOk = !bulkDept || e.department?.toLowerCase().includes(bulkDept.toLowerCase());
       return bOk && dOk;
     });
-    const rows = targets.map(emp => {
+    if (!targets.length) return setErr("No employees match the filters.");
+
+    const today = new Date().toISOString().slice(0, 10);
+    const results = await Promise.all(targets.map(emp => {
       const prev = Number(emp.salary || 0);
       const inc = bulkType === "percent" ? prev * (Number(bulkValue) / 100) : Number(bulkValue);
       const next = Math.round(prev + inc);
-      const p = prev > 0 ? Math.round((inc / prev) * 100 * 10) / 10 : 0;
-      return {
-        employee_code: String(emp.employee_code),
-        employee_name: emp.full_name,
-        old_salary: prev,
-        new_salary: next,
-        effective_from: new Date().toISOString().slice(0, 10),
-        increment_amount: Math.round(inc),
-        increment_percentage: p,
-        type: "Increment",
-        status: "Approved",
-        submitted_by: "HR",
-        approved_by: "HR",
-        approved_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-      };
-    });
-    if (!rows.length) return setErr("No employees match the filters.");
-    const { error } = await supabase.from("salary_increments").insert(rows);
-    if (error) return setErr(error.message);
-    setMsg(`Bulk increment applied to ${rows.length} employees.`);
+      return supabase.rpc("apply_salary_increment", {
+        p_employee_code: String(emp.employee_code),
+        p_new_salary: next,
+        p_effective_from: today,
+        p_type: "Increment",
+        p_approved_by: "HR",
+        p_submitted_by: "HR",
+      });
+    }));
+    const failed = results.filter(r => r.error);
+    if (failed.length) return setErr(`${failed.length} of ${targets.length} employees failed: ${failed[0].error.message}`);
+
+    setMsg(`Bulk increment applied to ${targets.length} employees. Salaries updated.`);
     setBulkValue(""); setBulkBranch("All"); setBulkDept("");
     setShowForm(false);
     load();
