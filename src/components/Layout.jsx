@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Button } from "./ui.jsx";
 import NotificationBell from "./NotificationBell.jsx";
+import ChangePasswordModal from "./ChangePasswordModal.jsx";
 
 function groupBySection(items) {
   const order = [];
@@ -17,6 +18,7 @@ export default function Layout({ user, role, onLogout, active, setActive, visibl
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem("sidebarCollapsed") === "true"; } catch { return false; }
   });
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   useEffect(() => {
     try { localStorage.setItem("sidebarCollapsed", String(collapsed)); } catch {}
@@ -91,9 +93,12 @@ export default function Layout({ user, role, onLogout, active, setActive, visibl
             <div className="flex items-center gap-3">
               <NotificationBell role={role} />
               <span className="px-4 py-2 rounded-2xl border border-slate-200 text-sm text-slate-600">{role}</span>
+              <Button onClick={() => setShowChangePassword(true)} variant="outline" className="rounded-2xl">Change Password</Button>
               <Button onClick={onLogout} variant="secondary" className="rounded-2xl">Log Out</Button>
             </div>
           </div>
+
+          {showChangePassword && <ChangePasswordModal close={() => setShowChangePassword(false)} />}
 
           {/* Mobile nav */}
           <div className="lg:hidden mb-4 bg-slate-950 text-white rounded-2xl p-4 print:hidden">

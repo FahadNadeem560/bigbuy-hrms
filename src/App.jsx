@@ -87,6 +87,7 @@ export default function BigBuyHRMS({ profile }) {
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [query, setQuery] = useState("");
   const [branch, setBranch] = useState("All");
+  const [employeeStatusFilter, setEmployeeStatusFilter] = useState("Active");
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
   const [newEmployee, setNewEmployee] = useState(BLANK_EMPLOYEE);
   const [editingEmployee, setEditingEmployee] = useState(null);
@@ -101,8 +102,9 @@ export default function BigBuyHRMS({ profile }) {
   const effectiveBranch = branchRestriction || branch;
   const filteredEmployees = useMemo(() => employees.filter(emp =>
     (effectiveBranch === "All" || emp.branch === effectiveBranch) &&
+    (employeeStatusFilter === "All" || emp.status === employeeStatusFilter) &&
     `${emp.name} ${emp.id} ${emp.dept} ${emp.phone}`.toLowerCase().includes(query.toLowerCase())
-  ), [employees, effectiveBranch, query]);
+  ), [employees, effectiveBranch, employeeStatusFilter, query]);
   const activeEmployees = useMemo(() => employees.filter(emp => emp.status === "Active"), [employees]);
   const payrollRows = useMemo(() => activeEmployees.map(emp => calculatePayrollForEmployee(emp, demoAdjustments[emp.id] || {}, demoLoans)), [activeEmployees]);
 
@@ -289,6 +291,7 @@ export default function BigBuyHRMS({ profile }) {
     query, setQuery,
     branch: effectiveBranch, setBranch: branchRestriction ? () => {} : setBranch,
     branchLocked: !!branchRestriction,
+    employeeStatusFilter, setEmployeeStatusFilter,
     showEmployeeForm,
     setShowEmployeeForm: (v) => { if (v) openNewEmployeeForm(); else setShowEmployeeForm(false); },
     newEmployee, setNewEmployee, saveEmployee,

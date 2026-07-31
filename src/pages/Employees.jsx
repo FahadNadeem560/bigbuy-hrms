@@ -322,7 +322,7 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
   );
 }
 
-export default function Employees({ query, setQuery, branch, setBranch, branchLocked, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees, role }) {
+export default function Employees({ query, setQuery, branch, setBranch, branchLocked, employeeStatusFilter, setEmployeeStatusFilter, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees, role }) {
   const supervisorMap = useMemo(() =>
     Object.fromEntries((employees || []).map(e => [e.id, e.name])),
     [employees]
@@ -347,6 +347,11 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
         <select value={branch} onChange={e => setBranch(e.target.value)} disabled={branchLocked} className="px-4 py-2.5 rounded-2xl border border-slate-200 disabled:bg-slate-50 disabled:text-slate-500">
           <option>All</option>
           {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
+        </select>
+        <select value={employeeStatusFilter} onChange={e => setEmployeeStatusFilter(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200">
+          <option value="Active">Active</option>
+          <option value="Inactive">Inactive</option>
+          <option value="All">All</option>
         </select>
       </div>
 
