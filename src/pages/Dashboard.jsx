@@ -13,6 +13,7 @@ const TABS = [
 export default function Dashboard({ activeEmployees, attendanceRows, payrollRows, payrollStatus, setActive, role, branchFilter }) {
   const isBranchManager = role === "Branch Manager";
   const [tab, setTab] = useState(isBranchManager ? "branch" : "overview");
+  const [payrollRevealed, setPayrollRevealed] = useState(false);
   const visibleTabs = isBranchManager ? TABS.filter(([k]) => k === "branch") : TABS;
 
   const totalActiveStaff = activeEmployees.length;
@@ -59,7 +60,13 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
 
           <div className="mt-5 bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <div className="px-5 pt-4 pb-2 flex items-center justify-between">
-              <h3 className="font-bold text-slate-800">Active Staff & Payroll by Branch</h3>
+              <h3 className="font-bold text-slate-800 flex items-center gap-1.5">
+                Active Staff & Payroll by Branch
+                <button type="button" onClick={() => setPayrollRevealed(r => !r)} title={payrollRevealed ? "Hide payroll" : "Show payroll"}
+                  className="text-slate-400 hover:text-slate-600 transition leading-none">
+                  {payrollRevealed ? "🙈" : "👁️"}
+                </button>
+              </h3>
               {totalsMismatch && (
                 <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-lg">Totals don't reconcile — check employee branch data</span>
               )}
@@ -77,7 +84,7 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
                   <tr key={b.branch}>
                     <td className="px-4 py-3 font-medium">{b.branch}</td>
                     <td className="px-4 py-3 text-right">{b.staff}</td>
-                    <td className="px-4 py-3 text-right">{money(b.payroll)}</td>
+                    <td className="px-4 py-3 text-right">{payrollRevealed ? money(b.payroll) : "••••••"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -85,7 +92,7 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
                 <tr className="border-t-2 border-slate-200 font-bold bg-slate-50">
                   <td className="px-4 py-3">Total</td>
                   <td className="px-4 py-3 text-right">{totalActiveStaff}</td>
-                  <td className="px-4 py-3 text-right">{money(totalPayroll)}</td>
+                  <td className="px-4 py-3 text-right">{payrollRevealed ? money(totalPayroll) : "••••••"}</td>
                 </tr>
               </tfoot>
             </table>
