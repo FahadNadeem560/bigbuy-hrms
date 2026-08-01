@@ -355,7 +355,7 @@ export default function BigBuyHRMS({ profile }) {
       {/* Payroll & Finance */}
       {active === "payroll-automation" && <PayrollAutomation role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
       {active === "payroll"            && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
-      {active === "salary-reports"     && <SalaryReports />}
+      {active === "salary-reports"     && <SalaryReports role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
       {active === "allowances"         && <AllowancesHub role={role} />}
       {active === "payroll-extras"     && <PayrollExtras role={role} />}
       {active === "loans"              && <LoanHub role={role} />}

@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
+import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -283,9 +284,11 @@ function ImportPanel({ employees, onDone }) {
 
 const BLANK = { employee: null, prevSalary: "", newSalary: "", reason: "", approvedBy: "HR", date: new Date().toISOString().slice(0, 10), type: "Increment" };
 
-export default function IncrementHistory() {
+export default function IncrementHistory({ role, actorName, actorEmployeeCode }) {
+  const isMasterGm = ["Master", "GM"].includes(role);
   const [employees, setEmployees] = useState([]);
   const [increments, setIncrements] = useState([]);
+  const [incentivesByCode, setIncentivesByCode] = useState({});
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -309,10 +312,17 @@ export default function IncrementHistory() {
     ]);
     setEmployees(emps || []);
     setIncrements(incs || []);
+    if (isMasterGm) {
+      fetchActiveConfidentialIncentives().then(rows => {
+        const byCode = {};
+        rows.forEach(r => { byCode[r.employee_code] = (byCode[r.employee_code] || 0) + Number(r.amount || 0); });
+        setIncentivesByCode(byCode);
+      }).catch(() => setIncentivesByCode({}));
+    }
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [role]);
 
   const pct = useMemo(() => {
     if (!form.prevSalary || !form.newSalary) return 0;
@@ -331,6 +341,7 @@ export default function IncrementHistory() {
       p_type: form.type || "Increment",
       p_approved_by: form.approvedBy,
       p_submitted_by: "HR",
+      p_confidential_incentive_at_time: isMasterGm ? (incentivesByCode[form.employee.employee_code] || 0) : null,
     });
     if (error) return setErr(error.message);
     setMsg(`Increment recorded for ${form.employee.full_name}: ${money(form.prevSalary)} → ${money(form.newSalary)} (+${pct}%). Employee salary updated.`);
@@ -556,19 +567,22 @@ export default function IncrementHistory() {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                {["Emp Code", "Employee Name", "Effective Month", "Previous Salary", "New Salary", "Increment Amount", "Increment %", "Type", "Status"].map(h => (
+                {["Emp Code", "Employee Name", "Effective Month", "Previous Salary", "New Salary", "Increment Amount", "Increment %", "Type", "Status",
+                  ...(isMasterGm ? ["Monthly Incentive", "Total Effective Comp."] : [])].map(h => (
                   <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0
-                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No increment records found.</td></tr>
+                ? <tr><td colSpan={isMasterGm ? 11 : 9} className="px-4 py-8 text-center text-slate-400">No increment records found.</td></tr>
                 : filtered.map(inc => {
                   const amt = Number(inc.increment_amount) || 0;
                   const pctV = Number(inc.increment_percentage) || 0;
                   const isPos = amt >= 0;
                   const month = inc.effective_from ? inc.effective_from.slice(0, 7) : "—";
+                  const liveIncentive = incentivesByCode[inc.employee_code] || 0;
+                  const incentiveAtTime = inc.confidential_incentive_at_time != null ? Number(inc.confidential_incentive_at_time) : liveIncentive;
                   return (
                     <tr key={inc.id} className="hover:bg-slate-50/50">
                       <td className="px-4 py-3 text-slate-500">{inc.employee_code}</td>
@@ -592,6 +606,14 @@ export default function IncrementHistory() {
                           {inc.status || "Approved"}
                         </Badge>
                       </td>
+                      {isMasterGm && (
+                        <td className="px-4 py-3 text-purple-700" title="Current confidential incentive for this employee">{liveIncentive > 0 ? money(liveIncentive) : "—"}</td>
+                      )}
+                      {isMasterGm && (
+                        <td className="px-4 py-3 font-semibold text-purple-800" title="Previous salary + confidential incentive at the time of this increment">
+                          {money(Number(inc.old_salary || 0) + incentiveAtTime)}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

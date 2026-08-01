@@ -2334,4 +2334,176 @@ CREATE POLICY advances_select_audit ON public.advances
   FOR SELECT TO authenticated
   USING (((SELECT private.current_hrms_role()) = 'Audit'::text));
 -- =============================================================
+
+-- =============================================================
+-- 2026-08-01: confidential_incentives_phase1
+-- =============================================================
+-- Extends the existing cash_incentives table (already a Master/GM-only
+-- confidential incentive feature) with a *recurring* register on top of
+-- its original one-off log: is_recurring/effective_from/effective_to/
+-- is_active/change_reason. Existing one-off rows are unaffected
+-- (is_recurring defaults false). Chose to extend this table rather than
+-- create a parallel confidential_incentives table, per explicit user
+-- decision — avoids two competing "secret pay" systems feeding two
+-- different Finance totals.
+--
+-- Also tightened cash_incentives_select: it previously allowed Finance
+-- direct row-level SELECT (individual employee names + amounts), which
+-- conflicts with "Finance sees branch totals only, never employee
+-- detail." Finance/HR now go through cash_incentive_branch_totals(), a
+-- SECURITY DEFINER RPC that returns branch+total only — the sanctioned
+-- way to give aggregate access without opening row-level RLS.
+--
+-- New tables cash_incentive_history (audit trail) and
+-- cash_incentive_monthly (per-employee snapshot generated at payroll-
+-- generation time, pro-rated for the recurring amount, feeds Finance
+-- Reconciliation's "Incentive Cash Distributed" mark-as-paid flow) are
+-- both RLS-locked to Master/GM only, same pattern as cash_incentives.
+--
+-- salary_increments gained confidential_incentive_at_time (nullable) so
+-- increment history can show "Total Effective Compensation at time of
+-- increment" for Master/GM. apply_salary_increment gained a trailing
+-- optional p_confidential_incentive_at_time param (DROP+CREATE, not bare
+-- CREATE OR REPLACE, since adding a param changes the signature and
+-- would otherwise create an overload instead of truly replacing it).
+--
+-- IMPORTANT project-wide gotcha discovered while doing this: this
+-- Supabase project has a default-privileges rule that auto-grants
+-- `anon` full privileges (including TABLE TRUNCATE, which bypasses RLS
+-- entirely) on every newly created table, and EXECUTE on every newly
+-- created function, regardless of an explicit `GRANT ... TO
+-- authenticated` in the same migration. Confirmed via
+-- information_schema.table_privileges / pg_proc.proacl after applying
+-- the GRANTs below — anon still showed up and had to be revoked in a
+-- separate follow-up statement. Any future migration that creates a
+-- new table or SECURITY DEFINER function on this project MUST include
+-- an explicit `REVOKE ALL ... FROM anon` / `REVOKE EXECUTE ... FROM
+-- anon` immediately after, or it will silently inherit anon access.
+
+ALTER TABLE public.cash_incentives
+  ADD COLUMN IF NOT EXISTS is_recurring   BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS effective_from DATE,
+  ADD COLUMN IF NOT EXISTS effective_to   DATE,
+  ADD COLUMN IF NOT EXISTS is_active      BOOLEAN DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS change_reason  TEXT;
+
+DROP POLICY IF EXISTS cash_incentives_select ON public.cash_incentives;
+CREATE POLICY cash_incentives_select ON public.cash_incentives FOR SELECT TO public
+  USING ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','GM']));
+
+CREATE TABLE IF NOT EXISTS public.cash_incentive_history (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  employee_id UUID REFERENCES employees(id),
+  employee_code TEXT, employee_name TEXT, branch TEXT,
+  action TEXT, -- Added | Amended | Removed
+  old_amount NUMERIC, new_amount NUMERIC,
+  effective_from DATE, effective_to DATE, reason TEXT,
+  actioned_by TEXT, actioned_by_role TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.cash_incentive_monthly (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  payroll_month TEXT NOT NULL,
+  employee_id UUID REFERENCES employees(id),
+  employee_code TEXT, employee_name TEXT, branch TEXT, department TEXT,
+  amount NUMERIC DEFAULT 0, -- prorated recurring + this month's one-off, combined
+  is_paid BOOLEAN DEFAULT FALSE, paid_at TIMESTAMPTZ, paid_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(payroll_month, employee_code)
+);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.cash_incentive_history TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.cash_incentive_monthly TO authenticated;
+ALTER TABLE public.cash_incentive_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cash_incentive_monthly ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY cash_incentive_history_all ON public.cash_incentive_history FOR ALL TO public
+  USING ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','GM']))
+  WITH CHECK ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','GM']));
+
+CREATE POLICY cash_incentive_monthly_all ON public.cash_incentive_monthly FOR ALL TO public
+  USING ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','GM']))
+  WITH CHECK ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','GM']));
+
+CREATE OR REPLACE FUNCTION public.cash_incentive_branch_totals(p_month TEXT)
+RETURNS TABLE(branch TEXT, total NUMERIC)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT COALESCE(branch, 'Unassigned'), SUM(amount)
+  FROM cash_incentive_monthly WHERE payroll_month = p_month GROUP BY 1;
+$$;
+GRANT EXECUTE ON FUNCTION public.cash_incentive_branch_totals(TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.mark_incentives_paid_for_branch(p_month TEXT, p_branch TEXT, p_actor TEXT)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF (SELECT private.current_hrms_role()) NOT IN ('Finance','Master') THEN
+    RAISE EXCEPTION 'Not authorized';
+  END IF;
+  UPDATE cash_incentive_monthly SET is_paid = TRUE, paid_at = NOW(), paid_by = p_actor
+  WHERE payroll_month = p_month AND branch = p_branch;
+END; $$;
+GRANT EXECUTE ON FUNCTION public.mark_incentives_paid_for_branch(TEXT, TEXT, TEXT) TO authenticated;
+
+ALTER TABLE public.salary_increments
+  ADD COLUMN IF NOT EXISTS confidential_incentive_at_time NUMERIC;
+
+DROP FUNCTION IF EXISTS public.apply_salary_increment(text, numeric, date, text, text, text);
+CREATE OR REPLACE FUNCTION public.apply_salary_increment(
+  p_employee_code TEXT, p_new_salary NUMERIC, p_effective_from DATE DEFAULT CURRENT_DATE,
+  p_type TEXT DEFAULT 'Increment'::TEXT, p_approved_by TEXT DEFAULT 'HR'::TEXT,
+  p_submitted_by TEXT DEFAULT 'HR'::TEXT, p_confidential_incentive_at_time NUMERIC DEFAULT NULL
+)
+RETURNS salary_increments
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+declare
+  v_old_salary numeric; v_name text; v_amount numeric; v_pct numeric; v_row public.salary_increments;
+begin
+  select salary, full_name into v_old_salary, v_name from public.employees where employee_code = p_employee_code for update;
+  if not found then raise exception 'Employee % not found', p_employee_code; end if;
+  perform set_config('app.suppress_increment_trigger', 'true', true);
+  update public.employees set salary = p_new_salary where employee_code = p_employee_code;
+  v_amount := p_new_salary - coalesce(v_old_salary, 0);
+  v_pct := case when coalesce(v_old_salary, 0) > 0 then round((v_amount / v_old_salary) * 10000) / 100 else null end;
+  insert into public.salary_increments (
+    employee_code, employee_name, old_salary, new_salary, effective_from,
+    increment_amount, increment_percentage, type, status,
+    submitted_by, approved_by, approved_at, created_at, confidential_incentive_at_time
+  ) values (
+    p_employee_code, v_name, v_old_salary, p_new_salary, p_effective_from,
+    v_amount, v_pct, coalesce(p_type, 'Increment'), 'Approved',
+    coalesce(p_submitted_by, 'HR'), coalesce(p_approved_by, 'HR'), now(), now(), p_confidential_incentive_at_time
+  ) returning * into v_row;
+  return v_row;
+end;
+$function$;
+GRANT EXECUTE ON FUNCTION public.apply_salary_increment(text, numeric, date, text, text, text, numeric) TO authenticated;
+
+-- The anon-default-privileges gotcha (see note above) — close it on
+-- everything this migration touched.
+REVOKE ALL ON public.cash_incentives FROM anon;
+REVOKE ALL ON public.cash_incentive_history FROM anon;
+REVOKE ALL ON public.cash_incentive_monthly FROM anon;
+REVOKE EXECUTE ON FUNCTION public.cash_incentive_branch_totals(TEXT) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.mark_incentives_paid_for_branch(TEXT, TEXT, TEXT) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.apply_salary_increment(text, numeric, date, text, text, text, numeric) FROM anon;
+-- =============================================================
+
+-- =============================================================
+-- 2026-08-01: confidential_incentives_branch_totals_add_paid_flag
+-- =============================================================
+-- Follow-up to confidential_incentives_phase1: Finance Reconciliation
+-- needs a per-branch "already marked paid this month" flag alongside the
+-- total, without row-level access to cash_incentive_monthly. Extended
+-- cash_incentive_branch_totals to also return is_paid (bool_and across
+-- that branch's rows for the month — true only once every row is paid).
+DROP FUNCTION IF EXISTS public.cash_incentive_branch_totals(TEXT);
+CREATE OR REPLACE FUNCTION public.cash_incentive_branch_totals(p_month TEXT)
+RETURNS TABLE(branch TEXT, total NUMERIC, is_paid BOOLEAN)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT COALESCE(branch, 'Unassigned'), SUM(amount), bool_and(is_paid)
+  FROM cash_incentive_monthly WHERE payroll_month = p_month GROUP BY 1;
+$$;
+GRANT EXECUTE ON FUNCTION public.cash_incentive_branch_totals(TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.cash_incentive_branch_totals(TEXT) FROM anon;
 -- =============================================================

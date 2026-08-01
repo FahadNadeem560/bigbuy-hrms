@@ -1,30 +1,43 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
-import { PageTitle } from "../components/ui.jsx";
+import { PageTitle, Button } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { fetchCashIncentives, summarizeCashIncentivesByBranch } from "../services/payrollControlService.js";
+import { fetchCashIncentiveBranchTotals, markIncentivesPaidForBranch } from "../services/payrollControlService.js";
 
-export default function FinanceReconciliation({ role, month, setMonth }) {
+export default function FinanceReconciliation({ role, month, setMonth, actorName }) {
   const [payroll, setPayroll] = useState([]);
   const [employees, setEmployees] = useState([]);
-  const [incentives, setIncentives] = useState([]);
+  const [incentiveBranchTotals, setIncentiveBranchTotals] = useState([]);
+  const [marking, setMarking] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
 
   useEffect(() => { load(); }, [month]);
 
   async function load() {
-    const [{ data: pr }, { data: emps }, incRows] = await Promise.all([
+    const [{ data: pr }, { data: emps }, branchTotals] = await Promise.all([
       supabase.from("payroll").select("*").eq("payroll_month", month),
       supabase.from("employees").select("employee_code, branch, full_name"),
-      fetchCashIncentives(month),
+      fetchCashIncentiveBranchTotals(month).catch(() => []),
     ]);
     setPayroll(pr || []);
     setEmployees(emps || []);
-    setIncentives(incRows);
+    setIncentiveBranchTotals(branchTotals);
+  }
+
+  async function markPaid(branch) {
+    setMarking(branch); setErr(""); setMsg("");
+    try {
+      await markIncentivesPaidForBranch(month, branch, actorName || role);
+      setMsg(`Incentive cash for ${branch} marked as distributed.`);
+      load();
+    } catch (e) { setErr(e.message); }
+    finally { setMarking(null); }
   }
 
   const empByCode = useMemo(() => Object.fromEntries(employees.map(e => [e.employee_code, e])), [employees]);
-  const incentiveByBranch = useMemo(() => Object.fromEntries(summarizeCashIncentivesByBranch(incentives).map(b => [b.branch, b.total])), [incentives]);
-  const cashIncentiveTotal = useMemo(() => incentives.reduce((s, r) => s + Number(r.amount || 0), 0), [incentives]);
+  const incentiveByBranch = useMemo(() => Object.fromEntries(incentiveBranchTotals.map(b => [b.branch, b.total])), [incentiveBranchTotals]);
+  const cashIncentiveTotal = useMemo(() => incentiveBranchTotals.reduce((s, b) => s + Number(b.total || 0), 0), [incentiveBranchTotals]);
 
   const rows = useMemo(() => payroll.map(r => ({
     ...r,
@@ -45,6 +58,8 @@ export default function FinanceReconciliation({ role, month, setMonth }) {
     return { normal, fnf, holdover, cashIncentiveTotal, totalToPay, alreadyPaid, remaining };
   }, [rows, cashIncentiveTotal]);
 
+  const incentivePaidByBranch = useMemo(() => Object.fromEntries(incentiveBranchTotals.map(b => [b.branch, !!b.is_paid])), [incentiveBranchTotals]);
+
   const byBranch = useMemo(() => {
     const acc = {};
     rows.forEach(r => {
@@ -57,8 +72,9 @@ export default function FinanceReconciliation({ role, month, setMonth }) {
     return Object.values(acc).map(b => ({
       ...b, cashIncentives: incentiveByBranch[b.branch] || 0,
       total: b.payable + (incentiveByBranch[b.branch] || 0),
+      incentivePaid: incentivePaidByBranch[b.branch] || false,
     })).sort((a, b) => a.branch.localeCompare(b.branch));
-  }, [rows, incentiveByBranch]);
+  }, [rows, incentiveByBranch, incentivePaidByBranch]);
 
   const Line = ({ label, value, bold, highlight }) => (
     <div className={`flex justify-between items-center py-2.5 px-4 ${highlight ? "bg-emerald-50 rounded-xl font-bold text-emerald-800" : bold ? "font-semibold" : ""} border-b border-slate-50 last:border-0`}>
@@ -87,12 +103,15 @@ export default function FinanceReconciliation({ role, month, setMonth }) {
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm bg-white" />
       </div>
 
+      {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
+      {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
+
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-2 mb-6 max-w-xl">
         <div className="px-3 pt-2 pb-1"><h2 className="font-bold text-slate-800">Finance Payment Schedule — {month}</h2></div>
         <Line label="Regular Payroll (Normal)" value={totals.normal} />
         <Line label="F&F Settlements" value={totals.fnf} />
         <Line label="Previous Month Holdover" value={totals.holdover} />
-        <Line label="Cash Incentives (by branch)" value={totals.cashIncentiveTotal} />
+        <Line label="Additional Payments (by branch)" value={totals.cashIncentiveTotal} />
         <Line label="TOTAL TO PAY" value={totals.totalToPay} bold />
         <Line label="Already Paid" value={totals.alreadyPaid} />
         <Line label="Remaining" value={totals.remaining} highlight />
@@ -100,13 +119,13 @@ export default function FinanceReconciliation({ role, month, setMonth }) {
 
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Branch-wise Breakdown</h2></div>
-        <table className="w-full min-w-[720px] text-sm">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Branch", "Payable", "Hold", "No F&F", "Cash Incentives", "Total"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["Branch", "Payable", "Hold", "No F&F", "Additional Payments", "Total", "Incentive Cash Distributed"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {byBranch.length === 0
-              ? <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No payroll data for {month}.</td></tr>
+              ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No payroll data for {month}.</td></tr>
               : byBranch.map(b => (
                 <tr key={b.branch}>
                   <td className="px-4 py-3 font-medium">{b.branch}</td>
@@ -115,6 +134,19 @@ export default function FinanceReconciliation({ role, month, setMonth }) {
                   <td className="px-4 py-3 text-red-500">{money(b.noFnf)}</td>
                   <td className="px-4 py-3">{money(b.cashIncentives)}</td>
                   <td className="px-4 py-3 font-bold">{money(b.total)}</td>
+                  <td className="px-4 py-3">
+                    {b.cashIncentives <= 0 ? (
+                      <span className="text-slate-300">—</span>
+                    ) : b.incentivePaid ? (
+                      <span className="text-emerald-600 font-medium text-xs">✓ Distributed</span>
+                    ) : (
+                      <label className="flex items-center gap-2 text-xs text-slate-500 cursor-pointer">
+                        <input type="checkbox" disabled={marking === b.branch}
+                          onChange={() => { if (window.confirm(`Mark incentive cash for ${b.branch} as distributed?`)) markPaid(b.branch); }} />
+                        {marking === b.branch ? "Saving…" : "Mark distributed"}
+                      </label>
+                    )}
+                  </td>
                 </tr>
               ))}
           </tbody>

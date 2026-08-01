@@ -248,6 +248,144 @@ export async function addCashIncentive({ employeeId, employeeCode, employeeName,
   if (error) throw error;
 }
 
+// ══════════════════ Confidential Incentives (recurring register) ══════════════════
+// Standing monthly amount an employee receives until amended/removed — distinct
+// from the one-off cash_incentives log above, but stored in the same table
+// (is_recurring = true) so Master/GM have one place for confidential pay.
+
+export async function fetchActiveConfidentialIncentives() {
+  const { data, error } = await supabase.from("cash_incentives").select("*")
+    .eq("is_recurring", true).eq("is_active", true).order("employee_name");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addConfidentialIncentive({ employeeId, employeeCode, employeeName, branch, department, amount, effectiveFrom, addedBy, addedByRole, reason }) {
+  if (!(Number(amount) > 0)) throw new Error("Amount must be greater than zero.");
+  if (!effectiveFrom) throw new Error("Effective From date is required.");
+  const { data, error } = await supabase.from("cash_incentives").insert({
+    employee_id: employeeId || null, employee_code: employeeCode, employee_name: employeeName,
+    branch: branch || null, department: department || null, amount: Number(amount),
+    is_recurring: true, is_active: true, effective_from: effectiveFrom,
+    change_reason: reason || null, given_by: addedBy, given_by_role: addedByRole,
+  }).select().single();
+  if (error) throw error;
+  await supabase.from("cash_incentive_history").insert({
+    employee_id: employeeId || null, employee_code: employeeCode, employee_name: employeeName, branch: branch || null,
+    action: "Added", old_amount: null, new_amount: Number(amount),
+    effective_from: effectiveFrom, effective_to: null, reason: reason || null,
+    actioned_by: addedBy, actioned_by_role: addedByRole,
+  });
+  return data;
+}
+
+export async function amendConfidentialIncentive({ id, employeeCode, employeeName, branch, oldAmount, newAmount, effectiveFrom, reason, actionedBy, actionedByRole }) {
+  if (!(Number(newAmount) > 0)) throw new Error("Amount must be greater than zero.");
+  if (!effectiveFrom) throw new Error("Effective From date is required.");
+  const { error } = await supabase.from("cash_incentives").update({
+    amount: Number(newAmount), effective_from: effectiveFrom, change_reason: reason || null,
+  }).eq("id", id);
+  if (error) throw error;
+  await supabase.from("cash_incentive_history").insert({
+    employee_code: employeeCode, employee_name: employeeName, branch: branch || null,
+    action: "Amended", old_amount: Number(oldAmount), new_amount: Number(newAmount),
+    effective_from: effectiveFrom, effective_to: null, reason: reason || null,
+    actioned_by: actionedBy, actioned_by_role: actionedByRole,
+  });
+}
+
+export async function removeConfidentialIncentive({ id, employeeCode, employeeName, branch, amount, reason, actionedBy, actionedByRole }) {
+  if (!reason || !reason.trim()) throw new Error("A reason is required to remove an incentive.");
+  const today = new Date().toISOString().slice(0, 10);
+  const { error } = await supabase.from("cash_incentives").update({
+    effective_to: today, is_active: false, change_reason: reason,
+  }).eq("id", id);
+  if (error) throw error;
+  await supabase.from("cash_incentive_history").insert({
+    employee_code: employeeCode, employee_name: employeeName, branch: branch || null,
+    action: "Removed", old_amount: Number(amount), new_amount: null,
+    effective_from: null, effective_to: today, reason,
+    actioned_by: actionedBy, actioned_by_role: actionedByRole,
+  });
+}
+
+export async function fetchConfidentialIncentiveHistory({ employee, branch, action, dateFrom, dateTo } = {}) {
+  let q = supabase.from("cash_incentive_history").select("*").order("created_at", { ascending: false });
+  if (branch) q = q.eq("branch", branch);
+  if (action) q = q.eq("action", action);
+  if (dateFrom) q = q.gte("created_at", dateFrom);
+  if (dateTo) q = q.lte("created_at", `${dateTo}T23:59:59`);
+  const { data, error } = await q;
+  if (error) throw error;
+  let rows = data || [];
+  if (employee) {
+    const lq = employee.trim().toLowerCase();
+    rows = rows.filter(r => (r.employee_name || "").toLowerCase().includes(lq) || String(r.employee_code || "").toLowerCase().includes(lq));
+  }
+  return rows;
+}
+
+// Runs at "Generate Payroll" time: snapshots this month's confidential
+// incentive total per employee (prorated recurring + this month's one-off
+// entries) into cash_incentive_monthly, which is what Finance/HR/Payroll
+// Summary read from — never the raw cash_incentives table directly.
+export async function generateCashIncentiveSnapshot(month) {
+  const [y, m] = month.split("-").map(Number);
+  const monthStart = new Date(y, m - 1, 1);
+  const monthEnd = new Date(y, m, 0); // last day of month
+  const daysInMonth = monthEnd.getDate();
+  const monthStartStr = monthStart.toISOString().slice(0, 10);
+  const monthEndStr = monthEnd.toISOString().slice(0, 10);
+
+  const { data: recurring } = await supabase.from("cash_incentives").select("*")
+    .eq("is_recurring", true).eq("is_active", true)
+    .lte("effective_from", monthEndStr)
+    .or(`effective_to.is.null,effective_to.gte.${monthStartStr}`);
+  const { data: oneOff } = await supabase.from("cash_incentives").select("*")
+    .eq("is_recurring", false).eq("payroll_month", month);
+
+  const totals = {}; // employee_code -> { amount, employee_id, employee_name, branch, department }
+  const touch = (r, amt) => {
+    const key = r.employee_code;
+    if (!totals[key]) totals[key] = { employee_id: r.employee_id, employee_code: r.employee_code, employee_name: r.employee_name, branch: r.branch, department: r.department, amount: 0 };
+    totals[key].amount += amt;
+  };
+
+  (recurring || []).forEach(r => {
+    const effFrom = new Date(r.effective_from);
+    let amt = Number(r.amount || 0);
+    if (effFrom > monthStart && effFrom <= monthEnd) {
+      const remainingDays = daysInMonth - effFrom.getDate() + 1;
+      amt = Math.round((Number(r.amount || 0) / 30) * remainingDays);
+    }
+    touch(r, amt);
+  });
+  (oneOff || []).forEach(r => touch(r, Number(r.amount || 0)));
+
+  const rows = Object.values(totals).filter(r => r.amount > 0).map(r => ({ ...r, payroll_month: month }));
+  if (rows.length === 0) return 0;
+  const { error } = await supabase.from("cash_incentive_monthly").upsert(rows, { onConflict: "payroll_month,employee_code" });
+  if (error) throw error;
+  return rows.length;
+}
+
+export async function fetchCashIncentiveBranchTotals(month) {
+  const { data, error } = await supabase.rpc("cash_incentive_branch_totals", { p_month: month });
+  if (error) throw error;
+  return (data || []).sort((a, b) => (a.branch || "").localeCompare(b.branch || ""));
+}
+
+export async function fetchCashIncentiveMonthly(month) {
+  const { data, error } = await supabase.from("cash_incentive_monthly").select("*").eq("payroll_month", month).order("employee_name");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function markIncentivesPaidForBranch(month, branch, actor) {
+  const { error } = await supabase.rpc("mark_incentives_paid_for_branch", { p_month: month, p_branch: branch, p_actor: actor });
+  if (error) throw error;
+}
+
 // ══════════════════════════ Supervisor Verification ══════════════════════════
 export async function generateVerificationsForMonth(month) {
   const { data: hierarchy } = await supabase.from("employee_hierarchy").select("*").eq("is_active", true);

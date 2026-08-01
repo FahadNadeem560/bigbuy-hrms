@@ -8,8 +8,9 @@ import {
   PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, PAYMENT_STATUS_TONES,
   canTransitionPaymentStatus, requiresMasterOnly, requestPaymentStatusChange,
   getPayrollLock, lockPayrollMonth, unlockPayrollMonth, mergePersistentPayrollFields,
-  fetchCashIncentives, generateVerificationsForMonth, fetchVerifications,
+  generateVerificationsForMonth, fetchVerifications,
   getVerificationProgress, respondToFlag,
+  generateCashIncentiveSnapshot, fetchCashIncentiveMonthly, fetchCashIncentiveBranchTotals,
 } from "../services/payrollControlService.js";
 import PayrollHold from "./PayrollHold.jsx";
 import CashIncentives from "./CashIncentives.jsx";
@@ -17,7 +18,7 @@ import FinanceReconciliation from "./FinanceReconciliation.jsx";
 import { queueWhatsappMessage, MESSAGE_TYPES } from "../services/whatsappService.js";
 
 const STATUS_TONES = { Draft: "yellow", Approved: "blue", Published: "green", Locked: "purple", Paid: "green", Completed: "green" };
-const TABS = [["register", "Payroll Register"], ["hold", "Hold & F&F"], ["cash", "Cash Incentives"], ["finance", "Finance Reconciliation"]];
+const TABS = [["register", "Payroll Register"], ["hold", "Hold & F&F"], ["cash", "Confidential Incentives"], ["finance", "Finance Reconciliation"]];
 
 // ── Publish confirmation modal ────────────────────────────────
 function PublishModal({ month, onConfirm, onCancel }) {
@@ -211,7 +212,7 @@ function PayslipModal({ row, month, onClose }) {
 }
 
 // ── Payroll Summary Panel (bifurcation) ─────────────────────────
-function SummaryPanel({ month, displayRows, cashIncentiveTotal, role }) {
+function SummaryPanel({ month, displayRows, cashIncentiveTotal, role, incentiveMonthlyRows, incentiveBranchTotals }) {
   const buckets = useMemo(() => {
     const acc = { Normal: { count: 0, amt: 0 }, FnF: { count: 0, amt: 0 }, Hold: { count: 0, amt: 0 }, No_FnF: { count: 0, amt: 0 } };
     let holdoverCount = 0, holdoverAmt = 0;
@@ -236,27 +237,59 @@ function SummaryPanel({ month, displayRows, cashIncentiveTotal, role }) {
       <td className="px-4 py-2 text-sm text-right">{money(amt)}</td>
     </tr>
   );
+  const isMasterGm = ["Master", "GM"].includes(role);
+  const incentiveLabel = isMasterGm ? "Confidential Incentives" : role === "Finance" ? "Additional Payments (by branch)" : "Additional Payments";
   return (
-    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
-      <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payroll Summary — {month}</h2></div>
-      <table className="w-full text-sm min-w-[480px]">
-        <thead className="bg-slate-50 text-slate-500">
-          <tr><th className="text-left px-4 py-2 font-medium">Category</th><th className="text-right px-4 py-2 font-medium">Employees</th><th className="text-right px-4 py-2 font-medium">Amount</th></tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          <Row label="Total Generated" count={buckets.totalGenerated} amt={buckets.totalGeneratedAmt} bold />
-          <Row label="Normal (Payable)" count={buckets.acc.Normal.count} amt={buckets.acc.Normal.amt} />
-          <Row label="F&F Settlement" count={buckets.acc.FnF.count} amt={buckets.acc.FnF.amt} />
-          <Row label="Hold" count={buckets.acc.Hold.count} amt={buckets.acc.Hold.amt} />
-          <Row label="No F&F" count={buckets.acc.No_FnF.count} amt={buckets.acc.No_FnF.amt} />
-          <Row label="TOTAL PAYABLE ✅" count={buckets.totalPayableCount} amt={buckets.totalPayable} highlight />
-          <Row label="Previous Month Holdover" count={buckets.holdoverCount} amt={buckets.holdoverAmt} sub />
-          {["Master", "GM"].includes(role) && buckets.acc && cashIncentiveTotal > 0 && (
-            <Row label="Cash Incentives (Confidential)" amt={cashIncentiveTotal} sub />
-          )}
-          <Row label="FINANCE TOTAL" amt={buckets.financeTotal} bold />
-        </tbody>
-      </table>
+    <div className="mb-4">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+        <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payroll Summary — {month}</h2></div>
+        <table className="w-full text-sm min-w-[480px]">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr><th className="text-left px-4 py-2 font-medium">Category</th><th className="text-right px-4 py-2 font-medium">Employees</th><th className="text-right px-4 py-2 font-medium">Amount</th></tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            <Row label="Total Generated" count={buckets.totalGenerated} amt={buckets.totalGeneratedAmt} bold />
+            <Row label="Normal (Payable)" count={buckets.acc.Normal.count} amt={buckets.acc.Normal.amt} />
+            <Row label="F&F Settlement" count={buckets.acc.FnF.count} amt={buckets.acc.FnF.amt} />
+            <Row label="Hold" count={buckets.acc.Hold.count} amt={buckets.acc.Hold.amt} />
+            <Row label="No F&F" count={buckets.acc.No_FnF.count} amt={buckets.acc.No_FnF.amt} />
+            <Row label="TOTAL PAYABLE ✅" count={buckets.totalPayableCount} amt={buckets.totalPayable} highlight />
+            <Row label="Previous Month Holdover" count={buckets.holdoverCount} amt={buckets.holdoverAmt} sub />
+            {cashIncentiveTotal > 0 && <Row label={incentiveLabel} amt={cashIncentiveTotal} sub />}
+            <Row label="FINANCE TOTAL" amt={buckets.financeTotal} bold />
+          </tbody>
+        </table>
+      </div>
+
+      {isMasterGm && incentiveMonthlyRows?.length > 0 && (
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 mt-2">
+          <h3 className="font-bold text-slate-800 text-sm mb-2">Confidential Incentives — individual breakdown</h3>
+          {incentiveMonthlyRows.map(r => (
+            <div key={r.id} className="flex justify-between items-center py-1.5 text-sm border-b border-slate-50 last:border-0">
+              <span className="text-slate-600">{r.employee_name} <span className="text-xs text-slate-400">{r.employee_code}</span></span>
+              <span className="font-medium">{money(r.amount)}</span>
+            </div>
+          ))}
+          <div className="flex justify-between items-center pt-2 mt-1 border-t border-slate-100 font-bold">
+            <span>Total Confidential</span><span>{money(cashIncentiveTotal)}</span>
+          </div>
+        </div>
+      )}
+
+      {role === "Finance" && incentiveBranchTotals?.length > 0 && (
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 mt-2">
+          <h3 className="font-bold text-slate-800 text-sm mb-2">Additional Payments by Branch</h3>
+          {incentiveBranchTotals.map(b => (
+            <div key={b.branch} className="flex justify-between items-center py-1.5 text-sm border-b border-slate-50 last:border-0">
+              <span className="text-slate-600">{b.branch}</span>
+              <span className="font-medium">{money(b.total)}</span>
+            </div>
+          ))}
+          <div className="flex justify-between items-center pt-2 mt-1 border-t border-slate-100 font-bold">
+            <span>Total Additional Payments</span><span>{money(cashIncentiveTotal)}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -329,6 +362,8 @@ export default function PayrollAutomation({ role, actorName }) {
   const [verifications, setVerifications] = useState([]);
   const [flagNotifications, setFlagNotifications] = useState([]);
   const [cashIncentiveTotal, setCashIncentiveTotal] = useState(0);
+  const [incentiveMonthlyRows, setIncentiveMonthlyRows] = useState([]);
+  const [incentiveBranchTotals, setIncentiveBranchTotals] = useState([]);
   const [marking, setMarking] = useState(false);
 
   function toggleBranchCollapsed(branch) {
@@ -375,14 +410,20 @@ export default function PayrollAutomation({ role, actorName }) {
   }
 
   async function loadLockAndExtras() {
-    const [lock, verifs, cashRows] = await Promise.all([
+    const [lock, verifs, branchTotals] = await Promise.all([
       getPayrollLock(month),
       fetchVerifications(month),
-      fetchCashIncentives(month),
+      fetchCashIncentiveBranchTotals(month).catch(() => []),
     ]);
     setLockInfo(lock);
     setVerifications(verifs);
-    setCashIncentiveTotal(cashRows.reduce((s, r) => s + Number(r.amount || 0), 0));
+    setIncentiveBranchTotals(branchTotals);
+    setCashIncentiveTotal(branchTotals.reduce((s, b) => s + Number(b.total || 0), 0));
+    if (["Master", "GM"].includes(role)) {
+      fetchCashIncentiveMonthly(month).then(setIncentiveMonthlyRows).catch(() => setIncentiveMonthlyRows([]));
+    } else {
+      setIncentiveMonthlyRows([]);
+    }
     const { data: flags } = await supabase.from("notifications").select("*").eq("type", `payroll_flag_${month}`).order("created_at", { ascending: false });
     setFlagNotifications(flags || []);
   }
@@ -513,6 +554,7 @@ export default function PayrollAutomation({ role, actorName }) {
         }
       }
       const verifCount = await generateVerificationsForMonth(month).catch(() => 0);
+      await generateCashIncentiveSnapshot(month).catch(() => {});
       await loadPayroll();
       await loadLockAndExtras();
       setMsg(`Payroll generated for ${rows.length} employees.${verifCount > 0 ? ` Sent to ${verifCount} supervisor(s) for verification.` : ""}`);
@@ -890,7 +932,7 @@ export default function PayrollAutomation({ role, actorName }) {
 
       {tab === "hold" && <PayrollHold role={role} actorName={actorName} month={month} setMonth={setMonth} />}
       {tab === "cash" && <CashIncentives role={role} actorName={actorName} month={month} setMonth={setMonth} />}
-      {tab === "finance" && <FinanceReconciliation role={role} month={month} setMonth={setMonth} />}
+      {tab === "finance" && <FinanceReconciliation role={role} month={month} setMonth={setMonth} actorName={actorName} />}
 
       {tab === "register" && (
       <>
@@ -965,7 +1007,8 @@ export default function PayrollAutomation({ role, actorName }) {
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
-      <SummaryPanel month={month} displayRows={displayRows} cashIncentiveTotal={cashIncentiveTotal} role={role} />
+      <SummaryPanel month={month} displayRows={displayRows} cashIncentiveTotal={cashIncentiveTotal} role={role}
+        incentiveMonthlyRows={incentiveMonthlyRows} incentiveBranchTotals={incentiveBranchTotals} />
 
       {["HR", "Master"].includes(role) && (
         <VerificationPanel month={month} role={role} verifications={verifications} flagNotifications={flagNotifications} onRespond={handleFlagRespond} />

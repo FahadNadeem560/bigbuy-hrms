@@ -9,7 +9,7 @@ const TABS = [
   ["increments",   "Increments"],
 ];
 
-export default function SalaryReports() {
+export default function SalaryReports({ role, actorName, actorEmployeeCode }) {
   const [tab, setTab] = useState("comparison");
   return (
     <div>
@@ -23,7 +23,7 @@ export default function SalaryReports() {
       </div>
       {tab === "comparison"   && <SalaryComparison />}
       {tab === "compensation" && <CompensationManagement />}
-      {tab === "increments"   && <IncrementHistory />}
+      {tab === "increments"   && <IncrementHistory role={role} actorName={actorName} actorEmployeeCode={actorEmployeeCode} />}
     </div>
   );
 }
