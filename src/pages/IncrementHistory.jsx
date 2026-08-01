@@ -5,6 +5,7 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
+import { proposeIncrement } from "../services/incrementService.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -341,7 +342,28 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
 
   async function addIncrement() {
     if (!form.employee || !form.prevSalary || !form.newSalary) return setErr("Employee, previous and new salary are required.");
+    if (role === "GM") return setErr("GM cannot propose increments — only approve or reject in the Approval Queue.");
     setErr("");
+
+    if (role === "HR") {
+      // HR can only propose: inserts a Pending row, no salary change until
+      // Master/GM approves it via the Approval Queue.
+      try {
+        await proposeIncrement({
+          employeeCode: String(form.employee.employee_code), employeeName: form.employee.full_name,
+          oldSalary: Number(form.prevSalary), newSalary: Number(form.newSalary), effectiveFrom: form.date,
+          type: form.type || "Increment", submittedByRole: "HR",
+          confidentialIncentiveAtTime: incentivesByCode[form.employee.employee_code] || 0,
+        });
+      } catch (e) { return setErr(e.message); }
+      setMsg(`Increment proposed for ${form.employee.full_name}: ${money(form.prevSalary)} → ${money(form.newSalary)} (+${pct}%). Awaiting Master/GM approval.`);
+      setForm(BLANK);
+      setShowForm(false);
+      load();
+      return;
+    }
+
+    // Master: instant-apply, same as before.
     // apply_salary_increment updates the employee's live salary and writes
     // the history row in one transaction, so the two can't drift apart.
     const { error } = await supabase.rpc("apply_salary_increment", {
@@ -361,6 +383,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
   }
 
   async function applyBulkIncrement() {
+    if (role !== "Master") return setErr("Bulk increments are Master-only.");
     if (!bulkValue) return setErr("Enter increment value.");
     setErr("");
     const targets = employees.filter(e => {
@@ -518,9 +541,11 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               <Button variant="outline" className="rounded-2xl" onClick={() => { setShowImport(s => !s); setShowForm(false); }}>
                 {showImport ? "Close Import" : "Import History"}
               </Button>
-              <Button className="rounded-2xl" onClick={() => { setShowForm(s => !s); setShowImport(false); }}>
-                {showForm ? "Cancel" : "+ Add Increment"}
-              </Button>
+              {role !== "GM" && (
+                <Button className="rounded-2xl" onClick={() => { setShowForm(s => !s); setShowImport(false); }}>
+                  {showForm ? "Cancel" : role === "HR" ? "+ Propose Increment" : "+ Add Increment"}
+                </Button>
+              )}
             </div>
           ) : null
         }
@@ -552,11 +577,16 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               className={`px-4 py-2 rounded-xl text-sm font-medium transition ${!bulkMode ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
               Individual
             </button>
-            <button onClick={() => setBulkMode(true)}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition ${bulkMode ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
-              Bulk by Dept/Branch
-            </button>
+            {role === "Master" && (
+              <button onClick={() => setBulkMode(true)}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition ${bulkMode ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600"}`}>
+                Bulk by Dept/Branch
+              </button>
+            )}
           </div>
+          {role === "HR" && (
+            <p className="text-xs text-amber-600 mb-3">Bulk increments apply instantly and are Master-only. Individual increments you submit go to Master/GM for approval.</p>
+          )}
 
           {!bulkMode ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -601,7 +631,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                   className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
               </div>
               <div className="md:col-span-2 flex gap-2">
-                <Button onClick={addIncrement} className="rounded-2xl">Save Increment</Button>
+                <Button onClick={addIncrement} className="rounded-2xl">{role === "HR" ? "Submit for Approval" : "Save Increment"}</Button>
                 <Button variant="outline" onClick={() => setShowForm(false)} className="rounded-2xl">Cancel</Button>
               </div>
             </div>

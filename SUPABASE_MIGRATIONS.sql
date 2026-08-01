@@ -2607,3 +2607,76 @@ begin
 end;
 $function$;
 -- =============================================================
+
+-- =============================================================
+-- 2026-08-01: increment_approval_workflow_phase3
+-- =============================================================
+-- Wires up ApprovalQueue's previously-orphaned "Increments" tab: HR
+-- proposes (inserts salary_increments with status='Pending', no salary
+-- change), Master/GM approve or reject. approve_salary_increment is what
+-- actually applies the salary + due-date change, atomically, once
+-- approved.
+--
+-- First version of this function trusted a client-supplied
+-- p_approver_role TEXT parameter for the Master/GM check — any caller
+-- could pass 'Master' and bypass it. Fixed to verify the caller's real
+-- session role via private.current_hrms_role() instead (same helper
+-- mark_incentives_paid_for_branch already uses correctly). Also dropped
+-- the now-unused p_approver_role parameter and closed the PUBLIC-grant
+-- gap on this function.
+CREATE OR REPLACE FUNCTION public.approve_salary_increment(p_increment_id UUID, p_approver_name TEXT)
+RETURNS salary_increments
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE r public.salary_increments%ROWTYPE;
+BEGIN
+  IF (SELECT private.current_hrms_role()) NOT IN ('Master','GM') THEN
+    RAISE EXCEPTION 'Only Master or GM can approve increments';
+  END IF;
+  SELECT * INTO r FROM public.salary_increments WHERE id = p_increment_id AND status = 'Pending' FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Increment not found or not pending';
+  END IF;
+  PERFORM set_config('app.suppress_increment_trigger', 'true', true);
+  UPDATE public.employees SET
+    salary = r.new_salary,
+    last_increment_date = r.effective_from,
+    next_increment_due = r.effective_from + INTERVAL '15 months'
+  WHERE employee_code = r.employee_code;
+  UPDATE public.salary_increments SET status = 'Approved', approved_by = p_approver_name, approved_at = NOW()
+  WHERE id = p_increment_id
+  RETURNING * INTO r;
+  RETURN r;
+END;
+$function$;
+GRANT EXECUTE ON FUNCTION public.approve_salary_increment(UUID, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.approve_salary_increment(UUID, TEXT) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.approve_salary_increment(UUID, TEXT) FROM PUBLIC;
+
+-- salary_increments previously had only the leftover "Allow all for
+-- service role" policy (USING true, TO public) — a full read/write
+-- backdoor for anyone, including anon, that would have let someone
+-- bypass the approval workflow entirely by writing to the table
+-- directly. Replaced with real role-scoped policies (confirmed with the
+-- user before applying, since this widens scope beyond the literal
+-- feature ask). SELECT roles mirror payroll_select (Master/HR/Finance/
+-- GM/Audit) — who already sees this data via Salary Reports/Approval
+-- Queue. INSERT covers HR proposing plus the existing bulk-import panel.
+-- UPDATE is Master/GM only (covers the reject action; approve goes
+-- through the SECURITY DEFINER RPC above, which bypasses RLS). Also
+-- revoked anon's leftover full table grant (including TRUNCATE, which
+-- bypasses RLS regardless of policies) — same anon-default-privileges
+-- gotcha as phase1.
+DROP POLICY IF EXISTS "Allow all for service role" ON public.salary_increments;
+
+CREATE POLICY salary_increments_select ON public.salary_increments FOR SELECT TO authenticated
+  USING ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','HR','Finance','GM','Audit']));
+
+CREATE POLICY salary_increments_insert ON public.salary_increments FOR INSERT TO authenticated
+  WITH CHECK ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','HR','GM']));
+
+CREATE POLICY salary_increments_update ON public.salary_increments FOR UPDATE TO authenticated
+  USING ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','GM']))
+  WITH CHECK ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','GM']));
+
+REVOKE ALL ON public.salary_increments FROM anon;
+-- =============================================================

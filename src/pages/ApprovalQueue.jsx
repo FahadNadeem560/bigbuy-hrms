@@ -4,6 +4,7 @@ import { Badge, Button, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } from "../services/leaveApprovalService.js";
 import { approvePaymentStatusRequest, rejectPaymentStatusRequest, PAYMENT_STATUS_LABELS, requiresMasterOnly } from "../services/payrollControlService.js";
+import { approveIncrement as approveIncrementSvc, rejectIncrement as rejectIncrementSvc } from "../services/incrementService.js";
 
 // Hierarchy-routed requests carry dynamic stage names ("Pending Floor
 // Manager Approval", "Pending Owner Approval", ...) so this can't be a fixed
@@ -246,15 +247,19 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
 
   // ── Increment actions ──
   async function approveIncrement(id) {
-    const inc = increments.find(x => x.id === id);
-    await supabase.from("salary_increments").update({ status: "Approved", approved_by: role, approved_at: new Date().toISOString() }).eq("id", id);
-    await notify("HR", "payroll", "Increment Approved", `Increment for ${inc?.employee_name} approved.`);
-    setMsg("Increment approved."); loadAll();
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can approve increments.");
+    try {
+      await approveIncrementSvc(id, actorName || role);
+      setMsg("Increment approved."); loadAll();
+    } catch (e) { setErr(e.message); }
   }
 
   async function rejectIncrement(id, reason) {
-    await supabase.from("salary_increments").update({ status: "Rejected", rejection_reason: reason }).eq("id", id);
-    setMsg("Increment rejected."); loadAll();
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can reject increments.");
+    try {
+      await rejectIncrementSvc(id, actorName || role, reason);
+      setMsg("Increment rejected."); loadAll();
+    } catch (e) { setErr(e.message); }
   }
 
   // ── Payment status change requests ──
@@ -475,16 +480,17 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       {tab === "increments" && !loading && (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Salary Increments</h2><p className="text-xs text-slate-400">{increments.length} pending</p></div>
-          <table className="w-full min-w-[800px] text-sm">
+          <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Old Salary","New Salary","Increment","Effective From","Submitted By","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee","Branch","Old Salary","New Salary","Increment","Effective From","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {increments.length === 0
-                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No pending increments.</td></tr>
+                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending increments.</td></tr>
                 : increments.map(inc => (
                   <tr key={inc.id}>
                     <td className="px-4 py-3 font-medium">{inc.employee_name || inc.employee_code}</td>
+                    <td className="px-4 py-3 text-slate-500">{empMap[inc.employee_code]?.branch || "—"}</td>
                     <td className="px-4 py-3">{money(inc.old_salary || 0)}</td>
                     <td className="px-4 py-3 font-semibold text-emerald-700">{money(inc.new_salary || 0)}</td>
                     <td className="px-4 py-3">
@@ -492,11 +498,13 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                     </td>
                     <td className="px-4 py-3">{inc.effective_from || "—"}</td>
                     <td className="px-4 py-3 text-slate-500">{inc.submitted_by || "HR"}</td>
+                    <td className="px-4 py-3 text-slate-400 text-xs">{inc.created_at?.slice(0, 10) || "—"}</td>
                     <td className="px-4 py-3">
                       <ApproveRejectBtns
                         id={inc.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
-                        onApprove={approveIncrement} onReject={rejectIncrement} />
+                        onApprove={approveIncrement} onReject={rejectIncrement}
+                        disabled={!["Master", "GM"].includes(role)} />
                     </td>
                   </tr>
                 ))}
