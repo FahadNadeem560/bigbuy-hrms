@@ -284,8 +284,9 @@ function ImportPanel({ employees, onDone }) {
 
 const BLANK = { employee: null, prevSalary: "", newSalary: "", reason: "", approvedBy: "HR", date: new Date().toISOString().slice(0, 10), type: "Increment" };
 
-export default function IncrementHistory({ role, actorName, actorEmployeeCode }) {
+export default function IncrementHistory({ role, actorName, actorEmployeeCode, dueFilter }) {
   const isMasterGm = ["Master", "GM"].includes(role);
+  const [view, setView] = useState("monthly");
   const [employees, setEmployees] = useState([]);
   const [increments, setIncrements] = useState([]);
   const [incentivesByCode, setIncentivesByCode] = useState({});
@@ -299,15 +300,24 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode })
   const [bulkType, setBulkType] = useState("percent");
   const [bulkValue, setBulkValue] = useState("");
   const [filterEmp, setFilterEmp] = useState("");
-  const [filterMonth, setFilterMonth] = useState("");
+  const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
   const [filterType, setFilterType] = useState("");
+  const [monthBranchFilter, setMonthBranchFilter] = useState("");
+  const [monthDeptFilter, setMonthDeptFilter] = useState("");
+  const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
+  const [dueBranchFilter, setDueBranchFilter] = useState(dueFilter?.branch || "");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (dueFilter?.view) setView(dueFilter.view);
+    if (dueFilter?.branch) setDueBranchFilter(dueFilter.branch);
+  }, [dueFilter]);
 
   async function load() {
     setLoading(true);
     const [{ data: emps }, { data: incs }] = await Promise.all([
-      supabase.from("employees").select("employee_code, full_name, department, branch, salary, staff_level").order("full_name"),
+      supabase.from("employees").select("employee_code, full_name, department, branch, salary, staff_level, status, joining_date, last_increment_date, next_increment_due").order("full_name"),
       supabase.from("salary_increments").select("*").order("effective_from", { ascending: false }),
     ]);
     setEmployees(emps || []);
@@ -383,14 +393,119 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode })
     load();
   }
 
+  const empByCode = useMemo(() => Object.fromEntries(employees.map(e => [e.employee_code, e])), [employees]);
+
   const filtered = useMemo(() => increments.filter(i => {
     const empOk = !filterEmp || (i.employee_name || "").toLowerCase().includes(filterEmp.toLowerCase()) || String(i.employee_code).includes(filterEmp);
     const monthOk = !filterMonth || (i.effective_from || "").startsWith(filterMonth);
     const typeOk = !filterType || i.type === filterType;
-    return empOk && monthOk && typeOk;
-  }), [increments, filterEmp, filterMonth, filterType]);
+    const emp = empByCode[i.employee_code];
+    const branchOk = !monthBranchFilter || emp?.branch === monthBranchFilter;
+    const deptOk = !monthDeptFilter || (emp?.department || "").toLowerCase().includes(monthDeptFilter.toLowerCase());
+    return empOk && monthOk && typeOk && branchOk && deptOk;
+  }), [increments, filterEmp, filterMonth, filterType, monthBranchFilter, monthDeptFilter, empByCode]);
 
   const types = useMemo(() => [...new Set(increments.map(i => i.type).filter(Boolean))], [increments]);
+
+  // ── Monthly view summary ──
+  const monthlySummary = useMemo(() => {
+    const uniqueEmployees = new Set(filtered.map(i => i.employee_code));
+    const totalAmount = filtered.reduce((s, i) => s + (Number(i.increment_amount) || 0), 0);
+    const pcts = filtered.map(i => Number(i.increment_percentage)).filter(p => !isNaN(p));
+    const avgPct = pcts.length ? pcts.reduce((s, p) => s + p, 0) / pcts.length : 0;
+    return { employeeCount: uniqueEmployees.size, totalAmount, avgPct };
+  }, [filtered]);
+
+  function exportMonthlyExcel() {
+    const data = filtered.map(i => ({
+      "Emp Code": i.employee_code, Name: i.employee_name, Branch: empByCode[i.employee_code]?.branch || "",
+      Department: empByCode[i.employee_code]?.department || "", "Effective Month": (i.effective_from || "").slice(0, 7),
+      "Old Salary": i.old_salary, "New Salary": i.new_salary, "Increment Amount": i.increment_amount,
+      "Increment %": i.increment_percentage, "Given By": i.submitted_by, Status: i.status,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Monthly Increments");
+    XLSX.writeFile(wb, `increments_monthly_${filterMonth || "all"}.xlsx`);
+  }
+
+  // ── Yearly view pivot ──
+  const MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const yearlyPivot = useMemo(() => {
+    const byEmp = {};
+    increments.forEach(i => {
+      if (!i.effective_from || !i.effective_from.startsWith(yearFilter)) return;
+      const monthIdx = Number(i.effective_from.slice(5, 7)) - 1;
+      if (monthIdx < 0 || monthIdx > 11) return;
+      if (!byEmp[i.employee_code]) {
+        const emp = empByCode[i.employee_code];
+        byEmp[i.employee_code] = {
+          employee_code: i.employee_code, employee_name: i.employee_name,
+          branch: emp?.branch || "—", department: emp?.department || "—",
+          months: Array(12).fill(0), totalIncrements: 0, totalAmount: 0,
+        };
+      }
+      const row = byEmp[i.employee_code];
+      row.months[monthIdx] += Number(i.increment_amount) || 0;
+      row.totalIncrements += 1;
+      row.totalAmount += Number(i.increment_amount) || 0;
+    });
+    return Object.values(byEmp).sort((a, b) => (a.employee_name || "").localeCompare(b.employee_name || ""));
+  }, [increments, yearFilter, empByCode]);
+
+  const yearlySummary = useMemo(() => {
+    const monthTotals = Array(12).fill(0);
+    let totalAmount = 0;
+    yearlyPivot.forEach(row => { row.months.forEach((amt, i) => { monthTotals[i] += amt; }); totalAmount += row.totalAmount; });
+    let bestMonth = 0;
+    monthTotals.forEach((amt, i) => { if (amt > monthTotals[bestMonth]) bestMonth = i; });
+    return { employeeCount: yearlyPivot.length, totalAmount, bestMonthLabel: monthTotals[bestMonth] > 0 ? MONTH_LABELS[bestMonth] : "—" };
+  }, [yearlyPivot]);
+
+  function exportYearlyExcel() {
+    const data = yearlyPivot.map(row => {
+      const obj = { "Emp Code": row.employee_code, Name: row.employee_name, Branch: row.branch, Department: row.department };
+      MONTH_LABELS.forEach((label, i) => { obj[label] = row.months[i] > 0 ? row.months[i] : ""; });
+      obj["Total Increments"] = row.totalIncrements;
+      obj["Total Amount"] = row.totalAmount;
+      return obj;
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `Increments ${yearFilter}`);
+    XLSX.writeFile(wb, `increments_yearly_${yearFilter}.xlsx`);
+  }
+
+  // ── Due for Increment view ──
+  const lastIncrementByCode = useMemo(() => {
+    const map = {};
+    // increments is already sorted effective_from desc, so first hit per
+    // employee_code is their most recent record.
+    increments.forEach(i => { if (!map[i.employee_code]) map[i.employee_code] = i; });
+    return map;
+  }, [increments]);
+
+  const dueList = useMemo(() => {
+    const today = new Date();
+    const cutoff = new Date(today.getTime() + 60 * 86400000);
+    return employees
+      .filter(e => e.status === "Active" && e.next_increment_due && new Date(e.next_increment_due) <= cutoff)
+      .filter(e => !dueBranchFilter || e.branch === dueBranchFilter)
+      .map(e => {
+        const dueDate = new Date(e.next_increment_due);
+        const diffDays = Math.round((dueDate - today) / 86400000);
+        const bucket = diffDays < 0 ? "overdue" : diffDays <= 30 ? "thisMonth" : "nextMonth";
+        const last = lastIncrementByCode[e.employee_code];
+        return { ...e, diffDays, bucket, lastIncrementAmount: last?.increment_amount ?? null };
+      })
+      .sort((a, b) => a.diffDays - b.diffDays);
+  }, [employees, dueBranchFilter, lastIncrementByCode]);
+
+  const dueSummary = useMemo(() => ({
+    overdue: dueList.filter(e => e.bucket === "overdue").length,
+    thisMonth: dueList.filter(e => e.bucket === "thisMonth").length,
+    nextMonth: dueList.filter(e => e.bucket === "nextMonth").length,
+  }), [dueList]);
 
   return (
     <div>
@@ -398,20 +513,34 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode })
         title="Salary Increments"
         subtitle="Track all salary changes with full history."
         action={
-          <div className="flex gap-2">
-            <Button variant="outline" className="rounded-2xl" onClick={() => { setShowImport(s => !s); setShowForm(false); }}>
-              {showImport ? "Close Import" : "Import History"}
-            </Button>
-            <Button className="rounded-2xl" onClick={() => { setShowForm(s => !s); setShowImport(false); }}>
-              {showForm ? "Cancel" : "+ Add Increment"}
-            </Button>
-          </div>
+          view === "monthly" ? (
+            <div className="flex gap-2">
+              <Button variant="outline" className="rounded-2xl" onClick={() => { setShowImport(s => !s); setShowForm(false); }}>
+                {showImport ? "Close Import" : "Import History"}
+              </Button>
+              <Button className="rounded-2xl" onClick={() => { setShowForm(s => !s); setShowImport(false); }}>
+                {showForm ? "Cancel" : "+ Add Increment"}
+              </Button>
+            </div>
+          ) : null
         }
       />
+
+      <div className="flex flex-wrap gap-2 mb-5">
+        {[["monthly", "Monthly View"], ["yearly", "Yearly View"], ["due", "Due for Increment"]].map(([k, l]) => (
+          <button key={k} onClick={() => setView(k)}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition ${view === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+            {l}
+            {k === "due" && dueSummary.overdue > 0 && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{dueSummary.overdue}</span>}
+          </button>
+        ))}
+      </div>
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
+      {view === "monthly" && (
+      <>
       {/* Import Panel */}
       {showImport && <ImportPanel employees={employees} onDone={() => { load(); setShowImport(false); }} />}
 
@@ -514,23 +643,19 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode })
         </div>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      {/* Monthly Summary */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-xs text-slate-500">Total Records</p>
-          <p className="text-2xl font-bold">{increments.length}</p>
+          <p className="text-xs text-slate-500">Employees Incremented{filterMonth ? ` — ${filterMonth}` : ""}</p>
+          <p className="text-2xl font-bold">{monthlySummary.employeeCount}</p>
         </div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-xs text-slate-500">Increments</p>
-          <p className="text-2xl font-bold text-emerald-600">{increments.filter(i => (i.increment_amount || 0) > 0).length}</p>
+          <p className="text-xs text-slate-500">Total Increment Amount</p>
+          <p className="text-2xl font-bold text-emerald-600">{money(monthlySummary.totalAmount)}</p>
         </div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-xs text-slate-500">Downward Revisions</p>
-          <p className="text-2xl font-bold text-red-500">{increments.filter(i => (i.increment_amount || 0) < 0).length}</p>
-        </div>
-        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-xs text-slate-500">Net Cost Change</p>
-          <p className="text-2xl font-bold">{money(increments.reduce((s, i) => s + (Number(i.increment_amount) || 0), 0))}</p>
+          <p className="text-xs text-slate-500">Average Increment %</p>
+          <p className="text-2xl font-bold">{monthlySummary.avgPct.toFixed(2)}%</p>
         </div>
       </div>
 
@@ -540,17 +665,25 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode })
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-56" />
         <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)}
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        <select value={monthBranchFilter} onChange={e => setMonthBranchFilter(e.target.value)}
+          className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+          <option value="">All Branches</option>
+          {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
+        </select>
+        <input value={monthDeptFilter} onChange={e => setMonthDeptFilter(e.target.value)} placeholder="Department…"
+          className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-40" />
         <select value={filterType} onChange={e => setFilterType(e.target.value)}
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
           <option value="">All Types</option>
           {types.map(t => <option key={t}>{t}</option>)}
         </select>
-        {(filterEmp || filterMonth || filterType) && (
-          <button onClick={() => { setFilterEmp(""); setFilterMonth(""); setFilterType(""); }}
+        {(filterEmp || filterMonth || filterType || monthBranchFilter || monthDeptFilter) && (
+          <button onClick={() => { setFilterEmp(""); setFilterMonth(""); setFilterType(""); setMonthBranchFilter(""); setMonthDeptFilter(""); }}
             className="px-4 py-2 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-50">
             Clear Filters
           </button>
         )}
+        <Button variant="outline" onClick={exportMonthlyExcel} className="rounded-xl">Export to Excel</Button>
       </div>
 
       {/* Table */}
@@ -621,6 +754,126 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode })
           </table>
         )}
       </div>
+      </>
+      )}
+
+      {view === "yearly" && (
+        <div>
+          <div className="flex flex-wrap gap-3 mb-4 items-center">
+            <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}
+              className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+              {Array.from({ length: 7 }, (_, i) => String(new Date().getFullYear() - i)).map(y => <option key={y}>{y}</option>)}
+            </select>
+            <Button variant="outline" onClick={exportYearlyExcel} className="rounded-xl">Export to Excel</Button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-xs text-slate-500">Employees Incremented in {yearFilter}</p>
+              <p className="text-2xl font-bold">{yearlySummary.employeeCount}</p>
+            </div>
+            <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-xs text-slate-500">Total Amount Distributed</p>
+              <p className="text-2xl font-bold text-emerald-600">{money(yearlySummary.totalAmount)}</p>
+            </div>
+            <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-xs text-slate-500">Month with Most Increments</p>
+              <p className="text-2xl font-bold">{yearlySummary.bestMonthLabel}</p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+            <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Yearly Increment Grid — {yearFilter}</h2></div>
+            <table className="w-full min-w-[1400px] text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  {["Employee", "Branch", "Department", ...MONTH_LABELS, "Total Increments", "Total Amount"].map(h => (
+                    <th key={h} className="text-left px-3 py-3 font-medium whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {yearlyPivot.length === 0
+                  ? <tr><td colSpan={17} className="px-4 py-8 text-center text-slate-400">No increments recorded in {yearFilter}.</td></tr>
+                  : yearlyPivot.map(row => (
+                    <tr key={row.employee_code} className="hover:bg-slate-50/50">
+                      <td className="px-3 py-3 font-medium whitespace-nowrap">{row.employee_name}<div className="text-xs text-slate-400">{row.employee_code}</div></td>
+                      <td className="px-3 py-3 whitespace-nowrap">{row.branch}</td>
+                      <td className="px-3 py-3 whitespace-nowrap">{row.department}</td>
+                      {row.months.map((amt, i) => (
+                        <td key={i} className={`px-3 py-3 whitespace-nowrap ${amt > 0 ? "text-emerald-600 font-semibold" : "text-slate-300"}`}>
+                          {amt > 0 ? money(amt) : "—"}
+                        </td>
+                      ))}
+                      <td className="px-3 py-3 font-semibold whitespace-nowrap">{row.totalIncrements}</td>
+                      <td className="px-3 py-3 font-bold whitespace-nowrap">{money(row.totalAmount)}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {view === "due" && (
+        <div>
+          <div className="flex flex-wrap gap-3 mb-4 items-center">
+            <select value={dueBranchFilter} onChange={e => setDueBranchFilter(e.target.value)}
+              className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+              <option value="">All Branches</option>
+              {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div className="bg-white border border-red-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-xs text-slate-500">Overdue</p>
+              <p className="text-2xl font-bold text-red-600">{dueSummary.overdue}</p>
+            </div>
+            <div className="bg-white border border-amber-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-xs text-slate-500">Due This Month</p>
+              <p className="text-2xl font-bold text-amber-600">{dueSummary.thisMonth}</p>
+            </div>
+            <div className="bg-white border border-emerald-100 rounded-2xl p-4 shadow-sm">
+              <p className="text-xs text-slate-500">Due Next Month</p>
+              <p className="text-2xl font-bold text-emerald-600">{dueSummary.nextMonth}</p>
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+            <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Due for Increment</h2><p className="text-xs text-slate-400">{dueList.length} employees</p></div>
+            <table className="w-full min-w-[1100px] text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>{["Emp Code", "Name", "Branch", "Department", "Joining Date", "Last Increment Date", "Last Increment Amount", "Next Due Date", "Days Overdue/Remaining", "Current Salary"].map(h => (
+                  <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {dueList.length === 0
+                  ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No employees due for increment in the next 60 days.</td></tr>
+                  : dueList.map(e => {
+                    const toneClass = e.bucket === "overdue" ? "bg-red-50 text-red-700" : e.bucket === "thisMonth" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700";
+                    const daysLabel = e.diffDays < 0 ? `${Math.abs(e.diffDays)} days overdue` : `${e.diffDays} days remaining`;
+                    return (
+                      <tr key={e.employee_code} className="hover:bg-slate-50/50">
+                        <td className="px-4 py-3 text-slate-500">{e.employee_code}</td>
+                        <td className="px-4 py-3 font-medium">{e.full_name}</td>
+                        <td className="px-4 py-3">{e.branch || "—"}</td>
+                        <td className="px-4 py-3">{e.department || "—"}</td>
+                        <td className="px-4 py-3">{e.joining_date || "—"}</td>
+                        <td className="px-4 py-3">{e.last_increment_date || "Never"}</td>
+                        <td className="px-4 py-3">{e.lastIncrementAmount != null ? money(e.lastIncrementAmount) : "—"}</td>
+                        <td className="px-4 py-3">{e.next_increment_due}</td>
+                        <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${toneClass}`}>{daysLabel}</span></td>
+                        <td className="px-4 py-3 font-semibold">{money(e.salary)}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

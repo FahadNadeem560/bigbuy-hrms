@@ -2507,3 +2507,103 @@ $$;
 GRANT EXECUTE ON FUNCTION public.cash_incentive_branch_totals(TEXT) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.cash_incentive_branch_totals(TEXT) FROM anon;
 -- =============================================================
+
+-- =============================================================
+-- 2026-08-01: increment_due_tracker_phase2
+-- =============================================================
+-- employees.last_increment_date / next_increment_due (15 months out from
+-- the last increment, or from joining_date if never incremented) power the
+-- "Due for Increment" tab and the monthly due-notification sweep.
+-- Backfilled from existing salary_increments history / joining_date.
+--
+-- apply_salary_increment now stamps both columns directly in its own
+-- UPDATE (it already suppresses the AFTER UPDATE trigger below, so it
+-- can't rely on that trigger to do it). log_salary_increment_on_change
+-- (fires on direct employees.salary edits outside apply_salary_increment,
+-- e.g. from the Employees page) now also stamps them, via a second
+-- guarded UPDATE that sets the same suppress flag first so it doesn't
+-- re-fire itself — same technique apply_salary_increment already uses.
+-- Both used CREATE OR REPLACE with unchanged signatures, so existing
+-- grants (already anon-free from the phase1 migration) were preserved —
+-- confirmed via pg_proc.proacl after applying.
+ALTER TABLE public.employees
+  ADD COLUMN IF NOT EXISTS last_increment_date DATE,
+  ADD COLUMN IF NOT EXISTS next_increment_due DATE;
+
+UPDATE employees e SET
+  last_increment_date = s.last_date,
+  next_increment_due = s.last_date + INTERVAL '15 months'
+FROM (
+  SELECT employee_code, MAX(effective_from) AS last_date
+  FROM salary_increments
+  WHERE COALESCE(status, 'Approved') = 'Approved' AND effective_from IS NOT NULL
+  GROUP BY employee_code
+) s
+WHERE e.employee_code = s.employee_code;
+
+UPDATE employees
+SET next_increment_due = joining_date + INTERVAL '15 months'
+WHERE last_increment_date IS NULL AND joining_date IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.apply_salary_increment(
+  p_employee_code TEXT, p_new_salary NUMERIC, p_effective_from DATE DEFAULT CURRENT_DATE,
+  p_type TEXT DEFAULT 'Increment'::TEXT, p_approved_by TEXT DEFAULT 'HR'::TEXT,
+  p_submitted_by TEXT DEFAULT 'HR'::TEXT, p_confidential_incentive_at_time NUMERIC DEFAULT NULL
+)
+RETURNS salary_increments
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+declare
+  v_old_salary numeric; v_name text; v_amount numeric; v_pct numeric; v_row public.salary_increments;
+begin
+  select salary, full_name into v_old_salary, v_name from public.employees where employee_code = p_employee_code for update;
+  if not found then raise exception 'Employee % not found', p_employee_code; end if;
+  perform set_config('app.suppress_increment_trigger', 'true', true);
+  update public.employees set
+    salary = p_new_salary,
+    last_increment_date = p_effective_from,
+    next_increment_due = p_effective_from + INTERVAL '15 months'
+  where employee_code = p_employee_code;
+  v_amount := p_new_salary - coalesce(v_old_salary, 0);
+  v_pct := case when coalesce(v_old_salary, 0) > 0 then round((v_amount / v_old_salary) * 10000) / 100 else null end;
+  insert into public.salary_increments (
+    employee_code, employee_name, old_salary, new_salary, effective_from,
+    increment_amount, increment_percentage, type, status,
+    submitted_by, approved_by, approved_at, created_at, confidential_incentive_at_time
+  ) values (
+    p_employee_code, v_name, v_old_salary, p_new_salary, p_effective_from,
+    v_amount, v_pct, coalesce(p_type, 'Increment'), 'Approved',
+    coalesce(p_submitted_by, 'HR'), coalesce(p_approved_by, 'HR'), now(), now(), p_confidential_incentive_at_time
+  ) returning * into v_row;
+  return v_row;
+end;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.log_salary_increment_on_change()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+begin
+  if coalesce(current_setting('app.suppress_increment_trigger', true), 'false') = 'true' then
+    return new;
+  end if;
+  if new.salary is distinct from old.salary and old.salary is not null and new.salary is not null then
+    insert into public.salary_increments (
+      employee_code, employee_name, old_salary, new_salary, effective_from,
+      increment_amount, increment_percentage, type, status,
+      submitted_by, approved_by, approved_at, created_at
+    ) values (
+      new.employee_code, new.full_name, old.salary, new.salary, current_date,
+      new.salary - old.salary,
+      case when old.salary > 0 then round(((new.salary - old.salary) / old.salary) * 10000)/100 else null end,
+      case when new.salary >= old.salary then 'Increment' else 'Downward Revision' end,
+      'Approved', 'System (Auto)', 'System (Auto)', now(), now()
+    );
+    perform set_config('app.suppress_increment_trigger', 'true', true);
+    update public.employees set
+      last_increment_date = current_date,
+      next_increment_due = current_date + INTERVAL '15 months'
+    where employee_code = new.employee_code;
+  end if;
+  return new;
+end;
+$function$;
+-- =============================================================

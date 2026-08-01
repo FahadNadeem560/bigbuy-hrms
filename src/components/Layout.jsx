@@ -13,7 +13,7 @@ function groupBySection(items) {
   return order.map(section => ({ section, items: map[section] }));
 }
 
-export default function Layout({ user, role, onLogout, active, setActive, visibleMenu, children }) {
+export default function Layout({ user, role, onLogout, active, setActive, visibleMenu, children, onNotificationNavigate }) {
   const sections = groupBySection(visibleMenu);
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem("sidebarCollapsed") === "true"; } catch { return false; }
@@ -91,7 +91,7 @@ export default function Layout({ user, role, onLogout, active, setActive, visibl
               <div className="text-sm text-slate-500">{user.email} • {role}</div>
             </div>
             <div className="flex items-center gap-3">
-              <NotificationBell role={role} />
+              <NotificationBell role={role} onNavigate={onNotificationNavigate} />
               <span className="px-4 py-2 rounded-2xl border border-slate-200 text-sm text-slate-600">{role}</span>
               <Button onClick={() => setShowChangePassword(true)} variant="outline" className="rounded-2xl">Change Password</Button>
               <Button onClick={onLogout} variant="secondary" className="rounded-2xl">Log Out</Button>

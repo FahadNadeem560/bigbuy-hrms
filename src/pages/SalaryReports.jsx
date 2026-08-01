@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import SalaryComparison from "./SalaryComparison.jsx";
 import CompensationManagement from "./CompensationManagement.jsx";
 import IncrementHistory from "./IncrementHistory.jsx";
@@ -9,8 +9,9 @@ const TABS = [
   ["increments",   "Increments"],
 ];
 
-export default function SalaryReports({ role, actorName, actorEmployeeCode }) {
+export default function SalaryReports({ role, actorName, actorEmployeeCode, dueFilter }) {
   const [tab, setTab] = useState("comparison");
+  useEffect(() => { if (dueFilter) setTab("increments"); }, [dueFilter]);
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-5">
@@ -23,7 +24,7 @@ export default function SalaryReports({ role, actorName, actorEmployeeCode }) {
       </div>
       {tab === "comparison"   && <SalaryComparison />}
       {tab === "compensation" && <CompensationManagement />}
-      {tab === "increments"   && <IncrementHistory role={role} actorName={actorName} actorEmployeeCode={actorEmployeeCode} />}
+      {tab === "increments"   && <IncrementHistory role={role} actorName={actorName} actorEmployeeCode={actorEmployeeCode} dueFilter={dueFilter} />}
     </div>
   );
 }

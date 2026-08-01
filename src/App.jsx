@@ -31,6 +31,7 @@ import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
 import { escalateStaleApprovals } from "./services/leaveApprovalService.js";
 import { checkAutoLockPreviousMonth, sendHoldReminderIfNeeded } from "./services/payrollControlService.js";
+import { checkIncrementDueNotifications } from "./services/incrementService.js";
 import { sendOnboardingOtp, sweepPendingWhatsapp } from "./services/whatsappService.js";
 import { signOut } from "./services/authService.js";
 import { getBranchFilter, isBranchRestricted } from "./utils/branchFilter.js";
@@ -78,6 +79,11 @@ const BLANK_EMPLOYEE = {
 
 export default function BigBuyHRMS({ profile }) {
   const [active, setActive] = useState("dashboard");
+  const [incrementDueFilter, setIncrementDueFilter] = useState(null);
+  function handleNotificationNavigate({ tab, filter }) {
+    setActive(tab);
+    if (filter) setIncrementDueFilter(filter);
+  }
   const role = profile?.role || "Master";
   const userBranch = profile?.branch || null;
   const user = { name: profile?.full_name || "User", email: profile?.email || "" };
@@ -179,6 +185,7 @@ export default function BigBuyHRMS({ profile }) {
     escalateStaleApprovals().catch(() => {});
     checkAutoLockPreviousMonth().catch(() => {});
     sendHoldReminderIfNeeded().catch(() => {});
+    checkIncrementDueNotifications().catch(() => {});
     sweepPendingWhatsapp().catch(() => {});
   }, []);
 
@@ -301,7 +308,7 @@ export default function BigBuyHRMS({ profile }) {
   };
 
   return (
-    <Layout user={user} role={role} onLogout={signOut} active={active} setActive={setActive} visibleMenu={visibleMenu}>
+    <Layout user={user} role={role} onLogout={signOut} active={active} setActive={setActive} visibleMenu={visibleMenu} onNotificationNavigate={handleNotificationNavigate}>
       {error && <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700">{error}</div>}
       {/* Temporary Employee Notification Banner (HR/Master only) */}
       {(role === "HR" || role === "Master") && tempAlerts.length > 0 && (
@@ -355,7 +362,7 @@ export default function BigBuyHRMS({ profile }) {
       {/* Payroll & Finance */}
       {active === "payroll-automation" && <PayrollAutomation role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
       {active === "payroll"            && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
-      {active === "salary-reports"     && <SalaryReports role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
+      {active === "salary-reports"     && <SalaryReports role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} dueFilter={incrementDueFilter} />}
       {active === "allowances"         && <AllowancesHub role={role} />}
       {active === "payroll-extras"     && <PayrollExtras role={role} />}
       {active === "loans"              && <LoanHub role={role} />}

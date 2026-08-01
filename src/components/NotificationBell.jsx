@@ -8,10 +8,13 @@ const TYPE_ICONS = {
   attendance: "⏱️",
   settlement: "🤝",
   payroll: "💰",
+  increment_due_branch: "📈",
+  increment_proposed: "📝",
+  increment_decision: "📈",
   general: "🔔",
 };
 
-export default function NotificationBell({ role, employeeCode }) {
+export default function NotificationBell({ role, employeeCode, onNavigate }) {
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -58,6 +61,14 @@ export default function NotificationBell({ role, employeeCode }) {
     setUnread(c => Math.max(0, c - 1));
   }
 
+  function handleClick(n) {
+    markRead(n.id);
+    if (n.type === "increment_due_branch" && onNavigate) {
+      onNavigate({ tab: "salary-reports", subview: "increments", filter: { view: "due", branch: n.reference_id || n.link } });
+    }
+    setOpen(false);
+  }
+
   return (
     <div className="relative" ref={ref}>
       <button onClick={() => setOpen(o => !o)}
@@ -80,7 +91,7 @@ export default function NotificationBell({ role, employeeCode }) {
             {notifs.length === 0
               ? <div className="px-4 py-10 text-center text-slate-400 text-sm">No notifications</div>
               : notifs.map(n => (
-                <button key={n.id} onClick={() => markRead(n.id)}
+                <button key={n.id} onClick={() => handleClick(n)}
                   className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition ${!n.is_read ? "bg-blue-50/50" : ""}`}>
                   <div className="flex gap-2.5 items-start">
                     <span className="text-lg mt-0.5 flex-shrink-0">{TYPE_ICONS[n.type] || "🔔"}</span>
