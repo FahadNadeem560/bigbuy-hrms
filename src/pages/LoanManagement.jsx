@@ -49,7 +49,8 @@ function EmpPicker({ employees, value, onChange }) {
 
 const BLANK = { employee: null, loan_amount: "", monthly_deduction: "", start_date: "", reason: "", guarantor1: null, guarantor2: null };
 
-export default function LoanManagement() {
+export default function LoanManagement({ role }) {
+  const canManage = ["Master", "HR"].includes(role);
   const [loans, setLoans] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [showForm, setShowForm] = useState(false);
@@ -255,17 +256,17 @@ export default function LoanManagement() {
   return (
     <div>
       <PageTitle title="Loans & Advances" subtitle="Manage employee loan applications, rescheduling, relief and settlements."
-        action={
+        action={canManage && (
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setShowImport(s => !s)} className="rounded-2xl">{showImport ? "Cancel Import" : "Import Loans"}</Button>
             <Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Loan"}</Button>
           </div>
-        } />
+        )} />
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
-      {showImport && (
+      {canManage && showImport && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-3">Import Loans</h2>
           <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-3">
@@ -350,7 +351,7 @@ export default function LoanManagement() {
         </div>
       )}
 
-      {showForm && (
+      {canManage && showForm && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-4">New Loan Application</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -389,13 +390,13 @@ export default function LoanManagement() {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Ledger</h2><p className="text-xs text-slate-400 mt-0.5">{filtered.length} records</p></div>
         <table className="w-full min-w-[1050px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee", "Guarantors", "Loan Amount", "Monthly Ded.", "Outstanding", "Start Date", "Months", "Status", "Actions"].map(h => (
+            <tr>{["Employee", "Guarantors", "Loan Amount", "Monthly Ded.", "Outstanding", "Start Date", "Months", "Status", ...(canManage ? ["Actions"] : [])].map(h => (
               <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
             ))}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0
-              ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No loans found.</td></tr>
+              ? <tr><td colSpan={canManage ? 9 : 8} className="px-4 py-8 text-center text-slate-400">No loans found.</td></tr>
               : filtered.map(l => (
                 <tr key={l.id}>
                   <td className="px-4 py-3">
@@ -421,6 +422,7 @@ export default function LoanManagement() {
                   <td className="px-4 py-3">{l.start_date}</td>
                   <td className="px-4 py-3">{l.repayment_months || "—"}</td>
                   <td className="px-4 py-3"><Badge tone={l.status === "Active" ? "yellow" : "green"}>{l.status}</Badge></td>
+                  {canManage && (
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
                       {l.status === "Active" && (
@@ -444,6 +446,7 @@ export default function LoanManagement() {
                       )}
                     </div>
                   </td>
+                  )}
                 </tr>
               ))}
           </tbody>
