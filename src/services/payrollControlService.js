@@ -187,11 +187,11 @@ export async function mergePersistentPayrollFields(month, payloadRows) {
 
 // Client-triggered check (this app has no server cron) — mirrors the existing
 // checkTemporaryEmployees()/escalateStaleApprovals() on-app-load pattern.
-// Auto-locks the previous month once the 10th arrives, and re-locks a month
+// Auto-locks the previous month once the 9th arrives, and re-locks a month
 // Master unlocked once the calendar day changes (Master forgot to re-lock).
 export async function checkAutoLockPreviousMonth(actorName = "System (auto-lock)") {
   const today = new Date();
-  if (today.getDate() < 10) return;
+  if (today.getDate() < 9) return;
   const curMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
   const prevMonth = addMonths(curMonth, -1);
   const { data: rows } = await supabase.from("payroll").select("id").eq("payroll_month", prevMonth).limit(1);
