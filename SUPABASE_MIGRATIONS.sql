@@ -2680,3 +2680,35 @@ CREATE POLICY salary_increments_update ON public.salary_increments FOR UPDATE TO
 
 REVOKE ALL ON public.salary_increments FROM anon;
 -- =============================================================
+
+-- =============================================================
+-- Fix: "Process Attendance" recurring "canceling statement due to statement
+-- timeout" errors.
+--
+-- Root cause: the `authenticated` role has a role-level statement_timeout of
+-- 8s (and `anon` 3s) as a safety net against runaway ad-hoc queries from the
+-- browser. But process_daily_attendance loops per-employee-per-day with
+-- several sequential queries each; even the 3-day client-side chunking done
+-- in ZKTSync.jsx can exceed 8s once there are ~300+ active employees. The
+-- earlier fix (missing zkt_raw_punches index) reduced per-query cost but
+-- never touched this hard ceiling, so the timeout kept recurring.
+--
+-- Fix: raise statement_timeout only for these specific heavy admin functions
+-- via a function-level GUC override -- Postgres restores the caller's
+-- original session timeout the moment the function returns, so the
+-- anon/authenticated safety net stays fully intact for every other query.
+--
+-- Also discovered while diagnosing this: the "Import Pending Storage Files"
+-- button/edge function (zkt-storage-import, scanning storage bucket
+-- zkt-attendance-imports/incoming) has never actually imported a file --
+-- every real import in attendance_import_batches came from a separate
+-- external process calling import_zkt_raw_punches directly with a
+-- 'manual/'-prefixed filename. Removed that dead button from ZKTSync.jsx in
+-- favor of a read-only sync status panel (see src/pages/ZKTSync.jsx and
+-- src/services/attendanceService.js).
+-- =============================================================
+ALTER FUNCTION public.run_attendance_processing(date, date) SET statement_timeout = '5min';
+ALTER FUNCTION public.process_daily_attendance(date, date) SET statement_timeout = '5min';
+ALTER FUNCTION public.generate_employee_work_rosters(date, date) SET statement_timeout = '5min';
+ALTER FUNCTION public.import_zkt_raw_punches(jsonb, text) SET statement_timeout = '5min';
+ALTER FUNCTION public.process_zkt_raw_punches(date, date) SET statement_timeout = '5min';

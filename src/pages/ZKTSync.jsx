@@ -1,18 +1,46 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import * as XLSX from "xlsx";
 import { Button, Card, CardContent, PageTitle } from "../components/ui.js";
-import { importPendingStorageFiles, importZKTRawPunches, runAttendanceProcessing, generateEmployeeWorkRosters } from "../services/attendanceService.js";
+import { fetchZktSyncStatus, importZKTRawPunches, runAttendanceProcessing, generateEmployeeWorkRosters } from "../services/attendanceService.js";
+
+function formatDateTime(value) {
+  if (!value) return "Never";
+  return new Date(value).toLocaleString();
+}
+
+function formatDate(value) {
+  if (!value) return "No data yet";
+  return new Date(value).toLocaleDateString();
+}
 
 export default function ZKTSync() {
   const [file, setFile] = useState(null);
   const [fromDate, setFromDate] = useState(new Date(Date.now() - 30 * 86400e3).toISOString().slice(0, 10));
   const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
-  const [storageBusy, setStorageBusy] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [rosterBusy, setRosterBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [syncStatusLoading, setSyncStatusLoading] = useState(true);
+  const [syncStatusError, setSyncStatusError] = useState("");
+
+  async function loadSyncStatus() {
+    setSyncStatusLoading(true);
+    setSyncStatusError("");
+    try {
+      setSyncStatus(await fetchZktSyncStatus());
+    } catch (err) {
+      setSyncStatusError(err.message);
+    } finally {
+      setSyncStatusLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadSyncStatus();
+  }, []);
 
   function normalizeStatus(value) {
     const v = String(value || "").trim().toUpperCase();
@@ -124,20 +152,6 @@ export default function ZKTSync() {
     }
   }
 
-  async function importStorageFiles() {
-    setMessage("");
-    setError("");
-    setStorageBusy(true);
-    try {
-      const result = await importPendingStorageFiles();
-      setMessage(`Storage import completed. Processed files: ${Number(result?.processed_files || 0)}.`);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setStorageBusy(false);
-    }
-  }
-
   // process_zkt_raw_punches pairs check-in/check-out via a correlated
   // subquery per punch and rebuilds the whole date range's attendance rows
   // in one statement, so a wide range over a large backlog can exceed
@@ -209,9 +223,26 @@ export default function ZKTSync() {
       <PageTitle title="ZKT Live Sync" subtitle="Import ZKT attendance files and process raw punches into attendance." />
       <Card className="rounded-2xl border border-slate-100 shadow-sm mb-6">
         <CardContent className="p-6">
-          <h2 className="text-lg font-bold mb-3">Storage Import</h2>
-          <p className="text-sm text-slate-600 mb-4">Import all pending CSV files from Supabase Storage: zkt-attendance-imports/incoming.</p>
-          <Button onClick={importStorageFiles} disabled={storageBusy} className="rounded-2xl">{storageBusy ? "Importing Pending Files..." : "Import Pending Storage Files"}</Button>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-bold">Sync Status</h2>
+            <Button onClick={loadSyncStatus} disabled={syncStatusLoading} className="rounded-xl text-sm px-3 py-1">{syncStatusLoading ? "Refreshing..." : "Refresh"}</Button>
+          </div>
+          <p className="text-sm text-slate-600 mb-4">Attendance punches are pulled in automatically. This shows the current status of that pipeline.</p>
+          {syncStatusError && <div className="p-3 rounded-xl bg-red-50 text-red-700 text-sm">{syncStatusError}</div>}
+          {!syncStatusError && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 rounded-xl bg-slate-50">
+                <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">Last Data Pulled</div>
+                <div className="text-lg font-semibold text-slate-800">{syncStatusLoading ? "Loading..." : formatDateTime(syncStatus?.lastPulledAt)}</div>
+                {syncStatus?.lastPulledFile && <div className="text-xs text-slate-500 mt-1">File: {syncStatus.lastPulledFile}</div>}
+              </div>
+              <div className="p-4 rounded-xl bg-slate-50">
+                <div className="text-xs uppercase tracking-wide text-slate-500 mb-1">Attendance Data Available Through</div>
+                <div className="text-lg font-semibold text-slate-800">{syncStatusLoading ? "Loading..." : formatDate(syncStatus?.dataThroughDate)}</div>
+                {syncStatus?.latestPunchTime && <div className="text-xs text-slate-500 mt-1">Latest raw punch: {formatDateTime(syncStatus.latestPunchTime)}</div>}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
       <Card className="rounded-2xl border border-slate-100 shadow-sm mb-6">

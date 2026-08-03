@@ -108,10 +108,27 @@ export async function importZKTRawPunches(rows, sourceFilename) {
   return Array.isArray(data) ? data[0] : data;
 }
 
-export async function importPendingStorageFiles() {
-  const { data, error } = await supabase.functions.invoke("zkt-storage-import", {
-    body: { source: "manual_button" },
-  });
-  if (error) throw error;
-  return data;
+// Status for the ZKT Sync page's automatic-import panel: when new punch data
+// was last received (any source -- the automated storage-import cron or the
+// external device pusher that writes 'manual/'-prefixed batches directly),
+// and through what date attendance has actually been calculated.
+export async function fetchZktSyncStatus() {
+  const [batchResult, attendanceResult, punchResult] = await Promise.all([
+    supabase.from("attendance_import_batches").select("uploaded_at, original_filename, imported_rows")
+      .order("uploaded_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("attendance").select("work_date").in("source", ["ZKT", "ZKT CSV"])
+      .order("work_date", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("zkt_raw_punches").select("punch_time")
+      .order("punch_time", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (batchResult.error) throw batchResult.error;
+  if (attendanceResult.error) throw attendanceResult.error;
+  if (punchResult.error) throw punchResult.error;
+
+  return {
+    lastPulledAt: batchResult.data?.uploaded_at || null,
+    lastPulledFile: batchResult.data?.original_filename || null,
+    dataThroughDate: attendanceResult.data?.work_date || null,
+    latestPunchTime: punchResult.data?.punch_time || null,
+  };
 }
