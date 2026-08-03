@@ -442,7 +442,7 @@ function HistoryTab({ role, refreshKey }) {
     const data = rows.map(r => ({
       Date: r.created_at?.slice(0, 10), Employee: r.employee_name, Code: r.employee_code, Branch: r.branch,
       Action: r.action, "Old Amount": r.old_amount, "New Amount": r.new_amount,
-      "Effective From": r.effective_from, "Effective To": r.effective_to, Reason: r.reason, "Done By": r.actioned_by,
+      "Effective From": formatMonthYear(r.effective_from), "Effective To": formatMonthYear(r.effective_to), Reason: r.reason, "Done By": r.actioned_by,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();

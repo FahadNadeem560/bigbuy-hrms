@@ -450,12 +450,22 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
   }, [filtered]);
 
   function exportMonthlyExcel() {
-    const data = filtered.map(i => ({
-      "Emp Code": i.employee_code, Name: i.employee_name, Branch: empByCode[i.employee_code]?.branch || "",
-      Department: empByCode[i.employee_code]?.department || "", "Effective Month": (i.effective_from || "").slice(0, 7),
-      "Old Salary": i.old_salary, "New Salary": i.new_salary, "Increment Amount": i.increment_amount,
-      "Increment %": i.increment_percentage, "Given By": i.submitted_by, Status: i.status,
-    }));
+    const data = filtered.map(i => {
+      const liveIncentive = incentivesByCode[i.employee_code] || 0;
+      const since = incentiveSinceByCode[i.employee_code];
+      const incentiveAtTime = i.confidential_incentive_at_time != null ? Number(i.confidential_incentive_at_time) : liveIncentive;
+      return {
+        "Emp Code": i.employee_code, Name: i.employee_name, Branch: empByCode[i.employee_code]?.branch || "",
+        Department: empByCode[i.employee_code]?.department || "", "Effective Month": formatMonthYear(i.effective_from),
+        "Old Salary": i.old_salary, "New Salary": i.new_salary, "Increment Amount": i.increment_amount,
+        "Increment %": i.increment_percentage, "Given By": i.submitted_by, Status: i.status,
+        ...(isMasterGm ? {
+          "Monthly Incentive": liveIncentive > 0 ? liveIncentive : "",
+          "Incentive Since": since ? formatMonthYear(since) : "",
+          "Total Effective Comp.": Number(i.old_salary || 0) + incentiveAtTime,
+        } : {}),
+      };
+    });
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Monthly Increments");
