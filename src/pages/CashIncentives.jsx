@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
-import { money } from "../utils/format.js";
+import { money, formatMonthYear } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import {
   addCashIncentive, fetchCashIncentives, summarizeCashIncentivesByBranch,
@@ -297,7 +297,7 @@ function ActiveTab({ role, actorName, refreshKey, bump }) {
                   {editing?.id === r.id ? (
                     <input type="date" value={editing.effectiveFrom} onChange={e => setEditing(v => ({ ...v, effectiveFrom: e.target.value }))}
                       className="px-2 py-1 rounded-lg border border-slate-200 text-sm" />
-                  ) : r.effective_from}
+                  ) : formatMonthYear(r.effective_from)}
                 </td>
                 <td className="px-4 py-3 text-slate-500">{r.given_by} <Badge tone="slate">{r.given_by_role}</Badge></td>
                 <td className="px-4 py-3">
@@ -489,7 +489,7 @@ function HistoryTab({ role, refreshKey }) {
                 </td>
                 <td className="px-4 py-3">{r.old_amount != null ? money(r.old_amount) : "—"}</td>
                 <td className="px-4 py-3">{r.new_amount != null ? money(r.new_amount) : "—"}</td>
-                <td className="px-4 py-3">{r.effective_from || "—"}</td>
+                <td className="px-4 py-3">{r.effective_from ? formatMonthYear(r.effective_from) : "—"}</td>
                 <td className="px-4 py-3 max-w-[200px] truncate">{r.reason || "—"}</td>
                 <td className="px-4 py-3 text-slate-500">{r.actioned_by}</td>
               </tr>

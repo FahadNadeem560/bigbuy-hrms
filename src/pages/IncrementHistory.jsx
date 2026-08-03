@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
-import { money } from "../utils/format.js";
+import { money, formatMonthYear } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
 import { proposeIncrement } from "../services/incrementService.js";
@@ -291,6 +291,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
   const [employees, setEmployees] = useState([]);
   const [increments, setIncrements] = useState([]);
   const [incentivesByCode, setIncentivesByCode] = useState({});
+  const [incentiveSinceByCode, setIncentiveSinceByCode] = useState({});
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -326,9 +327,18 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
     if (isMasterGm) {
       fetchActiveConfidentialIncentives().then(rows => {
         const byCode = {};
-        rows.forEach(r => { byCode[r.employee_code] = (byCode[r.employee_code] || 0) + Number(r.amount || 0); });
+        const sinceByCode = {};
+        rows.forEach(r => {
+          byCode[r.employee_code] = (byCode[r.employee_code] || 0) + Number(r.amount || 0);
+          // If an employee has more than one active incentive row, show the
+          // most recent effective_from as "since".
+          if (!sinceByCode[r.employee_code] || r.effective_from > sinceByCode[r.employee_code]) {
+            sinceByCode[r.employee_code] = r.effective_from;
+          }
+        });
         setIncentivesByCode(byCode);
-      }).catch(() => setIncentivesByCode({}));
+        setIncentiveSinceByCode(sinceByCode);
+      }).catch(() => { setIncentivesByCode({}); setIncentiveSinceByCode({}); });
     }
     setLoading(false);
   }
@@ -731,14 +741,14 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 {["Emp Code", "Employee Name", "Effective Month", "Previous Salary", "New Salary", "Increment Amount", "Increment %", "Type", "Status",
-                  ...(isMasterGm ? ["Monthly Incentive", "Total Effective Comp."] : [])].map(h => (
+                  ...(isMasterGm ? ["Monthly Incentive", "Incentive Since", "Total Effective Comp."] : [])].map(h => (
                   <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0
-                ? <tr><td colSpan={isMasterGm ? 11 : 9} className="px-4 py-8 text-center text-slate-400">No increment records found.</td></tr>
+                ? <tr><td colSpan={isMasterGm ? 12 : 9} className="px-4 py-8 text-center text-slate-400">No increment records found.</td></tr>
                 : filtered.map(inc => {
                   const amt = Number(inc.increment_amount) || 0;
                   const pctV = Number(inc.increment_percentage) || 0;
@@ -771,6 +781,9 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                       </td>
                       {isMasterGm && (
                         <td className="px-4 py-3 text-purple-700" title="Current confidential incentive for this employee">{liveIncentive > 0 ? money(liveIncentive) : "—"}</td>
+                      )}
+                      {isMasterGm && (
+                        <td className="px-4 py-3 text-purple-700 text-xs">{incentiveSinceByCode[inc.employee_code] ? formatMonthYear(incentiveSinceByCode[inc.employee_code]) : "—"}</td>
                       )}
                       {isMasterGm && (
                         <td className="px-4 py-3 font-semibold text-purple-800" title="Previous salary + confidential incentive at the time of this increment">
