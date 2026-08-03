@@ -70,6 +70,13 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   const [rejectId, setRejectId] = useState(null);
   const [rejectNote, setRejectNote] = useState("");
 
+  // Guards against approve_salary_increment's "Increment not found or not
+  // pending" error firing on a harmless double-click/slow-network retry --
+  // the Approve/Reject buttons don't disable themselves while a request is
+  // in flight, so a second click for the same row hits it after the first
+  // call already flipped its status, and the RPC's own guard raises.
+  const [processingIncrementId, setProcessingIncrementId] = useState(null);
+
   // Timesheet
   const [signoffs, setSignoffs] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -248,18 +255,24 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   // ── Increment actions ──
   async function approveIncrement(id) {
     if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can approve increments.");
+    if (processingIncrementId) return; // already handling this or another row
+    setProcessingIncrementId(id);
     try {
       await approveIncrementSvc(id, actorName || role);
       setMsg("Increment approved."); loadAll();
     } catch (e) { setErr(e.message); }
+    finally { setProcessingIncrementId(null); }
   }
 
   async function rejectIncrement(id, reason) {
     if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can reject increments.");
+    if (processingIncrementId) return;
+    setProcessingIncrementId(id);
     try {
       await rejectIncrementSvc(id, actorName || role, reason);
       setMsg("Increment rejected."); loadAll();
     } catch (e) { setErr(e.message); }
+    finally { setProcessingIncrementId(null); }
   }
 
   // ── Payment status change requests ──
@@ -504,7 +517,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         id={inc.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveIncrement} onReject={rejectIncrement}
-                        disabled={!["Master", "GM"].includes(role)} />
+                        disabled={!["Master", "GM"].includes(role) || !!processingIncrementId} />
                     </td>
                   </tr>
                 ))}
