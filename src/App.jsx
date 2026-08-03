@@ -17,6 +17,7 @@ import SalaryReports from "./pages/SalaryReports.jsx";
 import AllowancesHub from "./pages/AllowancesHub.jsx";
 import PayrollExtras from "./pages/PayrollExtras.jsx";
 import LoanHub from "./pages/LoanHub.jsx";
+import CashIncentives from "./pages/CashIncentives.jsx";
 import SettingsHub from "./pages/SettingsHub.jsx";
 import ApprovalQueue from "./pages/ApprovalQueue.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
@@ -80,6 +81,8 @@ const BLANK_EMPLOYEE = {
 export default function BigBuyHRMS({ profile }) {
   const [active, setActive] = useState("dashboard");
   const [incrementDueFilter, setIncrementDueFilter] = useState(null);
+  const now0 = new Date();
+  const [incentiveMonth, setIncentiveMonth] = useState(`${now0.getFullYear()}-${String(now0.getMonth() + 1).padStart(2, "0")}`);
   function handleNotificationNavigate({ tab, filter }) {
     setActive(tab);
     if (filter) setIncrementDueFilter(filter);
@@ -357,7 +360,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "leave"       && <LeaveManagement role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} branchFilter={branchRestriction} />}
 
       {/* Workforce */}
-      {active === "workforce"   && <WorkforceHub role={role} branchFilter={branchRestriction} />}
+      {active === "workforce"   && <WorkforceHub role={role} actorName={user.name} branchFilter={branchRestriction} />}
 
       {/* Payroll & Finance */}
       {active === "payroll-automation" && <PayrollAutomation role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
@@ -366,6 +369,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "allowances"         && <AllowancesHub role={role} />}
       {active === "payroll-extras"     && <PayrollExtras role={role} />}
       {active === "loans"              && <LoanHub role={role} />}
+      {active === "confidential-incentives" && <CashIncentives role={role} actorName={user.name} month={incentiveMonth} setMonth={setIncentiveMonth} />}
 
       {/* HR Tools */}
       {active === "fines"     && <Fines role={role} />}

@@ -506,7 +506,11 @@ export default function CashIncentives({ role, actorName, month, setMonth }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const bump = () => setRefreshKey(k => k + 1);
 
-  if (role === "HR") {
+  // Strict allowlist rather than blocking HR alone -- this page must never
+  // render or fetch confidential_incentives data for any role but Master/GM,
+  // even if it's ever reached by something other than the menu.js entry
+  // (which already restricts it to roles: ["Master","GM"]).
+  if (!["Master", "GM"].includes(role)) {
     return (
       <div>
         <PageTitle title="Confidential Incentives" subtitle="Not available." />

@@ -25,6 +25,7 @@ export const MENU_ITEMS = [
   { key: "allowances",         label: "Allowances",    icon: "📌", section: "Payroll & Finance", roles: ["Master","HR","Finance","GM"] },
   { key: "payroll-extras",     label: "Adjustments & Tax", icon: "🧾", section: "Payroll & Finance", roles: ["Master","HR","GM"] },
   { key: "loans",              label: "Loans & Advances", icon: "💳", section: "Payroll & Finance", roles: ["Master","HR","Finance","Employee","GM"] },
+  { key: "confidential-incentives", label: "Confidential Incentives", icon: "🔒", section: "Payroll & Finance", roles: ["Master","GM"] },
 
   // Approvals
   { key: "approval-queue", label: "Approval Queue",   icon: "✅", section: "Approvals",         roles: ["Master","HR","GM"] },

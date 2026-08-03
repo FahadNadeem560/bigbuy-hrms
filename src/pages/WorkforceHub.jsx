@@ -13,7 +13,7 @@ const TABS = [
   ["assets",    "Assets & Uniforms"],
 ];
 
-export default function WorkforceHub({ role, branchFilter }) {
+export default function WorkforceHub({ role, actorName, branchFilter }) {
   const [tab, setTab] = useState("manpower");
   // Branch Manager only gets the branch-scopable Manpower view; the rest
   // (transfers/warnings/performance/assets) are org-wide tools.
@@ -29,7 +29,7 @@ export default function WorkforceHub({ role, branchFilter }) {
         ))}
       </div>
       {tab === "manpower"   && <ManpowerDashboard branchFilter={branchFilter} />}
-      {tab === "transfers"  && role !== "Branch Manager" && <BranchTransfer />}
+      {tab === "transfers"  && role !== "Branch Manager" && <BranchTransfer role={role} actorName={actorName} />}
       {tab === "warnings"   && role !== "Branch Manager" && <Warnings />}
       {tab === "performance"&& role !== "Branch Manager" && <Performance />}
       {tab === "assets"     && role !== "Branch Manager" && <AssetTracking />}

@@ -341,8 +341,13 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
   return (
     <div>
       <PageTitle title="Employee Master" subtitle="Add, edit and manage staff records."
-        action={!viewOnly && <Button className="rounded-2xl" onClick={() => setShowEmployeeForm(true)}>+ New Employee</Button>} />
-      <div className="flex flex-col md:flex-row gap-3 mb-4">
+        action={
+          <div className="flex gap-2 print:hidden">
+            <Button variant="outline" className="rounded-2xl" onClick={() => window.print()}>🖨️ Print</Button>
+            {!viewOnly && <Button className="rounded-2xl" onClick={() => setShowEmployeeForm(true)}>+ New Employee</Button>}
+          </div>
+        } />
+      <div className="flex flex-col md:flex-row gap-3 mb-4 print:hidden">
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by name, ID, department, phone..." className="flex-1 px-4 py-2.5 rounded-2xl border border-slate-200" />
         <select value={branch} onChange={e => setBranch(e.target.value)} disabled={branchLocked} className="px-4 py-2.5 rounded-2xl border border-slate-200 disabled:bg-slate-50 disabled:text-slate-500">
           <option>All</option>
@@ -355,9 +360,21 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
         </select>
       </div>
 
+      {/* Print-only header — the filter controls above are hidden when printing
+          (native inputs/selects print poorly), so restate the applied filters
+          here instead. This, plus filteredEmployees already reflecting the
+          active search/branch/status filters, is what makes Print export
+          exactly the filtered view currently on screen. */}
+      <div className="hidden print:block mb-3">
+        <p className="text-sm font-semibold">Employee Master — {filteredEmployees.length} record{filteredEmployees.length === 1 ? "" : "s"}</p>
+        <p className="text-xs text-slate-500">
+          Branch: {branch} · Status: {employeeStatusFilter}{query ? ` · Search: "${query}"` : ""} · Printed {new Date().toLocaleString()}
+        </p>
+      </div>
+
       {!viewOnly && showEmployeeForm && <EmployeeAdd employee={newEmployee} setEmployee={setNewEmployee} save={saveEmployee} close={() => setShowEmployeeForm(false)} role={role} nextId={newEmployee._nextId} />}
       {!viewOnly && editingEmployee && <EmployeeEdit employee={editingEmployee} setEmployee={setEditingEmployee} save={updateEmployee} close={() => setEditingEmployee(null)} role={role} />}
-      {loadingEmployees && <p className="text-slate-400 text-sm mb-2">Loading employees...</p>}
+      {loadingEmployees && <p className="text-slate-400 text-sm mb-2 print:hidden">Loading employees...</p>}
 
       <Table
         headers={viewOnly
@@ -399,7 +416,7 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
                 )}
               </td>
               {!viewOnly && (
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 print:hidden">
                   <div className="flex gap-2">
                     <Button variant="outline" onClick={() => setEditingEmployee(e)}>Edit</Button>
                     {e.status === "Active" && (

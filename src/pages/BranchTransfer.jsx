@@ -2,6 +2,10 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
+import {
+  fetchBranchTransfers, submitBranchTransfer, approveBranchTransfer,
+  rejectBranchTransfer, completeBranchTransfer,
+} from "../services/branchTransferService.js";
 
 const BRANCHES = Object.keys(BRANCH_CODE_MAP);
 
@@ -42,11 +46,11 @@ function EmpPicker({ employees, value, onChange }) {
 }
 
 const STATUS_TONES = { Pending: "yellow", Approved: "green", Rejected: "red", Completed: "blue" };
-let nextId = 1;
 
-export default function BranchTransfer() {
+export default function BranchTransfer({ role, actorName }) {
   const [employees, setEmployees] = useState([]);
   const [transfers, setTransfers] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("new");
   const [form, setForm] = useState({ employee: null, toBranch: "", effectiveDate: new Date().toISOString().slice(0, 10), reason: "" });
   const [filterStatus, setFilterStatus] = useState("All");
@@ -57,40 +61,54 @@ export default function BranchTransfer() {
   useEffect(() => {
     supabase.from("employees").select("employee_code, full_name, department, branch, staff_level, salary").order("full_name")
       .then(({ data }) => setEmployees(data || []));
+    loadTransfers();
   }, []);
 
-  function submitTransfer() {
+  async function loadTransfers() {
+    setLoading(true);
+    try { setTransfers(await fetchBranchTransfers()); }
+    catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  async function submitTransfer() {
     if (!form.employee) return setErr("Select an employee.");
     if (!form.toBranch) return setErr("Select destination branch.");
     if (form.employee.branch === form.toBranch) return setErr("Source and destination branches must differ.");
     setErr("");
-    setTransfers(prev => [...prev, {
-      id: nextId++,
-      employee_code: form.employee.employee_code,
-      employee_name: form.employee.full_name,
-      department: form.employee.department,
-      from_branch: form.employee.branch,
-      to_branch: form.toBranch,
-      effective_date: form.effectiveDate,
-      reason: form.reason,
-      status: "Pending",
-      requested_at: new Date().toISOString().slice(0, 10),
-    }]);
-    setMsg(`Transfer request submitted for ${form.employee.full_name}: ${form.employee.branch} → ${form.toBranch}`);
-    setForm({ employee: null, toBranch: "", effectiveDate: new Date().toISOString().slice(0, 10), reason: "" });
-    setTab("history");
+    try {
+      await submitBranchTransfer({
+        employeeCode: form.employee.employee_code,
+        employeeName: form.employee.full_name,
+        department: form.employee.department,
+        fromBranch: form.employee.branch,
+        toBranch: form.toBranch,
+        effectiveDate: form.effectiveDate,
+        reason: form.reason,
+        requestedBy: actorName || role,
+      });
+      setMsg(`Transfer request submitted for ${form.employee.full_name}: ${form.employee.branch} → ${form.toBranch}`);
+      setForm({ employee: null, toBranch: "", effectiveDate: new Date().toISOString().slice(0, 10), reason: "" });
+      await loadTransfers();
+      setTab("history");
+    } catch (e) { setErr(e.message); }
   }
 
-  function updateStatus(id, status) {
-    setTransfers(prev => prev.map(t => t.id === id ? { ...t, status } : t));
-    if (status === "Completed") {
-      setTransfers(prev => prev.map(t => {
-        if (t.id === id) {
-          setEmployees(emps => emps.map(e => e.employee_code === t.employee_code ? { ...e, branch: t.to_branch } : e));
-        }
-        return t;
-      }));
-    }
+  async function updateStatus(id, status) {
+    setErr(""); setMsg("");
+    try {
+      if (status === "Approved") await approveBranchTransfer(id, actorName || role);
+      else if (status === "Rejected") await rejectBranchTransfer(id, actorName || role);
+      else if (status === "Completed") {
+        await completeBranchTransfer(id, actorName || role);
+        // The RPC already moved the employee's branch in the database --
+        // refresh the local employee list so "From Branch" reflects it
+        // immediately without a full page reload.
+        const { data } = await supabase.from("employees").select("employee_code, full_name, department, branch, staff_level, salary").order("full_name");
+        setEmployees(data || []);
+      }
+      await loadTransfers();
+    } catch (e) { setErr(e.message); }
   }
 
   const filtered = useMemo(() => transfers.filter(t => {
@@ -195,16 +213,16 @@ export default function BranchTransfer() {
               </select>
             </div>
           </div>
-          <TransferTable transfers={filtered} onUpdateStatus={updateStatus} />
+          <TransferTable transfers={filtered} onUpdateStatus={updateStatus} loading={loading} />
         </div>
       )}
 
       {/* Pending Approval Tab */}
       {tab === "pending" && (
         <div>
-          {pending.length === 0
+          {!loading && pending.length === 0
             ? <div className="bg-white border border-slate-100 rounded-2xl p-8 text-center text-slate-400 shadow-sm">No pending transfers.</div>
-            : <TransferTable transfers={pending} onUpdateStatus={updateStatus} showActions />
+            : <TransferTable transfers={pending} onUpdateStatus={updateStatus} showActions loading={loading} />
           }
         </div>
       )}
@@ -212,7 +230,7 @@ export default function BranchTransfer() {
   );
 }
 
-function TransferTable({ transfers, onUpdateStatus, showActions }) {
+function TransferTable({ transfers, onUpdateStatus, showActions, loading }) {
   return (
     <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
       <div className="px-5 pt-4 pb-2">
@@ -226,7 +244,9 @@ function TransferTable({ transfers, onUpdateStatus, showActions }) {
           ))}</tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {transfers.length === 0
+          {loading
+            ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>
+            : transfers.length === 0
             ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No records found.</td></tr>
             : transfers.map(t => (
               <tr key={t.id}>
