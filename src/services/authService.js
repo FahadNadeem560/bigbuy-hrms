@@ -52,7 +52,14 @@ export async function updatePassword(newPassword) {
   if (error) throw error;
 }
 
-export async function clearMustChangePassword(authUserId) {
-  const { error } = await supabase.from("users").update({ must_change_password: false }).eq("auth_user_id", authUserId);
+// Goes through a SECURITY DEFINER RPC rather than a direct table update --
+// the only UPDATE policy on public.users requires role = 'Master', so a
+// non-Master account's own attempt to clear this flag was previously
+// silently blocked by RLS (0 rows affected, no error), leaving them stuck
+// on the forced password-change screen forever. The RPC only ever touches
+// the caller's own row (via auth.uid()), so authUserId here is unused --
+// kept as a parameter so ChangePassword.jsx doesn't need to change.
+export async function clearMustChangePassword(_authUserId) {
+  const { error } = await supabase.rpc("clear_my_must_change_password");
   if (error) throw error;
 }

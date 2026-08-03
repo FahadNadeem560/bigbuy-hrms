@@ -378,8 +378,8 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
 
       <Table
         headers={viewOnly
-          ? ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "CNIC Expiry", "Status"]
-          : ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Salary", "CNIC Expiry", "Status", "Action"]}
+          ? ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "CNIC Expiry", "Status"]
+          : ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "Salary", "CNIC Expiry", "Status", "Action"]}
         rows={filteredEmployees}
         renderRow={e => {
           const cnicStatus = cnicExpiryStatus(e.cnicExpiryDate);
@@ -399,6 +399,7 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
               <td className="px-4 py-3 text-slate-500 text-xs">{supervisorMap[e.supervisorId] || e.supervisorId || "—"}</td>
               <td className="px-4 py-3">{e.branch}</td>
               <td className="px-4 py-3">{e.dept}</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{e.joiningDate || "—"}</td>
               {!viewOnly && <td className="px-4 py-3">{money(e.salary)}</td>}
               <td className="px-4 py-3">
                 {e.cnicExpiryDate
