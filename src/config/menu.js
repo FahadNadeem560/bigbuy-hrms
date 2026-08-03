@@ -26,6 +26,7 @@ export const MENU_ITEMS = [
   { key: "payroll-extras",     label: "Adjustments & Tax", icon: "🧾", section: "Payroll & Finance", roles: ["Master","HR","GM"] },
   { key: "loans",              label: "Loans & Advances", icon: "💳", section: "Payroll & Finance", roles: ["Master","HR","Finance","Employee","GM"] },
   { key: "confidential-incentives", label: "Confidential Incentives", icon: "🔒", section: "Payroll & Finance", roles: ["Master","GM"] },
+  { key: "finance-reconciliation", label: "Finance Reconciliation", icon: "🧮", section: "Payroll & Finance", roles: ["Master","Finance"] },
 
   // Approvals
   { key: "approval-queue", label: "Approval Queue",   icon: "✅", section: "Approvals",         roles: ["Master","HR","GM"] },
@@ -33,5 +34,6 @@ export const MENU_ITEMS = [
   // System
   { key: "imports",      label: "Data Management",     icon: "🗄️", section: "System",           roles: ["Master","HR","Finance","GM"] },
   { key: "settings",     label: "Settings",            icon: "⚙️", section: "System",           roles: ["Master"] },
+  { key: "user-management", label: "User Management",  icon: "🛡️", section: "System",           roles: ["Master"] },
   { key: "ai-assistant", label: "AI Assistant",        icon: "🤖", section: "System",           roles: ["Master","HR","Finance","Employee","GM"] },
 ];

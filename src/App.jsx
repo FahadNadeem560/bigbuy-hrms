@@ -18,6 +18,8 @@ import AllowancesHub from "./pages/AllowancesHub.jsx";
 import PayrollExtras from "./pages/PayrollExtras.jsx";
 import LoanHub from "./pages/LoanHub.jsx";
 import CashIncentives from "./pages/CashIncentives.jsx";
+import FinanceReconciliation from "./pages/FinanceReconciliation.jsx";
+import UserManagement from "./pages/UserManagement.jsx";
 import SettingsHub from "./pages/SettingsHub.jsx";
 import ApprovalQueue from "./pages/ApprovalQueue.jsx";
 import AIAssistant from "./pages/AIAssistant.jsx";
@@ -106,7 +108,16 @@ export default function BigBuyHRMS({ profile }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [selectedPayslip, setSelectedPayslip] = useState(null);
-  const visibleMenu = useMemo(() => MENU_ITEMS.filter(item => item.roles.includes(role)), [role]);
+  // menu_overrides (set via the Master-only User Management page) is an
+  // exact allowlist of menu keys that replaces the role's normal default
+  // access for that one account. NULL (every account until explicitly
+  // overridden) falls back to the existing role-based filter untouched.
+  const menuOverrides = profile?.menu_overrides;
+  const visibleMenu = useMemo(() => (
+    menuOverrides?.length
+      ? MENU_ITEMS.filter(item => menuOverrides.includes(item.key))
+      : MENU_ITEMS.filter(item => item.roles.includes(role))
+  ), [role, menuOverrides]);
   const branchRestriction = getBranchFilter(profile);
   const effectiveBranch = branchRestriction || branch;
   const filteredEmployees = useMemo(() => employees.filter(emp =>
@@ -370,6 +381,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "payroll-extras"     && <PayrollExtras role={role} />}
       {active === "loans"              && <LoanHub role={role} />}
       {active === "confidential-incentives" && <CashIncentives role={role} actorName={user.name} month={incentiveMonth} setMonth={setIncentiveMonth} />}
+      {active === "finance-reconciliation" && <FinanceReconciliation role={role} actorName={user.name} month={incentiveMonth} setMonth={setIncentiveMonth} />}
 
       {/* HR Tools */}
       {active === "fines"     && <Fines role={role} />}
@@ -381,6 +393,7 @@ export default function BigBuyHRMS({ profile }) {
       {/* System */}
       {active === "imports"     && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}
       {active === "settings"    && <SettingsHub />}
+      {active === "user-management" && <UserManagement role={role} />}
       {active === "ai-assistant"&& <AIAssistant />}
     </Layout>
   );
