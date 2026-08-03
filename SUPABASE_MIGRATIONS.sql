@@ -144,7 +144,8 @@ ALTER TABLE one_time_adjustments
   ADD COLUMN IF NOT EXISTS employee_name TEXT,
   ADD COLUMN IF NOT EXISTS submitted_by  TEXT,
   ADD COLUMN IF NOT EXISTS approved_by   TEXT,
-  ADD COLUMN IF NOT EXISTS approved_at   TIMESTAMPTZ;
+  ADD COLUMN IF NOT EXISTS approved_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS calc_mode     TEXT DEFAULT 'Full Amount';
 
 -- ─────────────────────────────────────────────────────────────
 -- fuel_claims
@@ -549,6 +550,7 @@ BEGIN
   ALTER TABLE one_time_adjustments ADD COLUMN IF NOT EXISTS submitted_by  TEXT;
   ALTER TABLE one_time_adjustments ADD COLUMN IF NOT EXISTS approved_by   TEXT;
   ALTER TABLE one_time_adjustments ADD COLUMN IF NOT EXISTS approved_at   TIMESTAMPTZ;
+  ALTER TABLE one_time_adjustments ADD COLUMN IF NOT EXISTS calc_mode     TEXT DEFAULT 'Full Amount';
 
   -- ── fuel_claims ────────────────────────────────────────────
   CREATE TABLE IF NOT EXISTS fuel_claims (

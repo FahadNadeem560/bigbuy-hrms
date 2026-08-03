@@ -12,7 +12,7 @@ const COLS = [
   { key: "extra_working_days", label: "Extra Days" },
   { key: "leave_adjustment", label: "Leave Adj." },
   { key: "arrears", label: "Arrears" },
-  { key: "commission", label: "Commission" },
+  { key: "commission_addon", label: "Commission" },
   { key: "other_amount", label: "Other Amt" },
   { key: "advance", label: "Advance" },
   { key: "loan_deduction", label: "Loan Ded." },

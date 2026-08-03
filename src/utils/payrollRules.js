@@ -68,7 +68,6 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   }
 
   // ── Earnings ──────────────────────────────────────────────
-  const commission       = Number(adjustments.commission || 0);
   const commissionAddOn  = Number(adjustments.commissionAddOn || 0);
   const arrears          = Number(adjustments.arrears || 0);
   const absentAdjustment = Number(adjustments.absentAdjustment || 0);
@@ -78,7 +77,6 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const totalEarnings =
     monthlySalary +
     overtimeAmount +
-    commission +
     commissionAddOn +
     arrears +
     absentAdjustment +
@@ -140,7 +138,6 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     extraWorkingDays,
     // Earnings
     overtimeAmount,
-    commission,
     commissionAddOn,
     arrears,
     absentAdjustment,

@@ -209,7 +209,10 @@ CREATE TABLE IF NOT EXISTS one_time_adjustments (
   approved_at timestamptz,
   created_at timestamptz DEFAULT now()
 );
+ALTER TABLE one_time_adjustments ADD COLUMN IF NOT EXISTS calc_mode text DEFAULT 'Full Amount';
 ```
+
+`calc_mode` is `'Full Amount'` (apply the entered amount unchanged) or `'As Per Attendance'` (prorate by present days ÷ working days for that payroll month, same as salary absence proration).
 
 ---
 

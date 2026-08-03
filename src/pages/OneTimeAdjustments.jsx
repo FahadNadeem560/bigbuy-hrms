@@ -40,7 +40,8 @@ function EmpPicker({ employees, value, onChange }) {
 }
 
 const ADJ_TYPES = ["Incentive", "Arrears", "Deduction", "Shortage", "Penalty", "Commission", "Other"];
-const BLANK = { employee: null, type: "Incentive", amount: "", reason: "", payroll_month: "" };
+const CALC_MODES = ["Full Amount", "As Per Attendance"];
+const BLANK = { employee: null, type: "Incentive", amount: "", reason: "", payroll_month: "", calc_mode: "Full Amount" };
 
 function statusTone(s) {
   return s === "Approved" ? "green" : s === "Rejected" ? "red" : "yellow";
@@ -75,7 +76,7 @@ export default function OneTimeAdjustments({ role }) {
     const { error } = await supabase.from("one_time_adjustments").insert({
       employee_code: form.employee.employee_code, employee_name: form.employee.full_name,
       type: form.type, amount: Number(form.amount), reason: form.reason,
-      payroll_month: form.payroll_month, status: "Pending",
+      payroll_month: form.payroll_month, status: "Pending", calc_mode: form.calc_mode,
       submitted_by: "HR", created_at: new Date().toISOString(),
     });
     if (error) return setErr(error.message);
@@ -136,10 +137,17 @@ export default function OneTimeAdjustments({ role }) {
               <p className="text-xs text-slate-500 mb-1">Applicable Payroll Month *</p>
               <input type="month" value={form.payroll_month} onChange={e => setForm(f => ({ ...f, payroll_month: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
             </div>
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Calculation *</p>
+              <select value={form.calc_mode} onChange={e => setForm(f => ({ ...f, calc_mode: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm">
+                {CALC_MODES.map(m => <option key={m}>{m}</option>)}
+              </select>
+            </div>
             <div className="md:col-span-2"><p className="text-xs text-slate-500 mb-1">Reason</p><textarea value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} rows={3} placeholder="Reason for adjustment..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm resize-none" /></div>
           </div>
           <div className="mt-4 p-3 bg-slate-50 rounded-xl text-xs text-slate-500">
             Submitted adjustments go to the Master approval queue before being applied to payroll.
+            "As Per Attendance" scales the amount by the employee's present days ÷ working days for the payroll month, the same way salary is prorated for absences. "Full Amount" applies it unchanged.
           </div>
           <div className="mt-3"><Button onClick={submit} className="rounded-2xl">Submit for Approval</Button></div>
         </div>
@@ -150,16 +158,17 @@ export default function OneTimeAdjustments({ role }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">All Adjustments</h2><p className="text-xs text-slate-400">{adjustments.length} total</p></div>
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Type", "Amount", "Month", "Reason", "Status", "Rejection Reason"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Type", "Amount", "Mode", "Month", "Reason", "Status", "Rejection Reason"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {adjustments.length === 0
-                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No adjustments found.</td></tr>
+                ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No adjustments found.</td></tr>
                 : adjustments.map(a => (
                   <tr key={a.id}>
                     <td className="px-4 py-3 font-medium">{a.employee_name || a.employee_code}</td>
                     <td className="px-4 py-3"><Badge tone={["Incentive", "Arrears", "Commission"].includes(a.type) ? "green" : "red"}>{a.type}</Badge></td>
                     <td className="px-4 py-3 font-semibold">{money(a.amount)}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{a.calc_mode || "Full Amount"}</td>
                     <td className="px-4 py-3">{a.payroll_month}</td>
                     <td className="px-4 py-3 max-w-[160px] truncate">{a.reason || "—"}</td>
                     <td className="px-4 py-3"><Badge tone={statusTone(a.status)}>{a.status}</Badge></td>
@@ -176,16 +185,17 @@ export default function OneTimeAdjustments({ role }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Approval Queue</h2><p className="text-xs text-slate-400">{pending.length} pending</p></div>
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Type", "Amount", "Month", "Reason", "Submitted", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Type", "Amount", "Mode", "Month", "Reason", "Submitted", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {adjustments.length === 0
-                ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No adjustments.</td></tr>
+                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No adjustments.</td></tr>
                 : adjustments.map(a => (
                   <tr key={a.id}>
                     <td className="px-4 py-3 font-medium">{a.employee_name || a.employee_code}</td>
                     <td className="px-4 py-3"><Badge tone={["Incentive", "Arrears", "Commission"].includes(a.type) ? "green" : "red"}>{a.type}</Badge></td>
                     <td className="px-4 py-3 font-semibold">{money(a.amount)}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{a.calc_mode || "Full Amount"}</td>
                     <td className="px-4 py-3">{a.payroll_month}</td>
                     <td className="px-4 py-3 max-w-[140px] truncate">{a.reason || "—"}</td>
                     <td className="px-4 py-3">{a.created_at?.slice(0, 10)}</td>

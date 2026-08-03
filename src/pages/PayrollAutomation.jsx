@@ -173,8 +173,7 @@ function PayslipModal({ row, month, onClose }) {
             <ERow label="Basic Salary" value={row.basicSalary} />
             <ERow label="Extra Working Days Amount" value={row.extraWorkingDaysAmount} />
             <ERow label="OT Amount" value={row.overtimeAmount} />
-            <ERow label="Commission" value={row.commission} />
-            <ERow label="Commission Add-On" value={row.commissionAddOn} />
+            <ERow label="Commission" value={row.commissionAddOn} />
             <ERow label="Fuel Allowance" value={row.fuelAllowance} />
             <ERow label="Other Earnings" value={row.otherEarnings} />
             <div className="flex justify-between py-2 mt-1 bg-emerald-50 rounded-xl px-3">
@@ -351,7 +350,6 @@ export default function PayrollAutomation({ role, actorName }) {
   const [paymentStatusRow, setPaymentStatusRow] = useState(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const [commissionAddOns, setCommissionAddOns] = useState({});
   const [searchText, setSearchText] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
@@ -435,9 +433,6 @@ export default function PayrollAutomation({ role, actorName }) {
       setPayrollStatus(data[0]?.status || "Draft");
       setPublishedBy(data[0]?.published_by || "");
       setPublishedAt(data[0]?.published_at || "");
-      const saved = {};
-      data.forEach(r => { if (r.commission_addon) saved[r.employee_code] = Number(r.commission_addon); });
-      setCommissionAddOns(saved);
     } else {
       setPayrollRows([]);
       setPayrollStatus("Draft");
@@ -513,8 +508,15 @@ export default function PayrollAutomation({ role, actorName }) {
     (oneTimeAdjData || []).forEach(a => {
       const field = ONE_TIME_ADJ_FIELD[a.type];
       if (!field) return;
+      let amt = Number(a.amount || 0);
+      if (a.calc_mode === "As Per Attendance") {
+        const empAtt = attByEmp[a.employee_code];
+        const workDays = empAtt?.numberOfWorkingDays || numberOfWorkingDays;
+        const presentDays = empAtt?.presentDays || 0;
+        amt = workDays > 0 ? Math.round((amt * presentDays) / workDays) : 0;
+      }
       if (!oneTimeAdjByEmp[a.employee_code]) oneTimeAdjByEmp[a.employee_code] = {};
-      oneTimeAdjByEmp[a.employee_code][field] = (oneTimeAdjByEmp[a.employee_code][field] || 0) + Number(a.amount || 0);
+      oneTimeAdjByEmp[a.employee_code][field] = (oneTimeAdjByEmp[a.employee_code][field] || 0) + amt;
     });
 
     const rows = employees.map(emp => {
@@ -530,7 +532,7 @@ export default function PayrollAutomation({ role, actorName }) {
       const oneTimeAdj = oneTimeAdjByEmp[emp.employee_code] || {};
       const adj = {
         ...(attByEmp[emp.employee_code] || { numberOfWorkingDays }),
-        commissionAddOn: (commissionAddOns[emp.employee_code] || 0) + (oneTimeAdj.commissionAddOn || 0),
+        commissionAddOn: oneTimeAdj.commissionAddOn || 0,
         fineDeduction: (fineByEmp[emp.employee_code] || 0) + (oneTimeAdj.fineDeduction || 0),
         shortageDeduction: (shortageByEmp[emp.employee_code] || 0) + (oneTimeAdj.shortageDeduction || 0),
         advanceDeduction: advanceByEmp[emp.employee_code] || 0,
@@ -658,17 +660,6 @@ export default function PayrollAutomation({ role, actorName }) {
     }));
   }
 
-  async function handleCommissionChange(code, value) {
-    const num = Number(value) || 0;
-    setCommissionAddOns(prev => ({ ...prev, [code]: num }));
-    try {
-      await supabase.from("payroll")
-        .update({ commission_addon: num })
-        .eq("payroll_month", month)
-        .eq("employee_code", code);
-    } catch (_) {}
-  }
-
   async function updateStatus(newStatus) {
     if (newStatus === "Approved" && role !== "Master") return setErr("Only Master can approve payroll.");
     await supabase.from("payroll").update({ status: newStatus }).eq("payroll_month", month);
@@ -758,8 +749,8 @@ export default function PayrollAutomation({ role, actorName }) {
       "Working Days": r.numberOfWorkingDays, "Days Present": r.presentDays, "Days Absent": r.absentDays,
       "Worked Hours": r.workedHours, "Required Hours": r.requiredHours,
       "OT Hours": r.otHours, "Leave Days": r.leaveDaysUsed, "Extra Working Days": r.extraWorkingDays,
-      "Basic Salary": r.basicSalary, "OT Amount": r.overtimeAmount, "Commission": r.commission,
-      "Commission Add-On": r.commissionAddOn, "Fuel Allowance": r.fuelAllowance, "Other Earnings": r.otherEarnings,
+      "Basic Salary": r.basicSalary, "OT Amount": r.overtimeAmount,
+      "Commission": r.commissionAddOn, "Fuel Allowance": r.fuelAllowance, "Other Earnings": r.otherEarnings,
       "Extra WD Amount": r.extraWorkingDaysAmount, "Total Earnings": r.totalEarnings,
       "Late Deduction": r.lateDeduction, "Short Hour Deduction": r.shortHourDeduction,
       "Absent Deduction": r.absentDeduction, "Fine": r.fineDeduction, "Shortage": r.shortageDeduction,
@@ -782,12 +773,11 @@ export default function PayrollAutomation({ role, actorName }) {
     const emp = empByCode[code] || {};
     const basicSalary          = r.gross || r.gross_salary || 0;
     const overtimeAmount       = r.overtimeAmount || r.overtime_amount || r.ot_amount || 0;
-    const commission           = r.commission || 0;
-    const commissionAddOn      = commissionAddOns[code] ?? (r.commissionAddOn || r.commission_addon || 0);
+    const commissionAddOn      = r.commissionAddOn || r.commission_addon || 0;
     const fuelAllowance        = r.fuelAllowance || r.fuel_allowance || r.fuel || 0;
     const otherEarnings        = r.otherEarnings || r.other_earnings || r.otherAmount || r.other_amount || 0;
     const extraWorkingDaysAmount = r.extraWorkingDaysAmount || r.extra_working_days_amount || 0;
-    const totalEarnings = basicSalary + overtimeAmount + commission + commissionAddOn +
+    const totalEarnings = basicSalary + overtimeAmount + commissionAddOn +
       fuelAllowance + otherEarnings + extraWorkingDaysAmount +
       (r.arrears || 0) + (r.absentAdjustment || r.absent_adjustment || 0);
 
@@ -823,7 +813,7 @@ export default function PayrollAutomation({ role, actorName }) {
       lateCount: r.lateCount || r.late_count || 0,
       leaveDaysUsed: r.leaveDaysUsed || r.leave_days_used || 0,
       extraWorkingDays: r.extraWorkingDays || r.extra_working_days || 0,
-      basicSalary, overtimeAmount, commission, commissionAddOn, fuelAllowance,
+      basicSalary, overtimeAmount, commissionAddOn, fuelAllowance,
       otherEarnings, extraWorkingDaysAmount, totalEarnings,
       lateDeduction, shortHourDeduction, absentDeduction, halfDayDeduction,
       fineDeduction, shortageDeduction, advanceDeduction, loanDeduction,
@@ -831,7 +821,7 @@ export default function PayrollAutomation({ role, actorName }) {
       finalSalary: totalEarnings - totalDeductions, gross: basicSalary,
       arrears: r.arrears || 0,
     };
-  }), [payrollRows, commissionAddOns, payrollStatus]);
+  }), [payrollRows, payrollStatus]);
 
   const totals = useMemo(() => displayRows.reduce((s, r) => ({
     employees: s.employees + 1,
@@ -1112,7 +1102,6 @@ export default function PayrollAutomation({ role, actorName }) {
               <TH className="text-emerald-600">Extra WD Amt</TH>
               <TH className="text-emerald-600">OT Amt</TH>
               <TH className="text-emerald-600">Commission</TH>
-              <TH className="text-emerald-600">Comm+</TH>
               <TH className="text-emerald-600">Fuel</TH>
               <TH className="text-emerald-600">Other Earn</TH>
               <TH className="text-emerald-700 bg-emerald-50">Total Earn</TH>
@@ -1134,7 +1123,7 @@ export default function PayrollAutomation({ role, actorName }) {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.length === 0 ? (
-              <tr><td colSpan={31} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={30} className="px-4 py-8 text-center text-slate-400">
                 {displayRows.length === 0
                   ? (role === "Finance" ? "No published payroll for this month." : 'No payroll data. Click "Generate Payroll" to calculate.')
                   : "No employees match the current filters."}
@@ -1145,7 +1134,7 @@ export default function PayrollAutomation({ role, actorName }) {
               return (
                 <React.Fragment key={branch}>
                   <tr className="bg-slate-800 text-white cursor-pointer select-none" onClick={() => toggleBranchCollapsed(branch)}>
-                    <TD colSpan={31} className="font-bold py-2">
+                    <TD colSpan={30} className="font-bold py-2">
                       {branchCollapsed ? "▶" : "▼"} {branch}
                       <span className="font-normal text-slate-300 text-xs ml-2">
                         ({branchRows.length} employees · Basic {money(sumRows(branchRows, "basicSalary"))} · Net {money(sumRows(branchRows, "finalSalary"))})
@@ -1158,7 +1147,7 @@ export default function PayrollAutomation({ role, actorName }) {
                     return (
                       <React.Fragment key={deptKey}>
                         <tr className="bg-slate-100 cursor-pointer select-none" onClick={() => toggleDeptCollapsed(deptKey)}>
-                          <TD colSpan={31} className="font-semibold text-slate-600 py-1.5 pl-8">
+                          <TD colSpan={30} className="font-semibold text-slate-600 py-1.5 pl-8">
                             {deptCollapsed ? "▶" : "▼"} {dept}
                             <span className="font-normal text-slate-400 text-xs ml-2">
                               ({rows.length} · Basic {money(sumRows(rows, "basicSalary"))} · Net {money(sumRows(rows, "finalSalary"))})
@@ -1187,18 +1176,7 @@ export default function PayrollAutomation({ role, actorName }) {
                             <TD>{money(r.basicSalary)}</TD>
                             <TD className="text-emerald-600">{r.extraWorkingDaysAmount ? money(r.extraWorkingDaysAmount) : "—"}</TD>
                             <TD className="text-emerald-600">{r.overtimeAmount ? money(r.overtimeAmount) : "—"}</TD>
-                            <TD className="text-emerald-600">{r.commission ? money(r.commission) : "—"}</TD>
-                            <TD>
-                              {isPublished ? (
-                                <span>{commissionAddOns[r.employeeCode] ?? r.commissionAddOn ?? 0 ? money(commissionAddOns[r.employeeCode] ?? r.commissionAddOn) : "—"}</span>
-                              ) : (
-                                <input type="number" min="0"
-                                  value={commissionAddOns[r.employeeCode] ?? r.commissionAddOn ?? 0}
-                                  onChange={e => handleCommissionChange(r.employeeCode, e.target.value)}
-                                  className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-right text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
-                                  disabled={!["HR", "Master"].includes(role) || isLocked} />
-                              )}
-                            </TD>
+                            <TD className="text-emerald-600">{r.commissionAddOn ? money(r.commissionAddOn) : "—"}</TD>
                             <TD className="text-emerald-600">{r.fuelAllowance ? money(r.fuelAllowance) : "—"}</TD>
                             <TD className="text-emerald-600">{r.otherEarnings ? money(r.otherEarnings) : "—"}</TD>
                             <TD className="font-semibold text-emerald-700 bg-emerald-50">{money(r.totalEarnings)}</TD>
@@ -1254,7 +1232,6 @@ export default function PayrollAutomation({ role, actorName }) {
                 <TD>{money(sumRows(filteredRows, "basicSalary"))}</TD>
                 <TD>{money(sumRows(filteredRows, "extraWorkingDaysAmount"))}</TD>
                 <TD>{money(sumRows(filteredRows, "overtimeAmount"))}</TD>
-                <TD>{money(sumRows(filteredRows, "commission"))}</TD>
                 <TD>{money(sumRows(filteredRows, "commissionAddOn"))}</TD>
                 <TD>{money(sumRows(filteredRows, "fuelAllowance"))}</TD>
                 <TD>{money(sumRows(filteredRows, "otherEarnings"))}</TD>
