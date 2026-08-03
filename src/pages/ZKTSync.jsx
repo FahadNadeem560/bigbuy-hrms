@@ -54,18 +54,51 @@ export default function ZKTSync() {
     return joined.includes("date") || joined.includes("time") || joined.includes("status") || joined.includes("department") || joined.includes("name") || joined.includes("location");
   }
 
-  function rowsFromLines(lines) {
-    if (lines.length === 0) return [];
-    const first = lines[0].map((v) => String(v ?? "").trim());
-    if (!looksLikeHeader(first)) {
-      return lines.map((c) => ({
+  // Headerless ZKT device exports have appeared in two layouts: the original
+  // 7-column dump (No., unused duplicate, Date/Time, Status, Location ID,
+  // VerifyCode, CardNo) and a shorter one IT started sending 2026-08-03 with
+  // only No., Date/Time (or separate Date + Time), Status -- no Location/
+  // VerifyCode/CardNo at all. Mapping every row by its own column count
+  // (rather than assuming the old fixed 7-column layout) handles both
+  // without silently feeding the wrong column into Date/Time -- which
+  // previously produced garbage like Date/Time="I" that Postgres correctly
+  // rejected rather than importing a bogus timestamp.
+  function rowFromColumns(c) {
+    if (c.length >= 5) {
+      return {
         "No.": c[0] ?? c[1] ?? "",
         "Date/Time": c[2] ?? "",
         "Status": normalizeStatus(c[3] ?? ""),
         "Location ID": c[4] ?? "",
         "VerifyCode": c[5] ?? "",
         "CardNo": c[6] ?? "",
-      }));
+      };
+    }
+    if (c.length === 4) {
+      return {
+        "No.": c[0] ?? "",
+        "Date/Time": `${c[1] ?? ""} ${c[2] ?? ""}`.trim(),
+        "Status": normalizeStatus(c[3] ?? ""),
+        "Location ID": "",
+        "VerifyCode": "",
+        "CardNo": "",
+      };
+    }
+    return {
+      "No.": c[0] ?? "",
+      "Date/Time": c[1] ?? "",
+      "Status": normalizeStatus(c[2] ?? ""),
+      "Location ID": "",
+      "VerifyCode": "",
+      "CardNo": "",
+    };
+  }
+
+  function rowsFromLines(lines) {
+    if (lines.length === 0) return [];
+    const first = lines[0].map((v) => String(v ?? "").trim());
+    if (!looksLikeHeader(first)) {
+      return lines.map(rowFromColumns);
     }
     return lines.slice(1).map((row) => {
       const obj = {};
