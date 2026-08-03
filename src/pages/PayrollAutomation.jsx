@@ -451,11 +451,12 @@ export default function PayrollAutomation({ role, actorName }) {
     const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
     const numberOfWorkingDays = getWorkingDaysInMonth(y, m);
 
-    const [{ data: att }, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: groupsData }] = await Promise.all([
+    const [{ data: att }, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }] = await Promise.all([
       supabase.from("attendance").select("*").gte("work_date", fromDate).lte("work_date", toDate),
       supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("advances").select("*").eq("payroll_month", month).eq("status", "Approved"),
+      supabase.from("one_time_adjustments").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("staff_eligibility_groups").select("code, extra_days_eligible"),
     ]);
     const groupByCode = Object.fromEntries((groupsData || []).map(g => [g.code, g]));
@@ -498,6 +499,24 @@ export default function PayrollAutomation({ role, actorName }) {
       advanceByEmp[a.employee_code] = (advanceByEmp[a.employee_code] || 0) + Number(a.approved_amount || 0);
     });
 
+    // One-Time Adjustments (OneTimeAdjustments.jsx / Approval Queue) were
+    // approved but never actually fed into payroll anywhere -- this was the
+    // missing last step. Mapped onto the same fields the equivalent
+    // dedicated pages (Fines/Shortages) already feed, additively (a Penalty
+    // one-time-adjustment adds on top of, not instead of, the fines table).
+    const ONE_TIME_ADJ_FIELD = {
+      Commission: "commissionAddOn", Arrears: "arrears", Incentive: "otherEarnings",
+      Other: "otherEarnings", Deduction: "otherDeductions", Shortage: "shortageDeduction",
+      Penalty: "fineDeduction",
+    };
+    const oneTimeAdjByEmp = {};
+    (oneTimeAdjData || []).forEach(a => {
+      const field = ONE_TIME_ADJ_FIELD[a.type];
+      if (!field) return;
+      if (!oneTimeAdjByEmp[a.employee_code]) oneTimeAdjByEmp[a.employee_code] = {};
+      oneTimeAdjByEmp[a.employee_code][field] = (oneTimeAdjByEmp[a.employee_code][field] || 0) + Number(a.amount || 0);
+    });
+
     const rows = employees.map(emp => {
       const group = groupByCode[emp.eligibility_group];
       const extraDaysEligible = emp.extra_days_eligible != null ? !!emp.extra_days_eligible : !!group?.extra_days_eligible;
@@ -508,12 +527,16 @@ export default function PayrollAutomation({ role, actorName }) {
         isAttendanceExempt: !!emp.is_attendance_exempt,
         extraDaysEligible,
       };
+      const oneTimeAdj = oneTimeAdjByEmp[emp.employee_code] || {};
       const adj = {
         ...(attByEmp[emp.employee_code] || { numberOfWorkingDays }),
-        commissionAddOn: commissionAddOns[emp.employee_code] || 0,
-        fineDeduction: fineByEmp[emp.employee_code] || 0,
-        shortageDeduction: shortageByEmp[emp.employee_code] || 0,
+        commissionAddOn: (commissionAddOns[emp.employee_code] || 0) + (oneTimeAdj.commissionAddOn || 0),
+        fineDeduction: (fineByEmp[emp.employee_code] || 0) + (oneTimeAdj.fineDeduction || 0),
+        shortageDeduction: (shortageByEmp[emp.employee_code] || 0) + (oneTimeAdj.shortageDeduction || 0),
         advanceDeduction: advanceByEmp[emp.employee_code] || 0,
+        arrears: oneTimeAdj.arrears || 0,
+        otherEarnings: oneTimeAdj.otherEarnings || 0,
+        otherDeductions: oneTimeAdj.otherDeductions || 0,
       };
       const loanRows = [];
       const loanMatch = (loans || []).find(l =>
