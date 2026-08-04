@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { money } from "../utils/format.js";
 import NotificationBell from "../components/NotificationBell.jsx";
+import { signOut } from "../services/authService.js";
 import { approveLeaveStage, rejectLeaveStage, normalizeStage, routeInitialApprover, notifyInitialApprover } from "../services/leaveApprovalService.js";
 import { confirmVerification, flagEmployeeForHR } from "../services/payrollControlService.js";
 
@@ -66,7 +67,7 @@ function InfoRow({ label, value }) {
   );
 }
 
-export default function EmployeeSelfService() {
+export default function EmployeeSelfService({ profile: authProfile }) {
   const [session, setSession] = useState(null);
   const [tab, setTab] = useState("attendance");
   const [loading, setLoading] = useState(true);
@@ -104,12 +105,24 @@ export default function EmployeeSelfService() {
   const [leaveMsg, setLeaveMsg] = useState("");
 
   useEffect(() => {
-    const raw = localStorage.getItem("employeeSession");
-    if (!raw) { window.location.hash = "#employee-login"; return; }
-    const sess = JSON.parse(raw);
-    setSession(sess);
-    loadAll(sess);
-  }, []);
+    if (!authProfile?.employee_id) { window.location.hash = "#employee-login"; return; }
+    (async () => {
+      const { data: emp } = await supabase.from("employees")
+        .select("full_name, branch, department, designation, staff_level")
+        .eq("employee_code", authProfile.employee_id).maybeSingle();
+      const sess = {
+        employee_id: authProfile.username || authProfile.employee_id,
+        employee_code: authProfile.employee_id,
+        name: emp?.full_name || authProfile.full_name || authProfile.employee_id,
+        branch: emp?.branch || "",
+        department: emp?.department || "",
+        designation: emp?.designation || "",
+        staff_level: emp?.staff_level || "",
+      };
+      setSession(sess);
+      loadAll(sess);
+    })();
+  }, [authProfile?.employee_id]);
 
   // Team lookup needs the employee's UUID id (for employee_hierarchy.reports_to_employee_id),
   // which only arrives once the profile row loads — the localStorage session only has employee_code.
@@ -178,8 +191,11 @@ export default function EmployeeSelfService() {
         supabase.from("attendance").select("*").eq("employee_code", sess.employee_code).gte("work_date", thirtyAgo).order("work_date", { ascending: false }),
         supabase.from("leaves").select("*").eq("employee_id", sess.employee_code).maybeSingle(),
         supabase.from("leave_requests").select("*").eq("employee_code", sess.employee_code).order("created_at", { ascending: false }),
-        supabase.from("payroll").select("*").eq("employee_code", sess.employee_code).order("pay_period_start", { ascending: false }),
-        supabase.from("audit_logs").select("*").eq("action", "warning_issued").eq("entity_id", sess.employee_code).order("created_at", { ascending: false }),
+        supabase.from("payroll").select("*").eq("employee_code", sess.employee_code).order("payroll_month", { ascending: false }),
+        // RLS (audit_logs_self_select_warnings) already scopes this to the
+        // caller's own rows -- entity_id doesn't exist as a column, the
+        // employee_code lives inside the details JSON blob instead.
+        supabase.from("audit_logs").select("*").eq("action_type", "warning_issued").order("created_at", { ascending: false }),
         supabase.from("loans").select("*").eq("employee_code", sess.employee_code),
         supabase.from("employees").select("*").eq("employee_code", sess.employee_code).maybeSingle(),
       ]);
@@ -198,7 +214,7 @@ export default function EmployeeSelfService() {
   }
 
   function logout() {
-    localStorage.removeItem("employeeSession");
+    signOut();
     window.location.hash = "#employee-login";
   }
 
@@ -326,8 +342,6 @@ export default function EmployeeSelfService() {
     }
   }
 
-  if (!session) return null;
-
   const [timeLogForm, setTimeLogForm] = useState(BLANK_TIME_LOG);
   const [timeLogSubmitting, setTimeLogSubmitting] = useState(false);
   const [timeLogMsg, setTimeLogMsg] = useState("");
@@ -394,6 +408,12 @@ export default function EmployeeSelfService() {
     ...(isSupervisor ? [{ id: "myteam", label: "My Team", icon: "👥" }] : []),
     ...(isSupervisor && payrollVerifications.length > 0 ? [{ id: "payroll-verify", label: "Payroll Verification", icon: "🧾" }] : []),
   ];
+
+  // Must come after every hook above -- an early return placed before later
+  // hooks caused a "Rendered more hooks than during the previous render"
+  // crash the moment session flips from null to loaded (see git history for
+  // this line's prior position).
+  if (!session) return null;
 
   return (
     <div className="min-h-screen bg-slate-50">

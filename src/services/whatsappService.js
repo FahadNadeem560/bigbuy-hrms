@@ -48,27 +48,26 @@ function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+// Writes go through RPCs, not a direct table update -- employees_update RLS
+// is Master/HR-only, so an employee's own OTP send/verify (the
+// EmployeeLogin.jsx first-login gate) was previously silently blocked (0
+// rows affected, no error). The RPCs authorize either Master/HR (the
+// Employees.jsx admin "Resend Verification Code" button, which targets an
+// arbitrary employee) or the caller acting on their own row.
 export async function sendOnboardingOtp(employeeCode) {
   const otp = generateOtp();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  const { error } = await supabase.from("employees").update({
-    whatsapp_otp_code: otp, whatsapp_otp_expires_at: expiresAt,
-  }).eq("employee_code", employeeCode);
+  const { error } = await supabase.rpc("set_employee_whatsapp_otp", {
+    p_employee_code: employeeCode, p_code: otp, p_expires_at: expiresAt,
+  });
   if (error) throw error;
   await queueWhatsappMessage({ employeeCode, messageType: MESSAGE_TYPES.ONBOARDING_OTP, templateVariables: [otp] });
 }
 
 export async function verifyOnboardingOtp(employeeCode, enteredCode) {
-  const { data: emp } = await supabase.from("employees")
-    .select("whatsapp_otp_code, whatsapp_otp_expires_at").eq("employee_code", employeeCode).maybeSingle();
-  if (!emp?.whatsapp_otp_code) return { success: false, error: "No verification code on file. Request a new one." };
-  if (new Date(emp.whatsapp_otp_expires_at) < new Date()) return { success: false, error: "Code expired. Request a new one." };
-  if (String(enteredCode).trim() !== emp.whatsapp_otp_code) return { success: false, error: "Incorrect code." };
-  const now = new Date().toISOString();
-  await supabase.from("employees").update({
-    whatsapp_verified: true, whatsapp_verified_at: now,
-    enrollment_completed: true, enrollment_completed_at: now,
-    whatsapp_otp_code: null, whatsapp_otp_expires_at: null,
-  }).eq("employee_code", employeeCode);
-  return { success: true };
+  const { data, error } = await supabase.rpc("verify_employee_whatsapp_otp", {
+    p_employee_code: employeeCode, p_code: String(enteredCode).trim(),
+  });
+  if (error) return { success: false, error: error.message };
+  return data;
 }

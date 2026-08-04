@@ -4,7 +4,6 @@ import App from "./App.jsx";
 import Login from "./pages/Login.jsx";
 import ChangePassword from "./pages/ChangePassword.jsx";
 import EmployeeLogin from "./pages/EmployeeLogin.jsx";
-import EmployeeSelfService from "./pages/EmployeeSelfService.jsx";
 import { supabase } from "./lib/supabaseClient.js";
 import { getCurrentAuthSession, fetchUserProfileByAuthId, signOut } from "./services/authService.js";
 
@@ -19,14 +18,6 @@ function Root() {
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
-
-  // Protect the employee portal
-  useEffect(() => {
-    if (hash === "#employee-portal") {
-      const sess = localStorage.getItem("employeeSession");
-      if (!sess) window.location.hash = "#employee-login";
-    }
-  }, [hash]);
 
   // Main app real auth session
   useEffect(() => {
@@ -56,15 +47,22 @@ function Root() {
     return () => { active = false; };
   }, [session]);
 
-  if (hash === "#employee-login") return <EmployeeLogin />;
-  if (hash === "#employee-portal") {
-    const sess = localStorage.getItem("employeeSession");
-    if (!sess) return null; // Redirected via useEffect above
-    return <EmployeeSelfService />;
-  }
-
   if (session === undefined) return null; // initial session lookup in flight
   if (deactivated) return <Login deactivated />;
+
+  // EmployeeLogin is a self-contained gate (credentials -> forced password
+  // change -> WhatsApp OTP -> portal) that re-derives all of this from the
+  // Supabase Auth session itself, so it also needs to render on a page
+  // reload where an Employee-role session already exists but hash is bare.
+  // A confirmed non-Employee staff session takes priority over a stray
+  // #employee-login hash (e.g. clicked from StaffCredentials while already
+  // logged in as Master) -- EmployeeLogin would otherwise sign them out on
+  // its own role check.
+  const isStaffSession = session && profile && profile.role !== "Employee";
+  if (!isStaffSession && (hash === "#employee-login" || (session && profile?.role === "Employee"))) {
+    return <EmployeeLogin />;
+  }
+
   if (!session) return <Login />;
   if (!profile) return null; // profile row still loading
   if (profile.must_change_password) {

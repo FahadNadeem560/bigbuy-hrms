@@ -2,14 +2,8 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
+import { fetchAllUsers, createUser, resetUserPassword } from "../services/userManagementService.js";
 import * as XLSX from "xlsx";
-
-function generatePassword(len = 8) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  let pwd = "";
-  for (let i = 0; i < len; i++) pwd += chars[Math.floor(Math.random() * chars.length)];
-  return pwd;
-}
 
 export default function StaffCredentials() {
   const [employees, setEmployees] = useState([]);
@@ -20,20 +14,23 @@ export default function StaffCredentials() {
   const [err, setErr] = useState("");
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
+  // Temp passwords come back from the create/reset edge function once and
+  // are never stored in the DB in plaintext (real Supabase Auth account) --
+  // this is the only place they're ever visible, and only for this session.
+  const [revealed, setRevealed] = useState({}); // employee_code -> tempPassword
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true); setErr("");
     try {
-      const [{ data: emps, error: e1 }, { data: usrs, error: e2 }] = await Promise.all([
+      const [{ data: emps, error: e1 }, allUsers] = await Promise.all([
         supabase.from("employees").select("employee_code, full_name, department, branch, status, designation").eq("status", "Active").order("full_name"),
-        supabase.from("users").select("employee_code, username, employee_id, password_plain, role"),
+        fetchAllUsers(),
       ]);
       if (e1) throw e1;
-      if (e2) throw e2;
       setEmployees(emps || []);
-      setUsers(usrs || []);
+      setUsers((allUsers || []).filter(u => u.role === "Employee"));
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -41,55 +38,56 @@ export default function StaffCredentials() {
     }
   }
 
+  // users.employee_id holds the employee_code for Employee-role accounts
+  // (same convention the RLS helper private.current_employee_code() reads).
   const userMap = useMemo(() =>
-    Object.fromEntries((users || []).filter(u => u.employee_code).map(u => [u.employee_code, u])),
+    Object.fromEntries((users || []).filter(u => u.employee_id).map(u => [u.employee_id, u])),
     [users]
   );
+
+  function nextUsernameFor(branch, existingUsernames) {
+    const branchCode = BRANCH_CODE_MAP[branch] || "GEN";
+    let max = 0;
+    existingUsernames.forEach(u => {
+      const parts = String(u || "").split("-");
+      if (parts.length >= 3 && parts[0] === "BB" && parts[1] === branchCode) {
+        const num = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(num)) max = Math.max(max, num);
+      }
+    });
+    return `BB-${branchCode}-${String(max + 1).padStart(4, "0")}`;
+  }
 
   async function generateAll() {
     setGenerating(true); setErr(""); setMsg("");
     try {
-      const { data: allUsers } = await supabase.from("users").select("username, employee_code");
-      const existingCodes = new Set((allUsers || []).map(u => u.employee_code).filter(Boolean));
-
-      // Build per-branch counter from existing usernames
-      const branchCounters = {};
-      (allUsers || []).forEach(u => {
-        if (!u.username) return;
-        const parts = u.username.split("-");
-        if (parts.length >= 3 && parts[0] === "BB") {
-          const code = parts[1];
-          const num = parseInt(parts[parts.length - 1], 10);
-          if (!isNaN(num)) branchCounters[code] = Math.max(branchCounters[code] || 0, num);
-        }
-      });
-
-      const toInsert = [];
-      for (const emp of employees) {
-        if (existingCodes.has(emp.employee_code)) continue;
-        const branchCode = BRANCH_CODE_MAP[emp.branch] || "GEN";
-        branchCounters[branchCode] = (branchCounters[branchCode] || 0) + 1;
-        const num = String(branchCounters[branchCode]).padStart(4, "0");
-        const empId = `BB-${branchCode}-${num}`;
-        const password = generatePassword(8);
-        toInsert.push({
-          employee_code: emp.employee_code,
-          employee_id: empId,
-          username: empId,
-          password_plain: password,
-          role: "Employee",
-        });
-      }
-
-      if (toInsert.length === 0) {
+      const pending = employees.filter(emp => !userMap[emp.employee_code]);
+      if (pending.length === 0) {
         setMsg("All active employees already have credentials.");
         return;
       }
 
-      const { error } = await supabase.from("users").upsert(toInsert, { onConflict: "employee_code" });
-      if (error) throw error;
+      const usernames = users.map(u => u.username);
+      const newlyRevealed = {};
+      let created = 0;
+      let failed = 0;
+      for (const emp of pending) {
+        const username = nextUsernameFor(emp.branch, usernames);
+        usernames.push(username); // reserve it for the next iteration's counter
+        try {
+          const result = await createUser({
+            username, fullName: emp.full_name, role: "Employee",
+            branch: emp.branch, employeeId: emp.employee_code,
+          });
+          newlyRevealed[emp.employee_code] = { username: result.username, tempPassword: result.tempPassword };
+          created++;
+        } catch (e) {
+          failed++;
+        }
+      }
 
-      setMsg(`Generated credentials for ${toInsert.length} employee${toInsert.length !== 1 ? "s" : ""}.`);
+      setRevealed(prev => ({ ...prev, ...newlyRevealed }));
+      setMsg(`Generated credentials for ${created} employee${created !== 1 ? "s" : ""}.${failed ? ` ${failed} failed.` : ""}`);
       await loadData();
     } catch (e) {
       setErr(e.message);
@@ -100,13 +98,11 @@ export default function StaffCredentials() {
 
   async function regenerateOne(emp) {
     try {
-      const branchCode = BRANCH_CODE_MAP[emp.branch] || "GEN";
-      const password = generatePassword(8);
       const existing = userMap[emp.employee_code];
       if (!existing) return;
-      const { error } = await supabase.from("users").update({ password_plain: password }).eq("employee_code", emp.employee_code);
-      if (error) throw error;
-      setMsg(`Password regenerated for ${emp.full_name}.`);
+      const result = await resetUserPassword(existing.id);
+      setRevealed(prev => ({ ...prev, [emp.employee_code]: { username: result.username, tempPassword: result.tempPassword } }));
+      setMsg(`Password regenerated for ${emp.full_name}. Copy it now — it won't be shown again.`);
       await loadData();
     } catch (e) {
       setErr(e.message);
@@ -124,12 +120,15 @@ export default function StaffCredentials() {
   }, [employees, userMap, filter, search]);
 
   function exportExcel() {
+    // Passwords only export for accounts created/reset THIS session --
+    // real Supabase Auth never stores them in plaintext, so anything
+    // generated in a prior session can no longer be recovered here.
     const data = rows.map(r => ({
       "Employee Name": r.full_name,
       "Branch": r.branch,
       "Department": r.department,
-      "Employee ID": r.credential?.username || r.credential?.employee_id || "",
-      "Password": r.credential?.password_plain || "",
+      "Employee ID": r.credential?.username || "",
+      "Password": revealed[r.employee_code]?.tempPassword || (r.credential ? "(not shown this session — use New Password to reset)" : ""),
       "Status": r.credential ? "Generated" : "Pending",
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -163,6 +162,8 @@ export default function StaffCredentials() {
       <div className="mb-4 p-4 bg-blue-50 border border-blue-100 rounded-2xl text-sm text-blue-700">
         <strong>Employee ID format:</strong> BB-{"{BRANCH_CODE}"}-{"{0001}"}  &nbsp;·&nbsp;
         <strong>Portal URL:</strong> Navigate to <code className="bg-blue-100 px-1 rounded">#employee-login</code> to access the employee portal.
+        <br />
+        Passwords are real login credentials and are shown here only once, right after they're generated or reset — copy them to the employee immediately.
       </div>
 
       {/* Stats */}
@@ -224,13 +225,15 @@ export default function StaffCredentials() {
                     <td className="px-4 py-3">{r.department}</td>
                     <td className="px-4 py-3">
                       {r.credential
-                        ? <code className="font-mono text-slate-800 bg-slate-50 px-2 py-0.5 rounded-lg text-xs">{r.credential.username || r.credential.employee_id || "—"}</code>
+                        ? <code className="font-mono text-slate-800 bg-slate-50 px-2 py-0.5 rounded-lg text-xs">{r.credential.username || "—"}</code>
                         : <span className="text-slate-300">—</span>}
                     </td>
                     <td className="px-4 py-3">
-                      {r.credential
-                        ? <code className="font-mono text-slate-600 bg-slate-50 px-2 py-0.5 rounded-lg text-xs">{r.credential.password_plain || "—"}</code>
-                        : <span className="text-slate-300">—</span>}
+                      {revealed[r.employee_code]?.tempPassword
+                        ? <code className="font-mono text-slate-800 bg-emerald-50 px-2 py-0.5 rounded-lg text-xs border border-emerald-100">{revealed[r.employee_code].tempPassword}</code>
+                        : r.credential
+                          ? <span className="text-slate-300 text-xs italic">hidden — reset to reveal</span>
+                          : <span className="text-slate-300">—</span>}
                     </td>
                     <td className="px-4 py-3">
                       <Badge tone={r.credential ? "green" : "yellow"}>{r.credential ? "Generated" : "Pending"}</Badge>

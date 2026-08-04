@@ -60,7 +60,7 @@ export default function Warnings() {
   async function loadAll() {
     const [{ data: emps }, { data: wrns }, { data: att }] = await Promise.all([
       supabase.from("employees").select("employee_code, full_name, department, branch, staff_level").order("full_name"),
-      supabase.from("audit_logs").select("*").eq("action", "warning_issued").order("created_at", { ascending: false }).limit(200),
+      supabase.from("audit_logs").select("*").eq("action_type", "warning_issued").order("created_at", { ascending: false }).limit(200),
       supabase.from("attendance").select("employee_code, late_minutes, work_date")
         .not("late_minutes", "is", null).gte("work_date", new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10)),
     ]);
@@ -95,7 +95,7 @@ export default function Warnings() {
       date: form.date, issued_by: "HR",
     };
     const { error } = await supabase.from("audit_logs").insert({
-      action: "warning_issued", entity: "employee", entity_id: form.employee.employee_code,
+      action_type: "warning_issued",
       details: JSON.stringify(payload), performed_by: "HR", created_at: new Date().toISOString(),
     });
     if (error) return setErr(error.message);
