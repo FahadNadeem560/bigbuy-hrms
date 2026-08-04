@@ -550,6 +550,14 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
     nextMonth: dueList.filter(e => e.bucket === "nextMonth").length,
   }), [dueList]);
 
+  function quickActionFromDue(emp) {
+    setForm(f => ({ ...BLANK, employee: { employee_code: emp.employee_code, full_name: emp.full_name, salary: emp.salary }, prevSalary: String(emp.salary || "") }));
+    setBulkMode(false);
+    setShowImport(false);
+    setShowForm(true);
+    setView("monthly");
+  }
+
   return (
     <div>
       <PageTitle
@@ -897,16 +905,20 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Due for Increment</h2><p className="text-xs text-slate-400">{dueList.length} employees</p></div>
             <table className="w-full min-w-[1100px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Emp Code", "Name", "Branch", "Department", "Joining Date", "Last Increment Date", "Last Increment Amount", "Next Due Date", "Days Overdue/Remaining", "Current Salary"].map(h => (
+                <tr>{["Emp Code", "Name", "Branch", "Department", "Joining Date", "Last Increment Date", "Last Increment Amount", "Next Due Date", "Days Overdue/Remaining", "Current Salary",
+                  ...(isMasterGm ? ["Monthly Incentive", "Incentive Since", "Total Effective Comp."] : []),
+                  ...(role !== "GM" ? ["Action"] : [])].map(h => (
                   <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
                 ))}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {dueList.length === 0
-                  ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No employees due for increment in the next 60 days.</td></tr>
+                  ? <tr><td colSpan={10 + (isMasterGm ? 3 : 0) + (role !== "GM" ? 1 : 0)} className="px-4 py-8 text-center text-slate-400">No employees due for increment in the next 60 days.</td></tr>
                   : dueList.map(e => {
                     const toneClass = e.bucket === "overdue" ? "bg-red-50 text-red-700" : e.bucket === "thisMonth" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700";
                     const daysLabel = e.diffDays < 0 ? `${Math.abs(e.diffDays)} days overdue` : `${e.diffDays} days remaining`;
+                    const liveIncentive = incentivesByCode[e.employee_code] || 0;
+                    const since = incentiveSinceByCode[e.employee_code];
                     return (
                       <tr key={e.employee_code} className="hover:bg-slate-50/50">
                         <td className="px-4 py-3 text-slate-500">{e.employee_code}</td>
@@ -919,6 +931,24 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                         <td className="px-4 py-3">{e.next_increment_due}</td>
                         <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${toneClass}`}>{daysLabel}</span></td>
                         <td className="px-4 py-3 font-semibold">{money(e.salary)}</td>
+                        {isMasterGm && (
+                          <td className="px-4 py-3 text-purple-700" title="Current confidential incentive for this employee">{liveIncentive > 0 ? money(liveIncentive) : "—"}</td>
+                        )}
+                        {isMasterGm && (
+                          <td className="px-4 py-3 text-purple-700 text-xs">{since ? formatMonthYear(since) : "—"}</td>
+                        )}
+                        {isMasterGm && (
+                          <td className="px-4 py-3 font-semibold text-purple-800" title="Current salary + current confidential incentive">
+                            {money(Number(e.salary || 0) + liveIncentive)}
+                          </td>
+                        )}
+                        {role !== "GM" && (
+                          <td className="px-4 py-3">
+                            <Button onClick={() => quickActionFromDue(e)} className="rounded-lg text-xs py-1 px-2">
+                              {role === "HR" ? "Propose Increment" : "Add Increment"}
+                            </Button>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
