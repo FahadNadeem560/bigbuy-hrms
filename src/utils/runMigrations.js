@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-08-04-v10";
+const MIGRATION_VERSION = "2026-08-04-v11";
 let ran = false;
 
 export async function runMigrations() {
@@ -228,6 +228,20 @@ async function applyIncrementalMigrations() {
     `ALTER TABLE advances ADD COLUMN IF NOT EXISTS notes TEXT`,
     `UPDATE advances SET advance_month = payroll_month WHERE advance_month IS NULL AND payroll_month IS NOT NULL`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.advances TO anon, authenticated`,
+    // v11: dismiss an employee from the "Due for Increment" list for their
+    // current due_date only — a later/new next_increment_due naturally
+    // reappears since the dismissal is scoped to the specific date.
+    `CREATE TABLE IF NOT EXISTS public.increment_due_dismissals (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      employee_code TEXT NOT NULL,
+      employee_name TEXT,
+      due_date DATE NOT NULL,
+      reason TEXT,
+      dismissed_by TEXT,
+      dismissed_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (employee_code, due_date)
+    )`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.increment_due_dismissals TO anon, authenticated`,
   ];
 
   for (const sql of stmts) {

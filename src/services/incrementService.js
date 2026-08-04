@@ -100,6 +100,30 @@ export async function approveIncrement(incrementId, approverName) {
   return row;
 }
 
+// ══════════════════════ Due-for-Increment dismissals ══════════════════════
+// Scoped to the employee's current next_increment_due — if that date ever
+// changes (a new increment is applied, or it's manually pushed out), the
+// old dismissal no longer matches and the employee reappears on the list.
+
+export async function fetchIncrementDueDismissals() {
+  const { data, error } = await supabase.from("increment_due_dismissals").select("*").order("dismissed_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function dismissIncrementDue({ employeeCode, employeeName, dueDate, reason, dismissedBy }) {
+  const { error } = await supabase.from("increment_due_dismissals").upsert({
+    employee_code: employeeCode, employee_name: employeeName, due_date: dueDate,
+    reason: reason || null, dismissed_by: dismissedBy, dismissed_at: new Date().toISOString(),
+  }, { onConflict: "employee_code,due_date" });
+  if (error) throw error;
+}
+
+export async function restoreIncrementDue(id) {
+  const { error } = await supabase.from("increment_due_dismissals").delete().eq("id", id);
+  if (error) throw error;
+}
+
 export async function rejectIncrement(incrementId, approverName, reason) {
   if (!reason || !reason.trim()) throw new Error("A rejection reason is required.");
   const { data: inc, error: fetchErr } = await supabase.from("salary_increments").select("*").eq("id", incrementId).single();

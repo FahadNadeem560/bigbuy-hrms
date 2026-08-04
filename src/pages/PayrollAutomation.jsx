@@ -310,6 +310,14 @@ const DEDUCTION_ROWS = [
   ["Other Deduction", "otherDeduction"],
 ];
 const NAMED_BRANCHES = ["HO - Admin", "Main Branch", "DHA Branch", "WAREHOUSE", "BASE FAISAL"];
+const LEVEL_OPTIONS = ["Management", "Floor Management", "Non-Management"];
+const PAGE_SIZE_OPTIONS = [25, 50, 100, "All"];
+
+function roundN(v, n) { const f = 10 ** n; return Math.round(Number(v || 0) * f) / f; }
+function plainCode(code) {
+  const s = String(code ?? "");
+  return /^\d+$/.test(s) ? String(parseInt(s, 10)) : s;
+}
 
 // payroll rows carry no branch/department column themselves — always joined
 // in from employees.branch via employee_code, same as displayRows does above.
@@ -412,7 +420,9 @@ function BranchComparisonSummary({ month }) {
   const [loading, setLoading] = useState(true);
   const [currentByBranch, setCurrentByBranch] = useState({});
   const [previousByBranch, setPreviousByBranch] = useState({});
-  const [collapsed, setCollapsed] = useState(() => new Set());
+  // Opt-in set — everything starts collapsed so the page loads compact;
+  // clicking a card header (or "Expand All") reveals its full breakdown.
+  const [expanded, setExpanded] = useState(() => new Set());
   const prevMonth = useMemo(() => prevMonthOf(month), [month]);
 
   useEffect(() => {
@@ -450,7 +460,7 @@ function BranchComparisonSummary({ month }) {
   const totalPrev = useMemo(() => sumAgg(Object.values(previousByBranch)), [previousByBranch]);
 
   function toggle(key) {
-    setCollapsed(prev => {
+    setExpanded(prev => {
       const next = new Set(prev);
       next.has(key) ? next.delete(key) : next.add(key);
       return next;
@@ -486,17 +496,21 @@ function BranchComparisonSummary({ month }) {
     <div className="mb-4">
       <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
         <h2 className="font-bold text-slate-800">Payroll Comparison — {month} vs {prevMonth}</h2>
-        <Button variant="outline" onClick={exportExcel} className="rounded-xl text-xs">Export Comparison to Excel</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setExpanded(new Set([...allBranches, "__TOTAL__"]))} className="rounded-xl text-xs">Expand All</Button>
+          <Button variant="outline" onClick={() => setExpanded(new Set())} className="rounded-xl text-xs">Collapse All</Button>
+          <Button variant="outline" onClick={exportExcel} className="rounded-xl text-xs">Export Comparison to Excel</Button>
+        </div>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {allBranches.map(branch => (
           <BranchCard key={branch} branch={branch} cur={currentByBranch[branch] || emptyAgg()} prev={previousByBranch[branch] || emptyAgg()}
-            month={month} prevMonth={prevMonth} collapsed={collapsed.has(branch)} onToggle={() => toggle(branch)} />
+            month={month} prevMonth={prevMonth} collapsed={!expanded.has(branch)} onToggle={() => toggle(branch)} />
         ))}
       </div>
-      <div className="mt-4">
+      <div className="mt-3">
         <BranchCard branch="Total — All Branches" cur={totalCur} prev={totalPrev} month={month} prevMonth={prevMonth}
-          collapsed={collapsed.has("__TOTAL__")} onToggle={() => toggle("__TOTAL__")} total />
+          collapsed={!expanded.has("__TOTAL__")} onToggle={() => toggle("__TOTAL__")} total />
       </div>
     </div>
   );
@@ -562,30 +576,23 @@ export default function PayrollAutomation({ role, actorName }) {
   const [searchText, setSearchText] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [collapsedBranches, setCollapsedBranches] = useState(() => new Set());
-  const [collapsedDepts, setCollapsedDepts] = useState(() => new Set());
+  const [levelFilter, setLevelFilter] = useState("");
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState("All");
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+  const [pageSize, setPageSize] = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
   const [lockInfo, setLockInfo] = useState(null);
   const [verifications, setVerifications] = useState([]);
   const [flagNotifications, setFlagNotifications] = useState([]);
   const [marking, setMarking] = useState(false);
 
-  function toggleBranchCollapsed(branch) {
-    setCollapsedBranches(prev => {
-      const next = new Set(prev);
-      next.has(branch) ? next.delete(branch) : next.add(branch);
-      return next;
-    });
-  }
-  function toggleDeptCollapsed(key) {
-    setCollapsedDepts(prev => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
-  }
   function clearFilters() {
-    setSearchText(""); setBranchFilter(""); setDeptFilter(""); setStatusFilter("All");
+    setSearchText(""); setBranchFilter(""); setDeptFilter(""); setLevelFilter(""); setPaymentStatusFilter("All");
+  }
+  function toggleSort(key) {
+    if (sortKey === key) { setSortDir(d => (d === "asc" ? "desc" : "asc")); }
+    else { setSortKey(key); setSortDir("asc"); }
   }
 
   const isPublished = payrollStatus === "Published" || payrollStatus === "Locked" || payrollStatus === "Completed";
@@ -946,8 +953,8 @@ export default function PayrollAutomation({ role, actorName }) {
       "Branch": r.branch, "Department": r.department,
       "Employee Code": r.employeeCode, "Name": r.name, "Level": r.level,
       "Working Days": r.numberOfWorkingDays, "Days Present": r.presentDays, "Days Absent": r.absentDays,
-      "Worked Hours": r.workedHours, "Required Hours": r.requiredHours,
-      "OT Hours": r.otHours, "Leave Days": r.leaveDaysUsed, "Extra Working Days": r.extraWorkingDays,
+      "Worked Hours": roundN(r.workedHours, 2), "Required Hours": roundN(r.requiredHours, 1),
+      "OT Hours": roundN(r.otHours, 2), "Leave Days": r.leaveDaysUsed, "Extra Working Days": r.extraWorkingDays,
       "Basic Salary": r.basicSalary, "OT Amount": r.overtimeAmount,
       "Commission": r.commissionAddOn, "Fuel Allowance": r.fuelAllowance, "Other Earnings": r.otherEarnings,
       "Extra WD Amount": r.extraWorkingDaysAmount, "Total Earnings": r.totalEarnings,
@@ -962,7 +969,9 @@ export default function PayrollAutomation({ role, actorName }) {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Payroll");
-    XLSX.writeFile(wb, `payroll_${month}.xlsx`);
+    const branchPart = branchFilter ? `${branchFilter.replace(/\s+/g, "-")}_` : "";
+    const datePart = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Payroll_${month}_${branchPart}${datePart}.xlsx`);
   }
 
   const empByCode = useMemo(() => Object.fromEntries((employees || []).map(e => [e.employee_code, e])), [employees]);
@@ -1022,63 +1031,98 @@ export default function PayrollAutomation({ role, actorName }) {
     };
   }), [payrollRows, payrollStatus]);
 
-  const totals = useMemo(() => displayRows.reduce((s, r) => ({
-    employees: s.employees + 1,
-    totalEarnings: s.totalEarnings + r.totalEarnings,
-    totalDeductions: s.totalDeductions + r.totalDeductions,
-    netPay: s.netPay + r.finalSalary,
-  }), { employees: 0, totalEarnings: 0, totalDeductions: 0, netPay: 0 }), [displayRows]);
-
   const branchOptions = useMemo(() =>
     Array.from(new Set(displayRows.map(r => r.branch).filter(Boolean))).sort(), [displayRows]);
   const deptOptions = useMemo(() =>
-    Array.from(new Set(displayRows.map(r => r.department).filter(Boolean))).sort(), [displayRows]);
+    Array.from(new Set(displayRows.filter(r => !branchFilter || r.branch === branchFilter).map(r => r.department).filter(Boolean))).sort(),
+    [displayRows, branchFilter]);
 
   const filteredRows = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     return displayRows.filter(r => {
-      if (statusFilter !== "All" && r.status !== statusFilter) return false;
+      if (paymentStatusFilter !== "All" && r.paymentStatus !== paymentStatusFilter) return false;
       if (branchFilter && r.branch !== branchFilter) return false;
       if (deptFilter && r.department !== deptFilter) return false;
+      if (levelFilter && r.level !== levelFilter) return false;
       if (q && !(r.name || "").toLowerCase().includes(q) && !(r.employeeCode || "").toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [displayRows, searchText, branchFilter, deptFilter, statusFilter]);
+  }, [displayRows, searchText, branchFilter, deptFilter, levelFilter, paymentStatusFilter]);
 
   const filteredTotals = useMemo(() => filteredRows.reduce((s, r) => ({
+    totalBasic: s.totalBasic + r.basicSalary,
     totalEarnings: s.totalEarnings + r.totalEarnings,
     totalDeductions: s.totalDeductions + r.totalDeductions,
     netPay: s.netPay + r.finalSalary,
-  }), { totalEarnings: 0, totalDeductions: 0, netPay: 0 }), [filteredRows]);
-
-  function sumRows(rows, field) { return rows.reduce((s, r) => s + (r[field] || 0), 0); }
+  }), { totalBasic: 0, totalEarnings: 0, totalDeductions: 0, netPay: 0 }), [filteredRows]);
 
   const holdCount = useMemo(() => displayRows.filter(r => r.paymentStatus === "Hold").length, [displayRows]);
 
-  // Branch (A-Z) → Department (A-Z) → Employee Name (A-Z)
-  const groupedData = useMemo(() => {
-    const byBranch = {};
-    filteredRows.forEach(r => {
-      const b = r.branch || "Unassigned";
-      const d = r.department || "Unassigned";
-      if (!byBranch[b]) byBranch[b] = {};
-      if (!byBranch[b][d]) byBranch[b][d] = [];
-      byBranch[b][d].push(r);
-    });
-    return Object.keys(byBranch).sort().map(branch => ({
-      branch,
-      departments: Object.keys(byBranch[branch]).sort().map(dept => ({
-        dept,
-        rows: [...byBranch[branch][dept]].sort((a, b) => (a.name || "").localeCompare(b.name || "")),
-      })),
-    }));
-  }, [filteredRows]);
+  const SORT_ACCESSORS = {
+    name: r => (r.name || "").toLowerCase(),
+    employeeCode: r => { const n = Number(r.employeeCode); return isNaN(n) ? r.employeeCode : n; },
+    branch: r => (r.branch || "").toLowerCase(),
+    department: r => (r.department || "").toLowerCase(),
+    level: r => (r.level || "").toLowerCase(),
+    numberOfWorkingDays: r => r.numberOfWorkingDays,
+    presentDays: r => r.presentDays,
+    absentDays: r => r.absentDays,
+    leaveDaysUsed: r => r.leaveDaysUsed,
+    extraWorkingDays: r => r.extraWorkingDays,
+    otHours: r => r.otHours,
+    workedHours: r => r.workedHours,
+    requiredHours: r => r.requiredHours,
+    basicSalary: r => r.basicSalary,
+    allowances: r => r.totalEarnings - r.basicSalary,
+    totalDeductions: r => r.totalDeductions,
+    finalSalary: r => r.finalSalary,
+    paymentStatus: r => r.paymentStatus,
+  };
 
-  const TH = ({ children, className = "", sticky = false }) => (
-    <th className={`text-left px-3 py-3 font-medium text-xs whitespace-nowrap sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)] ${sticky ? "left-0 z-20" : ""} ${className}`}>{children}</th>
+  // Default sort: Branch A-Z → Department A-Z → Employee Name A-Z.
+  // Clicking a column header overrides this with a single-key sort.
+  const sortedRows = useMemo(() => {
+    const rows = [...filteredRows];
+    if (sortKey && SORT_ACCESSORS[sortKey]) {
+      const acc = SORT_ACCESSORS[sortKey];
+      rows.sort((a, b) => {
+        const av = acc(a), bv = acc(b);
+        if (av < bv) return sortDir === "asc" ? -1 : 1;
+        if (av > bv) return sortDir === "asc" ? 1 : -1;
+        return 0;
+      });
+    } else {
+      rows.sort((a, b) =>
+        (a.branch || "").localeCompare(b.branch || "") ||
+        (a.department || "").localeCompare(b.department || "") ||
+        (a.name || "").localeCompare(b.name || ""));
+    }
+    return rows;
+  }, [filteredRows, sortKey, sortDir]);
+
+  useEffect(() => { setCurrentPage(1); }, [searchText, branchFilter, deptFilter, levelFilter, paymentStatusFilter, pageSize, sortKey, sortDir, month]);
+
+  const pageCount = pageSize === "All" ? 1 : Math.max(1, Math.ceil(sortedRows.length / pageSize));
+  const safePage = Math.min(currentPage, pageCount);
+  const pagedRows = useMemo(() => {
+    if (pageSize === "All") return sortedRows;
+    const start = (safePage - 1) * pageSize;
+    return sortedRows.slice(start, start + pageSize);
+  }, [sortedRows, safePage, pageSize]);
+
+  const STICKY1_W = 44;
+  const TH = ({ children, className = "", sticky, sortField }) => (
+    <th onClick={sortField ? () => toggleSort(sortField) : undefined}
+      className={`text-left px-2.5 py-2 font-medium text-xs whitespace-nowrap sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)] ${sticky === "first" ? "left-0 z-20 w-11" : sticky === "second" ? "z-20" : ""} ${sortField ? "cursor-pointer select-none hover:bg-slate-100" : ""} ${className}`}
+      style={sticky === "second" ? { left: STICKY1_W } : undefined}>
+      {children}{sortField && <span className="ml-0.5 text-slate-400">{sortKey === sortField ? (sortDir === "asc" ? "↑" : "↓") : "↕"}</span>}
+    </th>
   );
+  // Sticky cells need an opaque background matching the row's own color
+  // (alternating stripe / hover) — callers must include a bg-* class.
   const TD = ({ children, className = "", sticky = false, ...rest }) => (
-    <td {...rest} className={`px-3 py-3 text-sm whitespace-nowrap ${sticky ? "sticky left-0 z-[5] bg-white shadow-[2px_0_4px_rgba(0,0,0,0.06)]" : ""} ${className}`}>{children}</td>
+    <td {...rest} className={`px-2.5 py-1.5 text-sm whitespace-nowrap ${sticky === "first" ? "sticky left-0 z-[5] w-11 shadow-[2px_0_4px_rgba(0,0,0,0.06)]" : sticky === "second" ? "sticky z-[5] shadow-[2px_0_4px_rgba(0,0,0,0.06)]" : ""} ${className}`}
+      style={sticky === "second" ? { left: STICKY1_W } : undefined}>{children}</td>
   );
 
   const visibleTabs = TABS.filter(([k]) => {
@@ -1196,9 +1240,6 @@ export default function PayrollAutomation({ role, actorName }) {
                 {marking ? "Marking…" : "Mark All Paid"}
               </Button>
             )}
-            {displayRows.length > 0 && (
-              <Button variant="outline" onClick={exportExcel} className="rounded-2xl">Export Excel</Button>
-            )}
           </div>
         </div>
       </div>
@@ -1227,56 +1268,47 @@ export default function PayrollAutomation({ role, actorName }) {
         <VerificationPanel month={month} role={role} verifications={verifications} flagNotifications={flagNotifications} onRespond={handleFlagRespond} />
       )}
 
-      {/* Summary Cards */}
-      {displayRows.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Employees</p><p className="text-2xl font-bold">{totals.employees}</p></div>
-          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Earnings</p><p className="text-2xl font-bold text-emerald-600">{money(totals.totalEarnings)}</p></div>
-          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Deductions</p><p className="text-2xl font-bold text-red-500">{money(totals.totalDeductions)}</p></div>
-          <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Net Payroll</p><p className="text-2xl font-bold text-slate-900">{money(totals.netPay)}</p></div>
-        </div>
-      )}
-
-      {/* Search / Filter bar */}
+      {/* Filter bar */}
       {displayRows.length > 0 && (
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <p className="text-xs text-slate-500 mb-1">Search</p>
-              <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)}
-                placeholder="Name or employee code…"
-                className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-56" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-500 mb-1">Branch</p>
-              <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-sm bg-white">
-                <option value="">All Branches</option>
-                {branchOptions.map(b => <option key={b} value={b}>{b}</option>)}
-              </select>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500 mb-1">Department</p>
-              <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-sm bg-white">
-                <option value="">All Departments</option>
-                {deptOptions.map(d => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500 mb-1">Status</p>
-              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-sm bg-white">
-                {["All", "Draft", "Approved", "Published"].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            {(searchText || branchFilter || deptFilter || statusFilter !== "All") && (
-              <Button variant="outline" onClick={clearFilters} className="rounded-xl text-xs">Clear Filters</Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)}
+              placeholder="🔍 Search name or code…"
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm w-52" />
+            <select value={branchFilter} onChange={e => { setBranchFilter(e.target.value); setDeptFilter(""); }}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
+              <option value="">All Branches</option>
+              {branchOptions.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+            <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
+              <option value="">All Departments</option>
+              {deptOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <select value={levelFilter} onChange={e => setLevelFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
+              <option value="">All Levels</option>
+              {LEVEL_OPTIONS.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+            <select value={paymentStatusFilter} onChange={e => setPaymentStatusFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
+              <option value="All">All Payment Status</option>
+              {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{PAYMENT_STATUS_LABELS[s]}</option>)}
+            </select>
+            {(searchText || branchFilter || deptFilter || levelFilter || paymentStatusFilter !== "All") && (
+              <Button variant="outline" onClick={clearFilters} className="rounded-xl text-xs">Clear All Filters</Button>
             )}
-            <p className="text-xs text-slate-500 ml-auto">
-              Showing {filteredRows.length} of {displayRows.length} employees
-            </p>
+            <Button variant="outline" onClick={exportExcel} className="rounded-xl text-xs ml-auto">Export Excel</Button>
           </div>
+          <p className="text-xs text-slate-500 mt-3">
+            Showing <strong>{filteredRows.length}</strong> of {displayRows.length} employees
+            <span className="mx-2 text-slate-300">|</span>
+            Total Basic: <strong>{money(filteredTotals.totalBasic)}</strong>
+            <span className="mx-2 text-slate-300">|</span>
+            Total Net: <strong>{money(filteredTotals.netPay)}</strong>
+            <span className="mx-2 text-slate-300">|</span>
+            Total Deductions: <strong>{money(filteredTotals.totalDeductions)}</strong>
+          </p>
         </div>
       )}
 
@@ -1288,172 +1320,133 @@ export default function PayrollAutomation({ role, actorName }) {
             <p className="text-xs text-slate-400 mt-0.5">{filteredRows.length} of {displayRows.length} employees</p>
           </div>
         </div>
-        <table className="w-full text-sm" style={{ minWidth: "3050px" }}>
+        <table className="w-full text-sm" style={{ minWidth: "1500px" }}>
           <thead className="bg-slate-50 text-slate-500">
             <tr>
-              <TH sticky>Employee</TH><TH>Level</TH>
-              {/* Attendance */}
-              <TH className="text-blue-500">WD</TH><TH className="text-blue-500">Present</TH>
-              <TH className="text-blue-500">Absent</TH><TH className="text-blue-500">Leave</TH>
-              <TH className="text-blue-500">Extra WD</TH><TH className="text-blue-500">OT Hrs</TH>
-              <TH className="text-blue-500">Worked Hrs</TH><TH className="text-blue-500">Req Hrs</TH>
-              {/* Earnings */}
-              <TH className="text-emerald-600">Basic</TH>
-              <TH className="text-emerald-600">Extra WD Amt</TH>
-              <TH className="text-emerald-600">OT Amt</TH>
-              <TH className="text-emerald-600">Commission</TH>
-              <TH className="text-emerald-600">Fuel</TH>
-              <TH className="text-emerald-600">Other Earn</TH>
-              <TH className="text-emerald-700 bg-emerald-50">Total Earn</TH>
-              {/* Deductions */}
-              <TH className="text-red-500">Late Ded</TH>
-              <TH className="text-red-500">ShortHr</TH>
-              <TH className="text-red-500">Fine</TH>
-              <TH className="text-red-500">Shortage</TH>
-              <TH className="text-red-500">Advance</TH>
-              <TH className="text-red-500">Loan</TH>
-              <TH className="text-red-500">Tax</TH>
-              <TH className="text-red-500">EOBI</TH>
-              <TH className="text-red-500">Other Ded</TH>
-              <TH className="text-red-700 bg-red-50">Total Ded</TH>
-              <TH className="text-slate-900 bg-slate-100">Net Pay</TH>
-              <TH>Payment Status</TH>
-              <TH>Payslip</TH>
+              <TH sticky="first">#</TH>
+              <TH sticky="second" sortField="name">Employee</TH>
+              <TH sortField="employeeCode">Code</TH>
+              <TH sortField="branch">Branch</TH>
+              <TH sortField="department">Department</TH>
+              <TH sortField="level">Level</TH>
+              <TH className="text-blue-500" sortField="numberOfWorkingDays">WD</TH>
+              <TH className="text-blue-500" sortField="presentDays">Present</TH>
+              <TH className="text-blue-500" sortField="absentDays">Absent</TH>
+              <TH className="text-blue-500" sortField="leaveDaysUsed">Leave</TH>
+              <TH className="text-blue-500" sortField="extraWorkingDays">Extra WD</TH>
+              <TH className="text-blue-500" sortField="otHours">OT Hrs</TH>
+              <TH className="text-blue-500" sortField="workedHours">Worked Hrs</TH>
+              <TH className="text-blue-500" sortField="requiredHours">Req Hrs</TH>
+              <TH className="text-emerald-600" sortField="basicSalary">Basic</TH>
+              <TH className="text-emerald-600" sortField="allowances">Allowances</TH>
+              <TH className="text-red-500" sortField="totalDeductions">Deductions</TH>
+              <TH className="text-slate-900 bg-slate-100" sortField="finalSalary">Net Pay</TH>
+              <TH sortField="paymentStatus">Status</TH>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredRows.length === 0 ? (
-              <tr><td colSpan={30} className="px-4 py-8 text-center text-slate-400">
+            {pagedRows.length === 0 ? (
+              <tr><td colSpan={19} className="px-4 py-8 text-center text-slate-400">
                 {displayRows.length === 0
                   ? (role === "Finance" ? "No published payroll for this month." : 'No payroll data. Click "Generate Payroll" to calculate.')
                   : "No employees match the current filters."}
               </td></tr>
-            ) : groupedData.map(({ branch, departments }) => {
-              const branchRows = departments.flatMap(d => d.rows);
-              const branchCollapsed = collapsedBranches.has(branch);
+            ) : pagedRows.map((r, i) => {
+              const rowNum = pageSize === "All" ? i + 1 : (safePage - 1) * pageSize + i + 1;
+              const rowBg = i % 2 === 0 ? "bg-white" : "bg-slate-50/60";
+              // Finance can't view payslip detail for employees not being paid this cycle.
+              const payslipBlocked = role === "Finance" && ["Hold", "No_FnF"].includes(r.paymentStatus);
               return (
-                <React.Fragment key={branch}>
-                  <tr className="bg-slate-800 text-white cursor-pointer select-none" onClick={() => toggleBranchCollapsed(branch)}>
-                    <TD colSpan={30} className="font-bold py-2">
-                      {branchCollapsed ? "▶" : "▼"} {branch}
-                      <span className="font-normal text-slate-300 text-xs ml-2">
-                        ({branchRows.length} employees · Basic {money(sumRows(branchRows, "basicSalary"))} · Net {money(sumRows(branchRows, "finalSalary"))})
-                      </span>
-                    </TD>
-                  </tr>
-                  {!branchCollapsed && departments.map(({ dept, rows }) => {
-                    const deptKey = `${branch}::${dept}`;
-                    const deptCollapsed = collapsedDepts.has(deptKey);
-                    return (
-                      <React.Fragment key={deptKey}>
-                        <tr className="bg-slate-100 cursor-pointer select-none" onClick={() => toggleDeptCollapsed(deptKey)}>
-                          <TD colSpan={30} className="font-semibold text-slate-600 py-1.5 pl-8">
-                            {deptCollapsed ? "▶" : "▼"} {dept}
-                            <span className="font-normal text-slate-400 text-xs ml-2">
-                              ({rows.length} · Basic {money(sumRows(rows, "basicSalary"))} · Net {money(sumRows(rows, "finalSalary"))})
-                            </span>
-                          </TD>
-                        </tr>
-                        {!deptCollapsed && rows.map((r, i) => (
-                          <tr key={r.employeeCode || i} className={`hover:bg-slate-50 ${r.isAttendanceExempt ? "bg-purple-50/30" : ""}`}>
-                            <TD sticky>
-                              <div className="font-medium">{r.name}</div>
-                              <div className="text-xs text-slate-400">{r.employeeCode}</div>
-                              {r.isAttendanceExempt && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 rounded">EXEMPTED</span>}
-                              {r.holdoverAmount > 0 && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded ml-1">+{money(r.holdoverAmount)} holdover</span>}
-                            </TD>
-                            <TD>{r.level}</TD>
-                            {/* Attendance */}
-                            <TD className="text-blue-600">{r.numberOfWorkingDays}</TD>
-                            <TD className="text-blue-600">{r.presentDays}</TD>
-                            <TD className="text-blue-600">{r.absentDays}</TD>
-                            <TD className="text-blue-600">{r.leaveDaysUsed}</TD>
-                            <TD className="text-blue-600">{r.extraWorkingDays}</TD>
-                            <TD className="text-blue-600">{r.otHours}</TD>
-                            <TD className="text-blue-600">{r.workedHours || "—"}</TD>
-                            <TD className="text-blue-600">{r.requiredHours || "—"}</TD>
-                            {/* Earnings */}
-                            <TD>{money(r.basicSalary)}</TD>
-                            <TD className="text-emerald-600">{r.extraWorkingDaysAmount ? money(r.extraWorkingDaysAmount) : "—"}</TD>
-                            <TD className="text-emerald-600">{r.overtimeAmount ? money(r.overtimeAmount) : "—"}</TD>
-                            <TD className="text-emerald-600">{r.commissionAddOn ? money(r.commissionAddOn) : "—"}</TD>
-                            <TD className="text-emerald-600">{r.fuelAllowance ? money(r.fuelAllowance) : "—"}</TD>
-                            <TD className="text-emerald-600">{r.otherEarnings ? money(r.otherEarnings) : "—"}</TD>
-                            <TD className="font-semibold text-emerald-700 bg-emerald-50">{money(r.totalEarnings)}</TD>
-                            {/* Deductions */}
-                            <TD className="text-red-500">{r.lateDeduction ? money(r.lateDeduction) : "—"}</TD>
-                            <TD className="text-red-500">{r.shortHourDeduction ? money(r.shortHourDeduction) : "—"}</TD>
-                            <TD className="text-red-500">{r.fineDeduction ? money(r.fineDeduction) : "—"}</TD>
-                            <TD className="text-red-500">{r.shortageDeduction ? money(r.shortageDeduction) : "—"}</TD>
-                            <TD className="text-red-500">{r.advanceDeduction ? money(r.advanceDeduction) : "—"}</TD>
-                            <TD className="text-red-500">{r.loanDeduction ? money(r.loanDeduction) : "—"}</TD>
-                            <TD className="text-red-500">{r.taxDeduction ? money(r.taxDeduction) : "—"}</TD>
-                            <TD className="text-red-500">{money(r.eobiDeduction)}</TD>
-                            <TD className="text-red-500">{r.otherDeductions ? money(r.otherDeductions) : "—"}</TD>
-                            <TD className="font-semibold text-red-700 bg-red-50">{money(r.totalDeductions)}</TD>
-                            <TD className="font-bold text-slate-900 bg-slate-50 text-right">{money(r.finalSalary)}</TD>
-                            <TD>
-                              {canRequestPaymentStatus ? (
-                                <button onClick={() => setPaymentStatusRow(r)}
-                                  className="cursor-pointer" title="Click to request a status change">
-                                  <Badge tone={PAYMENT_STATUS_TONES[r.paymentStatus]}>{PAYMENT_STATUS_LABELS[r.paymentStatus]}</Badge>
-                                </button>
-                              ) : (
-                                <Badge tone={PAYMENT_STATUS_TONES[r.paymentStatus]}>{PAYMENT_STATUS_LABELS[r.paymentStatus]}</Badge>
-                              )}
-                            </TD>
-                            <TD>
-                              <div className="flex flex-col gap-1 items-start">
-                                {role === "Finance" && ["Hold", "No_FnF"].includes(r.paymentStatus) ? (
-                                  <span className="text-xs text-slate-400">{r.paymentStatus === "No_FnF" ? "No Payment" : "On Hold"}</span>
-                                ) : (
-                                  <Button variant="outline" onClick={() => setSelectedPayslip(r)} className="rounded-xl text-xs py-1 px-3">View</Button>
-                                )}
-                                {r.isPaid ? (
-                                  <span className="text-[10px] text-emerald-600 font-medium">✓ Paid {r.paidAt?.slice(0, 10)}</span>
-                                ) : canMarkPaid && ["Normal", "FnF"].includes(r.paymentStatus) ? (
-                                  <button onClick={() => markPaid(r.employeeCode)} className="text-[10px] text-blue-600 hover:underline">Mark Paid</button>
-                                ) : null}
-                              </div>
-                            </TD>
-                          </tr>
-                        ))}
-                      </React.Fragment>
-                    );
-                  })}
-                </React.Fragment>
+                <tr key={r.employeeCode || i}
+                  onClick={() => { if (!payslipBlocked) setSelectedPayslip(r); }}
+                  className={`${payslipBlocked ? "" : "cursor-pointer hover:bg-blue-50"} ${rowBg} ${r.isAttendanceExempt ? "!bg-purple-50/40" : ""}`}>
+                  <TD sticky="first" className={rowBg}>{rowNum}</TD>
+                  <TD sticky="second" className={rowBg}>
+                    <div className="font-medium">{r.name}</div>
+                    {r.isAttendanceExempt && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 rounded">EXEMPTED</span>}
+                    {r.holdoverAmount > 0 && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 rounded ml-1">+{money(r.holdoverAmount)} holdover</span>}
+                  </TD>
+                  <TD className="text-slate-500">{plainCode(r.employeeCode)}</TD>
+                  <TD>{r.branch}</TD>
+                  <TD>{r.department}</TD>
+                  <TD>{r.level}</TD>
+                  <TD className="text-blue-600">{r.numberOfWorkingDays}</TD>
+                  <TD className="text-blue-600">{r.presentDays}</TD>
+                  <TD className="text-blue-600">{r.absentDays}</TD>
+                  <TD className="text-blue-600">{r.leaveDaysUsed}</TD>
+                  <TD className="text-blue-600">{r.extraWorkingDays}</TD>
+                  <TD className="text-blue-600">{roundN(r.otHours, 2)}</TD>
+                  <TD className="text-blue-600">{roundN(r.workedHours, 2)}</TD>
+                  <TD className="text-blue-600">{roundN(r.requiredHours, 1)}</TD>
+                  <TD>{money(r.basicSalary)}</TD>
+                  <TD className="text-emerald-600">{money(r.totalEarnings - r.basicSalary)}</TD>
+                  <TD className="text-red-500">{money(r.totalDeductions)}</TD>
+                  <TD className="font-bold text-slate-900 bg-slate-50">{money(r.finalSalary)}</TD>
+                  <TD onClick={e => e.stopPropagation()}>
+                    <div className="flex flex-col gap-0.5 items-start">
+                      {canRequestPaymentStatus ? (
+                        <button onClick={() => setPaymentStatusRow(r)} className="cursor-pointer" title="Click to request a status change">
+                          {r.paymentStatus === "Normal"
+                            ? <span className="text-xs text-slate-400">Normal</span>
+                            : <Badge tone={PAYMENT_STATUS_TONES[r.paymentStatus]}>{PAYMENT_STATUS_LABELS[r.paymentStatus]}</Badge>}
+                        </button>
+                      ) : r.paymentStatus === "Normal" ? (
+                        <span className="text-xs text-slate-400">Normal</span>
+                      ) : (
+                        <Badge tone={PAYMENT_STATUS_TONES[r.paymentStatus]}>{PAYMENT_STATUS_LABELS[r.paymentStatus]}</Badge>
+                      )}
+                      {r.isPaid ? (
+                        <span className="text-[10px] text-emerald-600 font-medium">✓ Paid {r.paidAt?.slice(0, 10)}</span>
+                      ) : canMarkPaid && ["Normal", "FnF"].includes(r.paymentStatus) ? (
+                        <button onClick={() => markPaid(r.employeeCode)} className="text-[10px] text-blue-600 hover:underline">Mark Paid</button>
+                      ) : null}
+                    </div>
+                  </TD>
+                </tr>
               );
             })}
           </tbody>
           {filteredRows.length > 0 && (
             <tfoot className="bg-slate-100 font-semibold text-slate-700">
               <tr>
-                <TD colSpan={10} className="font-bold" sticky>Totals ({filteredRows.length} employees)</TD>
-                <TD>{money(sumRows(filteredRows, "basicSalary"))}</TD>
-                <TD>{money(sumRows(filteredRows, "extraWorkingDaysAmount"))}</TD>
-                <TD>{money(sumRows(filteredRows, "overtimeAmount"))}</TD>
-                <TD>{money(sumRows(filteredRows, "commissionAddOn"))}</TD>
-                <TD>{money(sumRows(filteredRows, "fuelAllowance"))}</TD>
-                <TD>{money(sumRows(filteredRows, "otherEarnings"))}</TD>
-                <TD className="text-emerald-700 bg-emerald-50">{money(filteredTotals.totalEarnings)}</TD>
-                <TD>{money(sumRows(filteredRows, "lateDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "shortHourDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "fineDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "shortageDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "advanceDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "loanDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "taxDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "eobiDeduction"))}</TD>
-                <TD>{money(sumRows(filteredRows, "otherDeductions"))}</TD>
-                <TD className="text-red-700 bg-red-50">{money(filteredTotals.totalDeductions)}</TD>
-                <TD className="text-slate-900 bg-slate-100">{money(filteredTotals.netPay)}</TD>
-                <TD />
+                <TD colSpan={14} className="font-bold" sticky="first">Totals ({filteredRows.length} employees)</TD>
+                <TD>{money(filteredTotals.totalBasic)}</TD>
+                <TD className="text-emerald-700">{money(filteredTotals.totalEarnings - filteredTotals.totalBasic)}</TD>
+                <TD className="text-red-700">{money(filteredTotals.totalDeductions)}</TD>
+                <TD className="text-slate-900 bg-slate-200">{money(filteredTotals.netPay)}</TD>
                 <TD />
               </tr>
             </tfoot>
           )}
         </table>
       </div>
+
+      {/* Pagination */}
+      {filteredRows.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span>Rows per page:</span>
+            {PAGE_SIZE_OPTIONS.map(sz => (
+              <button key={sz} onClick={() => setPageSize(sz)}
+                className={`px-2.5 py-1 rounded-lg border ${pageSize === sz ? "bg-slate-950 text-white border-slate-950" : "border-slate-200 hover:bg-slate-50"}`}>
+                {sz}
+              </button>
+            ))}
+            {pageSize === "All" && sortedRows.length > 200 && (
+              <span className="text-amber-600 ml-2">⚠️ Loading all {sortedRows.length} rows at once may be slow.</span>
+            )}
+          </div>
+          {pageSize !== "All" && pageCount > 1 && (
+            <div className="flex items-center gap-1 text-xs">
+              <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={safePage === 1}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50">Previous</button>
+              <span className="px-3 py-1.5 text-slate-500">Page {safePage} of {pageCount}</span>
+              <button onClick={() => setCurrentPage(p => Math.min(pageCount, p + 1))} disabled={safePage === pageCount}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50">Next</button>
+            </div>
+          )}
+        </div>
+      )}
       </>
       )}
     </div>

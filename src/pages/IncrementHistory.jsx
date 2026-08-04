@@ -5,7 +5,7 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money, formatMonthYear } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
-import { proposeIncrement } from "../services/incrementService.js";
+import { proposeIncrement, fetchIncrementDueDismissals, dismissIncrementDue, restoreIncrementDue } from "../services/incrementService.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -308,6 +308,10 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
   const [monthDeptFilter, setMonthDeptFilter] = useState("");
   const [yearFilter, setYearFilter] = useState(String(new Date().getFullYear()));
   const [dueBranchFilter, setDueBranchFilter] = useState(dueFilter?.branch || "");
+  const [dismissals, setDismissals] = useState([]);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [dismissingCode, setDismissingCode] = useState(null);
+  const [dismissReason, setDismissReason] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
@@ -324,6 +328,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
     ]);
     setEmployees(emps || []);
     setIncrements(incs || []);
+    fetchIncrementDueDismissals().then(setDismissals).catch(() => setDismissals([]));
     if (isMasterGm) {
       fetchActiveConfidentialIncentives().then(rows => {
         const byCode = {};
@@ -544,11 +549,27 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
       .sort((a, b) => a.diffDays - b.diffDays);
   }, [employees, dueBranchFilter, lastIncrementByCode]);
 
+  // Dismissals are scoped to employee_code + the specific next_increment_due
+  // value, so an employee reappears automatically once that date moves.
+  const dismissalByKey = useMemo(() => {
+    const map = {};
+    dismissals.forEach(d => { map[`${d.employee_code}::${d.due_date}`] = d; });
+    return map;
+  }, [dismissals]);
+
+  const activeDueList = useMemo(() =>
+    dueList.filter(e => !dismissalByKey[`${e.employee_code}::${e.next_increment_due}`]), [dueList, dismissalByKey]);
+  const dismissedDueList = useMemo(() =>
+    dueList
+      .filter(e => dismissalByKey[`${e.employee_code}::${e.next_increment_due}`])
+      .map(e => ({ ...e, dismissal: dismissalByKey[`${e.employee_code}::${e.next_increment_due}`] })),
+    [dueList, dismissalByKey]);
+
   const dueSummary = useMemo(() => ({
-    overdue: dueList.filter(e => e.bucket === "overdue").length,
-    thisMonth: dueList.filter(e => e.bucket === "thisMonth").length,
-    nextMonth: dueList.filter(e => e.bucket === "nextMonth").length,
-  }), [dueList]);
+    overdue: activeDueList.filter(e => e.bucket === "overdue").length,
+    thisMonth: activeDueList.filter(e => e.bucket === "thisMonth").length,
+    nextMonth: activeDueList.filter(e => e.bucket === "nextMonth").length,
+  }), [activeDueList]);
 
   function quickActionFromDue(emp) {
     setForm(f => ({ ...BLANK, employee: { employee_code: emp.employee_code, full_name: emp.full_name, salary: emp.salary }, prevSalary: String(emp.salary || "") }));
@@ -556,6 +577,28 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
     setShowImport(false);
     setShowForm(true);
     setView("monthly");
+  }
+
+  async function handleDismiss(emp) {
+    setErr(""); setMsg("");
+    try {
+      await dismissIncrementDue({
+        employeeCode: emp.employee_code, employeeName: emp.full_name, dueDate: emp.next_increment_due,
+        reason: dismissReason, dismissedBy: actorName || role,
+      });
+      setDismissingCode(null); setDismissReason("");
+      setMsg(`${emp.full_name} dismissed from the Due list.`);
+      load();
+    } catch (e) { setErr(e.message); }
+  }
+
+  async function handleRestoreDismiss(dismissal) {
+    setErr(""); setMsg("");
+    try {
+      await restoreIncrementDue(dismissal.id);
+      setMsg(`${dismissal.employee_name} restored to the Due list.`);
+      load();
+    } catch (e) { setErr(e.message); }
   }
 
   return (
@@ -884,6 +927,12 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               <option value="">All Branches</option>
               {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
             </select>
+            {dismissedDueList.length > 0 && (
+              <button onClick={() => setShowDismissed(s => !s)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-50">
+                {showDismissed ? "Hide" : "Show"} Dismissed ({dismissedDueList.length})
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -901,8 +950,36 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
             </div>
           </div>
 
+          {showDismissed && dismissedDueList.length > 0 && (
+            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
+              <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Dismissed</h2><p className="text-xs text-slate-400">{dismissedDueList.length} employees hidden from the Due list until their next due date</p></div>
+              <table className="w-full min-w-[800px] text-sm">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>{["Emp Code", "Name", "Next Due Date", "Reason", "Dismissed By", "Dismissed At", "Action"].map(h => (
+                    <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dismissedDueList.map(e => (
+                    <tr key={e.employee_code} className="hover:bg-slate-50/50">
+                      <td className="px-4 py-3 text-slate-500">{e.employee_code}</td>
+                      <td className="px-4 py-3 font-medium">{e.full_name}</td>
+                      <td className="px-4 py-3">{e.next_increment_due}</td>
+                      <td className="px-4 py-3 text-slate-500 max-w-[200px] truncate">{e.dismissal.reason || "—"}</td>
+                      <td className="px-4 py-3 text-slate-500">{e.dismissal.dismissed_by || "—"}</td>
+                      <td className="px-4 py-3 text-slate-400 text-xs">{e.dismissal.dismissed_at?.slice(0, 10)}</td>
+                      <td className="px-4 py-3">
+                        <Button variant="outline" onClick={() => handleRestoreDismiss(e.dismissal)} className="rounded-lg text-xs py-1 px-2">Restore</Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
-            <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Due for Increment</h2><p className="text-xs text-slate-400">{dueList.length} employees</p></div>
+            <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Due for Increment</h2><p className="text-xs text-slate-400">{activeDueList.length} employees</p></div>
             <table className="w-full min-w-[1100px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>{["Emp Code", "Name", "Branch", "Department", "Joining Date", "Last Increment Date", "Last Increment Amount", "Next Due Date", "Days Overdue/Remaining", "Current Salary",
@@ -912,9 +989,9 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                 ))}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {dueList.length === 0
+                {activeDueList.length === 0
                   ? <tr><td colSpan={10 + (isMasterGm ? 3 : 0) + (role !== "GM" ? 1 : 0)} className="px-4 py-8 text-center text-slate-400">No employees due for increment in the next 60 days.</td></tr>
-                  : dueList.map(e => {
+                  : activeDueList.map(e => {
                     const toneClass = e.bucket === "overdue" ? "bg-red-50 text-red-700" : e.bucket === "thisMonth" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700";
                     const daysLabel = e.diffDays < 0 ? `${Math.abs(e.diffDays)} days overdue` : `${e.diffDays} days remaining`;
                     const liveIncentive = incentivesByCode[e.employee_code] || 0;
@@ -944,9 +1021,24 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                         )}
                         {role !== "GM" && (
                           <td className="px-4 py-3">
-                            <Button onClick={() => quickActionFromDue(e)} className="rounded-lg text-xs py-1 px-2">
-                              {role === "HR" ? "Propose Increment" : "Add Increment"}
-                            </Button>
+                            {dismissingCode === e.employee_code ? (
+                              <div className="flex flex-col gap-1 min-w-[180px]">
+                                <input value={dismissReason} onChange={ev => setDismissReason(ev.target.value)} placeholder="Reason (optional)…"
+                                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+                                <div className="flex gap-1">
+                                  <Button onClick={() => handleDismiss(e)} className="rounded-lg text-xs py-1 px-2">Confirm</Button>
+                                  <Button variant="outline" onClick={() => { setDismissingCode(null); setDismissReason(""); }} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex gap-1">
+                                <Button onClick={() => quickActionFromDue(e)} className="rounded-lg text-xs py-1 px-2">
+                                  {role === "HR" ? "Propose Increment" : "Add Increment"}
+                                </Button>
+                                <Button variant="outline" onClick={() => { setDismissingCode(e.employee_code); setDismissReason(""); }}
+                                  className="rounded-lg text-xs py-1 px-2 text-slate-500 border-slate-200">Dismiss</Button>
+                              </div>
+                            )}
                           </td>
                         )}
                       </tr>
