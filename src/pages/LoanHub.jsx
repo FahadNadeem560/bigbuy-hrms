@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import LoanManagement from "./LoanManagement.jsx";
 import FinalSettlement from "./FinalSettlement.jsx";
 import Advances from "./Advances.jsx";
@@ -9,8 +9,9 @@ const TABS = [
   ["settlement", "Final Settlement"],
 ];
 
-export default function LoanHub({ role }) {
-  const [tab, setTab] = useState("loans");
+export default function LoanHub({ role, actorName, initialTab }) {
+  const [tab, setTab] = useState(initialTab || "loans");
+  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-5">
@@ -22,7 +23,7 @@ export default function LoanHub({ role }) {
         ))}
       </div>
       {tab === "loans"      && <LoanManagement role={role} />}
-      {tab === "advances"   && <Advances role={role} />}
+      {tab === "advances"   && <Advances role={role} actorName={actorName} />}
       {tab === "settlement" && <FinalSettlement role={role} />}
     </div>
   );

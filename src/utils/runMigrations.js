@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-07-31-v9";
+const MIGRATION_VERSION = "2026-08-04-v10";
 let ran = false;
 
 export async function runMigrations() {
@@ -211,6 +211,23 @@ async function applyIncrementalMigrations() {
     `ALTER TABLE employees ADD COLUMN IF NOT EXISTS whatsapp_otp_code TEXT`,
     `ALTER TABLE employees ADD COLUMN IF NOT EXISTS whatsapp_otp_expires_at TIMESTAMPTZ`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.employee_message_queue TO anon, authenticated`,
+    // v10: Advances Management System — HR requests, Finance approves + issues,
+    // payroll auto-deducts on the advance's month (Pending -> Approved -> Issued -> Deducted)
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS issued_amount NUMERIC DEFAULT 0`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS advance_month TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS requested_by TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS issued_by TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS issued_at TIMESTAMPTZ`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS deducted_in_month TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS deducted_at TIMESTAMPTZ`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS excess_amount NUMERIC DEFAULT 0`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS excess_reason TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS excess_approved_by TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS branch TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS department TEXT`,
+    `ALTER TABLE advances ADD COLUMN IF NOT EXISTS notes TEXT`,
+    `UPDATE advances SET advance_month = payroll_month WHERE advance_month IS NULL AND payroll_month IS NOT NULL`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.advances TO anon, authenticated`,
   ];
 
   for (const sql of stmts) {

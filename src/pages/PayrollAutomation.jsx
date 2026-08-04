@@ -12,6 +12,7 @@ import {
   getVerificationProgress, respondToFlag,
   generateCashIncentiveSnapshot, fetchCashIncentiveMonthly, fetchCashIncentiveBranchTotals,
 } from "../services/payrollControlService.js";
+import { deductIssuedAdvancesForMonth } from "../services/advanceService.js";
 import PayrollHold from "./PayrollHold.jsx";
 import CashIncentives from "./CashIncentives.jsx";
 import FinanceReconciliation from "./FinanceReconciliation.jsx";
@@ -450,7 +451,7 @@ export default function PayrollAutomation({ role, actorName }) {
       supabase.from("attendance").select("*").gte("work_date", fromDate).lte("work_date", toDate),
       supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
-      supabase.from("advances").select("*").eq("payroll_month", month).eq("status", "Approved"),
+      supabase.from("advances").select("*").eq("advance_month", month).in("status", ["Issued", "Deducted"]),
       supabase.from("one_time_adjustments").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("staff_eligibility_groups").select("code, extra_days_eligible"),
     ]);
@@ -491,7 +492,7 @@ export default function PayrollAutomation({ role, actorName }) {
     });
     const advanceByEmp = {};
     (advancesData || []).forEach(a => {
-      advanceByEmp[a.employee_code] = (advanceByEmp[a.employee_code] || 0) + Number(a.approved_amount || 0);
+      advanceByEmp[a.employee_code] = (advanceByEmp[a.employee_code] || 0) + Number(a.issued_amount || 0);
     });
 
     // One-Time Adjustments (OneTimeAdjustments.jsx / Approval Queue) were
@@ -580,6 +581,7 @@ export default function PayrollAutomation({ role, actorName }) {
       }
       const verifCount = await generateVerificationsForMonth(month).catch(() => 0);
       await generateCashIncentiveSnapshot(month).catch(() => {});
+      await deductIssuedAdvancesForMonth(month).catch(() => {});
       await loadPayroll();
       await loadLockAndExtras();
       setMsg(`Payroll generated for ${rows.length} employees.${verifCount > 0 ? ` Sent to ${verifCount} supervisor(s) for verification.` : ""}`);

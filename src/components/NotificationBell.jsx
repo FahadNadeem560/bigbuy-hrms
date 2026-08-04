@@ -11,7 +11,14 @@ const TYPE_ICONS = {
   increment_due_branch: "📈",
   increment_proposed: "📝",
   increment_decision: "📈",
+  advance_requested: "💵",
+  advance_issued: "💵",
   general: "🔔",
+};
+
+const ADVANCE_NAV = {
+  advance_requested: { tab: "loans", subtab: "advances" },
+  advance_issued: { tab: "loans", subtab: "advances" },
 };
 
 export default function NotificationBell({ role, employeeCode, onNavigate }) {
@@ -65,6 +72,8 @@ export default function NotificationBell({ role, employeeCode, onNavigate }) {
     markRead(n.id);
     if (n.type === "increment_due_branch" && onNavigate) {
       onNavigate({ tab: "salary-reports", subview: "increments", filter: { view: "due", branch: n.reference_id || n.link } });
+    } else if (ADVANCE_NAV[n.type] && onNavigate) {
+      onNavigate(ADVANCE_NAV[n.type]);
     }
     setOpen(false);
   }

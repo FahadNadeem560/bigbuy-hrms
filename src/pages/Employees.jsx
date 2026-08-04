@@ -5,6 +5,7 @@ import { BRANCH_CODE_MAP } from "../constants/branches";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies";
 import { money } from "../utils/format";
 import { sendOnboardingOtp } from "../services/whatsappService.js";
+import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
 
 function cnicExpiryStatus(expiryDate) {
   if (!expiryDate) return null;
@@ -331,6 +332,23 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
   const [inactivating, setInactivating] = useState(null); // employee id currently prompting for last working day
   const [lwdInput, setLwdInput] = useState("");
 
+  // Confidential — same Master/GM-only gate as CashIncentives.jsx / Dashboard.
+  const canSeeIncentive = ["Master", "GM"].includes(role);
+  const [incentiveMap, setIncentiveMap] = useState({});
+  useEffect(() => {
+    if (!canSeeIncentive) { setIncentiveMap({}); return; }
+    let active = true;
+    fetchActiveConfidentialIncentives()
+      .then(rows => {
+        if (!active) return;
+        const map = {};
+        (rows || []).forEach(r => { map[r.employee_code] = (map[r.employee_code] || 0) + Number(r.amount || 0); });
+        setIncentiveMap(map);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [canSeeIncentive]);
+
   function confirmInactive(id) {
     if (!lwdInput) return;
     updateEmployeeStatus(id, "Inactive", lwdInput);
@@ -379,7 +397,7 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
       <Table
         headers={viewOnly
           ? ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "CNIC Expiry", "Status"]
-          : ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "Salary", "CNIC Expiry", "Status", "Action"]}
+          : ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "Salary", ...(canSeeIncentive ? ["Incentive"] : []), "CNIC Expiry", "Status", "Action"]}
         rows={filteredEmployees}
         renderRow={e => {
           const cnicStatus = cnicExpiryStatus(e.cnicExpiryDate);
@@ -401,6 +419,11 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
               <td className="px-4 py-3">{e.dept}</td>
               <td className="px-4 py-3 text-slate-500 text-xs">{e.joiningDate || "—"}</td>
               {!viewOnly && <td className="px-4 py-3">{money(e.salary)}</td>}
+              {!viewOnly && canSeeIncentive && (
+                <td className="px-4 py-3 font-medium text-emerald-700">
+                  {incentiveMap[e.id] ? money(incentiveMap[e.id]) : <span className="text-slate-300">—</span>}
+                </td>
+              )}
               <td className="px-4 py-3">
                 {e.cnicExpiryDate
                   ? <span className={`text-xs px-2 py-1 rounded-xl font-medium ${cnicStatus === "expired" ? "bg-red-100 text-red-700" : cnicStatus === "soon" ? "bg-orange-100 text-orange-700" : "text-slate-500"}`}>

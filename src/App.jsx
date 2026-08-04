@@ -80,14 +80,21 @@ const BLANK_EMPLOYEE = {
   isTemporary: false, isFieldEmployee: false, employmentStatus: "Permanent",
 };
 
+function readTabFromUrl() {
+  try { return new URLSearchParams(window.location.search).get("tab") || "dashboard"; }
+  catch { return "dashboard"; }
+}
+
 export default function BigBuyHRMS({ profile }) {
-  const [active, setActive] = useState("dashboard");
+  const [active, setActive] = useState(readTabFromUrl);
   const [incrementDueFilter, setIncrementDueFilter] = useState(null);
   const now0 = new Date();
   const [incentiveMonth, setIncentiveMonth] = useState(`${now0.getFullYear()}-${String(now0.getMonth() + 1).padStart(2, "0")}`);
-  function handleNotificationNavigate({ tab, filter }) {
+  const [loanHubInitialTab, setLoanHubInitialTab] = useState(null);
+  function handleNotificationNavigate({ tab, filter, subtab }) {
     setActive(tab);
     if (filter) setIncrementDueFilter(filter);
+    if (subtab) setLoanHubInitialTab(subtab);
   }
   const role = profile?.role || "Master";
   const userBranch = profile?.branch || null;
@@ -193,6 +200,14 @@ export default function BigBuyHRMS({ profile }) {
     setTempActionMsg("Temporary employee rejected and archived. Will be soft-deleted after 30 days.");
     checkTemporaryEmployees(); loadEmployees();
   }
+
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", active);
+      window.history.replaceState({}, "", url);
+    } catch {}
+  }, [active]);
 
   useEffect(() => {
     runMigrations().then(() => { loadEmployees(); loadAttendance(); checkTemporaryEmployees(); });
@@ -379,7 +394,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "salary-reports"     && <SalaryReports role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} dueFilter={incrementDueFilter} />}
       {active === "allowances"         && <AllowancesHub role={role} />}
       {active === "payroll-extras"     && <PayrollExtras role={role} />}
-      {active === "loans"              && <LoanHub role={role} />}
+      {active === "loans"              && <LoanHub role={role} actorName={user.name} initialTab={loanHubInitialTab} />}
       {active === "confidential-incentives" && <CashIncentives role={role} actorName={user.name} month={incentiveMonth} setMonth={setIncentiveMonth} />}
       {active === "finance-reconciliation" && <FinanceReconciliation role={role} actorName={user.name} month={incentiveMonth} setMonth={setIncentiveMonth} />}
 
