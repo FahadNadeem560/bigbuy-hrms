@@ -68,6 +68,13 @@ export default function NotificationBell({ role, employeeCode, onNavigate }) {
     setUnread(c => Math.max(0, c - 1));
   }
 
+  async function dismiss(n, e) {
+    e.stopPropagation();
+    await supabase.from("notifications").delete().eq("id", n.id);
+    setNotifs(list => list.filter(x => x.id !== n.id));
+    if (!n.is_read) setUnread(c => Math.max(0, c - 1));
+  }
+
   function handleClick(n) {
     markRead(n.id);
     if (n.type === "increment_due_branch" && onNavigate) {
@@ -100,8 +107,9 @@ export default function NotificationBell({ role, employeeCode, onNavigate }) {
             {notifs.length === 0
               ? <div className="px-4 py-10 text-center text-slate-400 text-sm">No notifications</div>
               : notifs.map(n => (
-                <button key={n.id} onClick={() => handleClick(n)}
-                  className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition ${!n.is_read ? "bg-blue-50/50" : ""}`}>
+                <div key={n.id} role="button" tabIndex={0} onClick={() => handleClick(n)}
+                  onKeyDown={e => { if (e.key === "Enter") handleClick(n); }}
+                  className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition cursor-pointer ${!n.is_read ? "bg-blue-50/50" : ""}`}>
                   <div className="flex gap-2.5 items-start">
                     <span className="text-lg mt-0.5 flex-shrink-0">{TYPE_ICONS[n.type] || "🔔"}</span>
                     <div className="flex-1 min-w-0">
@@ -110,8 +118,12 @@ export default function NotificationBell({ role, employeeCode, onNavigate }) {
                       <div className="text-[10px] text-slate-400 mt-1">{n.created_at?.slice(0, 16).replace("T", " ")}</div>
                     </div>
                     {!n.is_read && <span className="w-2 h-2 rounded-full bg-blue-500 mt-1.5 flex-shrink-0" />}
+                    <button onClick={e => dismiss(n, e)} title="Dismiss"
+                      className="text-slate-300 hover:text-slate-600 hover:bg-slate-200 rounded-lg w-5 h-5 flex items-center justify-center flex-shrink-0 text-sm leading-none transition">
+                      ✕
+                    </button>
                   </div>
-                </button>
+                </div>
               ))}
           </div>
         </div>

@@ -10,7 +10,7 @@ import {
   getPayrollLock, lockPayrollMonth, unlockPayrollMonth, mergePersistentPayrollFields,
   generateVerificationsForMonth, fetchVerifications,
   getVerificationProgress, respondToFlag,
-  generateCashIncentiveSnapshot, fetchCashIncentiveMonthly, fetchCashIncentiveBranchTotals,
+  generateCashIncentiveSnapshot,
 } from "../services/payrollControlService.js";
 import { deductIssuedAdvancesForMonth } from "../services/advanceService.js";
 import PayrollHold from "./PayrollHold.jsx";
@@ -212,7 +212,9 @@ function PayslipModal({ row, month, onClose }) {
 }
 
 // ── Payroll Summary Panel (bifurcation) ─────────────────────────
-function SummaryPanel({ month, displayRows, cashIncentiveTotal, role, incentiveMonthlyRows, incentiveBranchTotals }) {
+// Confidential Incentives are deliberately absent from this panel — that
+// data lives only in the dedicated Confidential Incentives tab.
+function SummaryPanel({ month, displayRows }) {
   const buckets = useMemo(() => {
     const acc = { Normal: { count: 0, amt: 0 }, FnF: { count: 0, amt: 0 }, Hold: { count: 0, amt: 0 }, No_FnF: { count: 0, amt: 0 } };
     let holdoverCount = 0, holdoverAmt = 0;
@@ -225,9 +227,9 @@ function SummaryPanel({ month, displayRows, cashIncentiveTotal, role, incentiveM
     const totalGeneratedAmt = displayRows.reduce((s, r) => s + r.finalSalary, 0);
     const totalPayable = acc.Normal.amt + acc.FnF.amt;
     const totalPayableCount = acc.Normal.count + acc.FnF.count;
-    const financeTotal = totalPayable + holdoverAmt + cashIncentiveTotal;
+    const financeTotal = totalPayable + holdoverAmt;
     return { acc, holdoverCount, holdoverAmt, totalGenerated, totalGeneratedAmt, totalPayable, totalPayableCount, financeTotal };
-  }, [displayRows, cashIncentiveTotal]);
+  }, [displayRows]);
 
   if (displayRows.length === 0) return null;
   const Row = ({ label, count, amt, bold, highlight, sub }) => (
@@ -237,8 +239,6 @@ function SummaryPanel({ month, displayRows, cashIncentiveTotal, role, incentiveM
       <td className="px-4 py-2 text-sm text-right">{money(amt)}</td>
     </tr>
   );
-  const isMasterGm = ["Master", "GM"].includes(role);
-  const incentiveLabel = isMasterGm ? "Confidential Incentives" : role === "Finance" ? "Additional Payments (by branch)" : "Additional Payments";
   return (
     <div className="mb-4">
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
@@ -255,41 +255,249 @@ function SummaryPanel({ month, displayRows, cashIncentiveTotal, role, incentiveM
             <Row label="No F&F" count={buckets.acc.No_FnF.count} amt={buckets.acc.No_FnF.amt} />
             <Row label="TOTAL PAYABLE ✅" count={buckets.totalPayableCount} amt={buckets.totalPayable} highlight />
             <Row label="Previous Month Holdover" count={buckets.holdoverCount} amt={buckets.holdoverAmt} sub />
-            {cashIncentiveTotal > 0 && <Row label={incentiveLabel} amt={cashIncentiveTotal} sub />}
             <Row label="FINANCE TOTAL" amt={buckets.financeTotal} bold />
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
 
-      {isMasterGm && incentiveMonthlyRows?.length > 0 && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 mt-2">
-          <h3 className="font-bold text-slate-800 text-sm mb-2">Confidential Incentives — individual breakdown</h3>
-          {incentiveMonthlyRows.map(r => (
-            <div key={r.id} className="flex justify-between items-center py-1.5 text-sm border-b border-slate-50 last:border-0">
-              <span className="text-slate-600">{r.employee_name} <span className="text-xs text-slate-400">{r.employee_code}</span></span>
-              <span className="font-medium">{money(r.amount)}</span>
-            </div>
-          ))}
-          <div className="flex justify-between items-center pt-2 mt-1 border-t border-slate-100 font-bold">
-            <span>Total Confidential</span><span>{money(cashIncentiveTotal)}</span>
-          </div>
-        </div>
-      )}
+// ── Payroll Comparison Summary (branch cards, current vs previous month) ──
+function num(v) { return Math.round(Number(v || 0)).toLocaleString(); }
 
-      {role === "Finance" && incentiveBranchTotals?.length > 0 && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 mt-2">
-          <h3 className="font-bold text-slate-800 text-sm mb-2">Additional Payments by Branch</h3>
-          {incentiveBranchTotals.map(b => (
-            <div key={b.branch} className="flex justify-between items-center py-1.5 text-sm border-b border-slate-50 last:border-0">
-              <span className="text-slate-600">{b.branch}</span>
-              <span className="font-medium">{money(b.total)}</span>
-            </div>
-          ))}
-          <div className="flex justify-between items-center pt-2 mt-1 border-t border-slate-100 font-bold">
-            <span>Total Additional Payments</span><span>{money(cashIncentiveTotal)}</span>
-          </div>
-        </div>
-      )}
+function prevMonthOf(m) {
+  const [y, mo] = String(m || "").split("-").map(Number);
+  if (!y || !mo) return m;
+  const d = new Date(y, mo - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+const COMPARISON_METRIC_KEYS = [
+  "grossSalary", "totalEarnings", "fuelAllowance", "overtime", "extraWorkingDays", "leaveAdjustment", "arrears", "commission", "otherAmount",
+  "advance", "loan", "lateComing", "halfDays", "fine", "eobi", "tax", "otherDeduction", "totalDeductions", "netSalary",
+];
+function emptyAgg() {
+  const o = { headCount: 0 };
+  COMPARISON_METRIC_KEYS.forEach(k => { o[k] = 0; });
+  return o;
+}
+function sumAgg(list) {
+  const o = emptyAgg();
+  list.forEach(a => { Object.keys(o).forEach(k => { o[k] += Number(a?.[k] || 0); }); });
+  return o;
+}
+
+const EARNING_ROWS = [
+  ["Gross Salary", "grossSalary"],
+  ["Total Salary (after adjustments)", "totalEarnings"],
+  ["Fuel Allowance", "fuelAllowance"],
+  ["Overtime", "overtime"],
+  ["Extra Working Days", "extraWorkingDays"],
+  ["Leave's Adjustment", "leaveAdjustment"],
+  ["Arrears", "arrears"],
+  ["Commission", "commission"],
+  ["Other Amount", "otherAmount"],
+];
+const DEDUCTION_ROWS = [
+  ["Advance", "advance"],
+  ["Loan", "loan"],
+  ["Late Coming", "lateComing"],
+  ["Half Days", "halfDays"],
+  ["Fine", "fine"],
+  ["EOBI", "eobi"],
+  ["Tax", "tax"],
+  ["Other Deduction", "otherDeduction"],
+];
+const NAMED_BRANCHES = ["HO - Admin", "Main Branch", "DHA Branch", "WAREHOUSE", "BASE FAISAL"];
+
+// payroll rows carry no branch/department column themselves — always joined
+// in from employees.branch via employee_code, same as displayRows does above.
+async function fetchBranchAggregates(month, codeToBranch) {
+  const { data } = await supabase.from("payroll").select(
+    "employee_code, gross_salary, fuel_allowance, overtime_amount, extra_working_days_amount, leave_adjustment, arrears, commission_addon, other_amount, total_earnings, advance_deduction, loan_deduction, late_deduction, half_day_deduction, fine_deduction, eobi_deduction, tax_deduction, other_deductions, total_deductions, net_salary"
+  ).eq("payroll_month", month).limit(2000);
+  const byBranch = {};
+  (data || []).forEach(r => {
+    const branch = codeToBranch[r.employee_code] || "Unassigned";
+    if (!byBranch[branch]) byBranch[branch] = emptyAgg();
+    const b = byBranch[branch];
+    b.headCount += 1;
+    b.grossSalary += Number(r.gross_salary || 0);
+    b.totalEarnings += Number(r.total_earnings || 0);
+    b.fuelAllowance += Number(r.fuel_allowance || 0);
+    b.overtime += Number(r.overtime_amount || 0);
+    b.extraWorkingDays += Number(r.extra_working_days_amount || 0);
+    b.leaveAdjustment += Number(r.leave_adjustment || 0);
+    b.arrears += Number(r.arrears || 0);
+    b.commission += Number(r.commission_addon || 0);
+    b.otherAmount += Number(r.other_amount || 0);
+    b.advance += Number(r.advance_deduction || 0);
+    b.loan += Number(r.loan_deduction || 0);
+    b.lateComing += Number(r.late_deduction || 0);
+    b.halfDays += Number(r.half_day_deduction || 0);
+    b.fine += Number(r.fine_deduction || 0);
+    b.eobi += Number(r.eobi_deduction || 0);
+    b.tax += Number(r.tax_deduction || 0);
+    b.otherDeduction += Number(r.other_deductions || 0);
+    b.totalDeductions += Number(r.total_deductions || 0);
+    b.netSalary += Number(r.net_salary || 0);
+  });
+  return byBranch;
+}
+
+function ComparisonTable({ cur, prev, month, prevMonth, showDiff }) {
+  function diffCell(curV, prevV) {
+    const d = Number(curV || 0) - Number(prevV || 0);
+    if (d === 0) return <span className="text-slate-400">0</span>;
+    return <span className={d > 0 ? "text-emerald-600 font-semibold" : "text-red-600 font-semibold"}>{d > 0 ? "+" : ""}{num(d)}</span>;
+  }
+  const cols = showDiff ? 4 : 3;
+  return (
+    <table className="w-full text-sm">
+      <thead className="text-slate-400 text-xs">
+        <tr>
+          <th className="text-left px-4 py-2 font-medium"> </th>
+          <th className="text-right px-4 py-2 font-medium">{month}</th>
+          <th className="text-right px-4 py-2 font-medium">{prevMonth}</th>
+          {showDiff && <th className="text-right px-4 py-2 font-medium">Difference</th>}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-slate-50">
+        <tr><td colSpan={cols} className="px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50">Earnings</td></tr>
+        {EARNING_ROWS.map(([label, key]) => (
+          <tr key={key}>
+            <td className="px-4 py-1.5 text-slate-600">{label}</td>
+            <td className="px-4 py-1.5 text-right">{num(cur[key])}</td>
+            <td className="px-4 py-1.5 text-right text-slate-400">{num(prev[key])}</td>
+            {showDiff && <td className="px-4 py-1.5 text-right">{diffCell(cur[key], prev[key])}</td>}
+          </tr>
+        ))}
+        <tr><td colSpan={cols} className="px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50">Deductions</td></tr>
+        {DEDUCTION_ROWS.map(([label, key]) => (
+          <tr key={key}>
+            <td className="px-4 py-1.5 text-slate-600">{label}</td>
+            <td className="px-4 py-1.5 text-right">{num(cur[key])}</td>
+            <td className="px-4 py-1.5 text-right text-slate-400">{num(prev[key])}</td>
+            {showDiff && <td className="px-4 py-1.5 text-right">{diffCell(cur[key], prev[key])}</td>}
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr className="bg-slate-900">
+          <td className="px-4 py-3 font-bold text-white text-base">Net Salary</td>
+          <td className="px-4 py-3 text-right font-bold text-white text-base">{num(cur.netSalary)}</td>
+          <td className="px-4 py-3 text-right font-bold text-slate-300 text-base">{num(prev.netSalary)}</td>
+          {showDiff && <td className="px-4 py-3 text-right font-bold text-base bg-slate-900">{diffCell(cur.netSalary, prev.netSalary)}</td>}
+        </tr>
+      </tfoot>
+    </table>
+  );
+}
+
+function BranchCard({ branch, cur, prev, month, prevMonth, collapsed, onToggle, total }) {
+  return (
+    <div className={`bg-white rounded-2xl shadow-sm overflow-hidden ${total ? "border-2 border-slate-800" : "border border-slate-200"}`}>
+      <button onClick={onToggle}
+        className={`w-full flex items-center justify-between px-4 py-3 transition text-left ${total ? "bg-slate-800 hover:bg-slate-700" : "bg-slate-50 hover:bg-slate-100"}`}>
+        <span className={`font-semibold ${total ? "text-white font-bold" : "text-slate-800"}`}>{collapsed ? "▶" : "▼"} {branch}</span>
+        <span className={`text-xs ${total ? "text-slate-300" : "text-slate-500"}`}>Head Count: {cur.headCount} <span className="opacity-50">|</span> {prev.headCount}</span>
+      </button>
+      {!collapsed && <ComparisonTable cur={cur} prev={prev} month={month} prevMonth={prevMonth} showDiff={total} />}
+    </div>
+  );
+}
+
+function BranchComparisonSummary({ month }) {
+  const [loading, setLoading] = useState(true);
+  const [currentByBranch, setCurrentByBranch] = useState({});
+  const [previousByBranch, setPreviousByBranch] = useState({});
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const prevMonth = useMemo(() => prevMonthOf(month), [month]);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    (async () => {
+      try {
+        const { data: emps } = await supabase.from("employees").select("employee_code, branch");
+        const codeToBranch = {};
+        (emps || []).forEach(e => { codeToBranch[e.employee_code] = e.branch || "Unassigned"; });
+        const [cur, prev] = await Promise.all([
+          fetchBranchAggregates(month, codeToBranch),
+          fetchBranchAggregates(prevMonth, codeToBranch),
+        ]);
+        if (!active) return;
+        setCurrentByBranch(cur);
+        setPreviousByBranch(prev);
+      } catch {
+        if (active) { setCurrentByBranch({}); setPreviousByBranch({}); }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [month, prevMonth]);
+
+  const allBranches = useMemo(() => {
+    const named = new Set(NAMED_BRANCHES);
+    const extra = Array.from(new Set([...Object.keys(currentByBranch), ...Object.keys(previousByBranch)]))
+      .filter(b => !named.has(b)).sort();
+    return [...NAMED_BRANCHES, ...extra];
+  }, [currentByBranch, previousByBranch]);
+
+  const totalCur = useMemo(() => sumAgg(Object.values(currentByBranch)), [currentByBranch]);
+  const totalPrev = useMemo(() => sumAgg(Object.values(previousByBranch)), [previousByBranch]);
+
+  function toggle(key) {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
+  function exportExcel() {
+    const rows = [
+      ...allBranches.map(b => ({ branch: b, cur: currentByBranch[b] || emptyAgg(), prev: previousByBranch[b] || emptyAgg() })),
+      { branch: "TOTAL", cur: totalCur, prev: totalPrev },
+    ];
+    const data = rows.map(({ branch, cur, prev }) => {
+      const o = { Branch: branch, [`Head Count (${month})`]: cur.headCount, [`Head Count (${prevMonth})`]: prev.headCount };
+      [...EARNING_ROWS, ...DEDUCTION_ROWS, ["Net Salary", "netSalary"]].forEach(([label, key]) => {
+        o[`${label} (${month})`] = cur[key];
+        o[`${label} (${prevMonth})`] = prev[key];
+      });
+      return o;
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Payroll Comparison");
+    XLSX.writeFile(wb, `payroll_comparison_${month}.xlsx`);
+  }
+
+  if (loading) {
+    return <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm mb-4 text-center text-slate-400 text-sm">Loading comparison…</div>;
+  }
+  const hasAnyData = allBranches.some(b => (currentByBranch[b]?.headCount || 0) > 0 || (previousByBranch[b]?.headCount || 0) > 0);
+  if (!hasAnyData) return null;
+
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+        <h2 className="font-bold text-slate-800">Payroll Comparison — {month} vs {prevMonth}</h2>
+        <Button variant="outline" onClick={exportExcel} className="rounded-xl text-xs">Export Comparison to Excel</Button>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {allBranches.map(branch => (
+          <BranchCard key={branch} branch={branch} cur={currentByBranch[branch] || emptyAgg()} prev={previousByBranch[branch] || emptyAgg()}
+            month={month} prevMonth={prevMonth} collapsed={collapsed.has(branch)} onToggle={() => toggle(branch)} />
+        ))}
+      </div>
+      <div className="mt-4">
+        <BranchCard branch="Total — All Branches" cur={totalCur} prev={totalPrev} month={month} prevMonth={prevMonth}
+          collapsed={collapsed.has("__TOTAL__")} onToggle={() => toggle("__TOTAL__")} total />
+      </div>
     </div>
   );
 }
@@ -360,9 +568,6 @@ export default function PayrollAutomation({ role, actorName }) {
   const [lockInfo, setLockInfo] = useState(null);
   const [verifications, setVerifications] = useState([]);
   const [flagNotifications, setFlagNotifications] = useState([]);
-  const [cashIncentiveTotal, setCashIncentiveTotal] = useState(0);
-  const [incentiveMonthlyRows, setIncentiveMonthlyRows] = useState([]);
-  const [incentiveBranchTotals, setIncentiveBranchTotals] = useState([]);
   const [marking, setMarking] = useState(false);
 
   function toggleBranchCollapsed(branch) {
@@ -409,20 +614,12 @@ export default function PayrollAutomation({ role, actorName }) {
   }
 
   async function loadLockAndExtras() {
-    const [lock, verifs, branchTotals] = await Promise.all([
+    const [lock, verifs] = await Promise.all([
       getPayrollLock(month),
       fetchVerifications(month),
-      fetchCashIncentiveBranchTotals(month).catch(() => []),
     ]);
     setLockInfo(lock);
     setVerifications(verifs);
-    setIncentiveBranchTotals(branchTotals);
-    setCashIncentiveTotal(branchTotals.reduce((s, b) => s + Number(b.total || 0), 0));
-    if (["Master", "GM"].includes(role)) {
-      fetchCashIncentiveMonthly(month).then(setIncentiveMonthlyRows).catch(() => setIncentiveMonthlyRows([]));
-    } else {
-      setIncentiveMonthlyRows([]);
-    }
     const { data: flags } = await supabase.from("notifications").select("*").eq("type", `payroll_flag_${month}`).order("created_at", { ascending: false });
     setFlagNotifications(flags || []);
   }
@@ -970,7 +1167,7 @@ export default function PayrollAutomation({ role, actorName }) {
               <span className="text-xs text-slate-500">Published by {publishedBy} · {publishedAt?.slice(0, 10)}</span>
             )}
           </div>
-          <div className="flex gap-2 mt-4 ml-auto flex-wrap">
+          <div className="flex gap-2 mt-4 flex-wrap">
             {canGenerate && (
               <Button onClick={generatePayroll} disabled={generating} className="rounded-2xl">
                 {generating ? "Generating..." : "Generate Payroll"}
@@ -1006,6 +1203,8 @@ export default function PayrollAutomation({ role, actorName }) {
         </div>
       </div>
 
+      <BranchComparisonSummary month={month} />
+
       {isPublished && role !== "Finance" && (
         <div className="mb-3 p-3 rounded-xl bg-purple-50 text-purple-700 text-sm">
           🔒 Payroll is Published. HR cannot make changes. Finance can view this payroll.
@@ -1022,8 +1221,7 @@ export default function PayrollAutomation({ role, actorName }) {
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
-      <SummaryPanel month={month} displayRows={displayRows} cashIncentiveTotal={cashIncentiveTotal} role={role}
-        incentiveMonthlyRows={incentiveMonthlyRows} incentiveBranchTotals={incentiveBranchTotals} />
+      <SummaryPanel month={month} displayRows={displayRows} />
 
       {["HR", "Master"].includes(role) && (
         <VerificationPanel month={month} role={role} verifications={verifications} flagNotifications={flagNotifications} onRespond={handleFlagRespond} />
