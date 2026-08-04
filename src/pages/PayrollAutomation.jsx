@@ -580,6 +580,8 @@ export default function PayrollAutomation({ role, actorName }) {
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("All");
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
+  const [showDetailColumns, setShowDetailColumns] = useState(false);
+  const [lastPayByCode, setLastPayByCode] = useState({});
   const [pageSize, setPageSize] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
   const [lockInfo, setLockInfo] = useState(null);
@@ -610,6 +612,19 @@ export default function PayrollAutomation({ role, actorName }) {
 
   useEffect(() => { loadBase(); }, []);
   useEffect(() => { loadPayroll(); loadLockAndExtras(); }, [month]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const prevM = prevMonthOf(month);
+      const { data } = await supabase.from("payroll").select("employee_code, net_salary").eq("payroll_month", prevM);
+      if (!active) return;
+      const map = {};
+      (data || []).forEach(r => { map[r.employee_code] = Number(r.net_salary || 0); });
+      setLastPayByCode(map);
+    })();
+    return () => { active = false; };
+  }, [month]);
 
   async function loadBase() {
     const [{ data: emps }, { data: lns }] = await Promise.all([
@@ -962,7 +977,7 @@ export default function PayrollAutomation({ role, actorName }) {
       "Absent Deduction": r.absentDeduction, "Fine": r.fineDeduction, "Shortage": r.shortageDeduction,
       "Advance": r.advanceDeduction, "Loan Deduction": r.loanDeduction,
       "Tax": r.taxDeduction, "EOBI": r.eobiDeduction, "Other Deductions": r.otherDeductions,
-      "Total Deductions": r.totalDeductions, "Net Pay": r.finalSalary,
+      "Total Deductions": r.totalDeductions, "Net Pay": r.finalSalary, "Last Pay": r.lastPay,
       "Payment Status": PAYMENT_STATUS_LABELS[r.paymentStatus] || r.paymentStatus,
       "Status": r.status || payrollStatus,
     }));
@@ -1028,8 +1043,9 @@ export default function PayrollAutomation({ role, actorName }) {
       taxDeduction, eobiDeduction, otherDeductions, totalDeductions,
       finalSalary: totalEarnings - totalDeductions, gross: basicSalary,
       arrears: r.arrears || 0,
+      lastPay: lastPayByCode[code] || 0,
     };
-  }), [payrollRows, payrollStatus]);
+  }), [payrollRows, payrollStatus, empByCode, lastPayByCode]);
 
   const branchOptions = useMemo(() =>
     Array.from(new Set(displayRows.map(r => r.branch).filter(Boolean))).sort(), [displayRows]);
@@ -1054,7 +1070,8 @@ export default function PayrollAutomation({ role, actorName }) {
     totalEarnings: s.totalEarnings + r.totalEarnings,
     totalDeductions: s.totalDeductions + r.totalDeductions,
     netPay: s.netPay + r.finalSalary,
-  }), { totalBasic: 0, totalEarnings: 0, totalDeductions: 0, netPay: 0 }), [filteredRows]);
+    totalLastPay: s.totalLastPay + r.lastPay,
+  }), { totalBasic: 0, totalEarnings: 0, totalDeductions: 0, netPay: 0, totalLastPay: 0 }), [filteredRows]);
 
   const holdCount = useMemo(() => displayRows.filter(r => r.paymentStatus === "Hold").length, [displayRows]);
 
@@ -1073,11 +1090,28 @@ export default function PayrollAutomation({ role, actorName }) {
     workedHours: r => r.workedHours,
     requiredHours: r => r.requiredHours,
     basicSalary: r => r.basicSalary,
+    extraWorkingDaysAmount: r => r.extraWorkingDaysAmount,
+    overtimeAmount: r => r.overtimeAmount,
+    commissionAddOn: r => r.commissionAddOn,
+    fuelAllowance: r => r.fuelAllowance,
+    otherEarnings: r => r.otherEarnings,
     allowances: r => r.totalEarnings - r.basicSalary,
+    lateDeduction: r => r.lateDeduction,
+    shortHourDeduction: r => r.shortHourDeduction,
+    fineDeduction: r => r.fineDeduction,
+    shortageDeduction: r => r.shortageDeduction,
+    advanceDeduction: r => r.advanceDeduction,
+    loanDeduction: r => r.loanDeduction,
+    taxDeduction: r => r.taxDeduction,
+    eobiDeduction: r => r.eobiDeduction,
+    otherDeductions: r => r.otherDeductions,
     totalDeductions: r => r.totalDeductions,
     finalSalary: r => r.finalSalary,
+    lastPay: r => r.lastPay,
     paymentStatus: r => r.paymentStatus,
   };
+
+  function sumRows(rows, field) { return rows.reduce((s, r) => s + (r[field] || 0), 0); }
 
   // Default sort: Branch A-Z → Department A-Z → Employee Name A-Z.
   // Clicking a column header overrides this with a single-key sort.
@@ -1298,7 +1332,11 @@ export default function PayrollAutomation({ role, actorName }) {
             {(searchText || branchFilter || deptFilter || levelFilter || paymentStatusFilter !== "All") && (
               <Button variant="outline" onClick={clearFilters} className="rounded-xl text-xs">Clear All Filters</Button>
             )}
-            <Button variant="outline" onClick={exportExcel} className="rounded-xl text-xs ml-auto">Export Excel</Button>
+            <label className="flex items-center gap-1.5 text-xs text-slate-500 ml-auto cursor-pointer select-none">
+              <input type="checkbox" checked={showDetailColumns} onChange={e => setShowDetailColumns(e.target.checked)} className="rounded" />
+              Show allowance/deduction breakdown
+            </label>
+            <Button variant="outline" onClick={exportExcel} className="rounded-xl text-xs">Export Excel</Button>
           </div>
           <p className="text-xs text-slate-500 mt-3">
             Showing <strong>{filteredRows.length}</strong> of {displayRows.length} employees
@@ -1338,15 +1376,38 @@ export default function PayrollAutomation({ role, actorName }) {
               <TH className="text-blue-500" sortField="workedHours">Worked Hrs</TH>
               <TH className="text-blue-500" sortField="requiredHours">Req Hrs</TH>
               <TH className="text-emerald-600" sortField="basicSalary">Basic</TH>
+              {showDetailColumns && (
+                <>
+                  <TH className="text-emerald-600" sortField="extraWorkingDaysAmount">Extra WD Amt</TH>
+                  <TH className="text-emerald-600" sortField="overtimeAmount">OT Amt</TH>
+                  <TH className="text-emerald-600" sortField="commissionAddOn">Commission</TH>
+                  <TH className="text-emerald-600" sortField="fuelAllowance">Fuel</TH>
+                  <TH className="text-emerald-600" sortField="otherEarnings">Other Earn</TH>
+                </>
+              )}
               <TH className="text-emerald-600" sortField="allowances">Allowances</TH>
+              {showDetailColumns && (
+                <>
+                  <TH className="text-red-500" sortField="lateDeduction">Late Ded</TH>
+                  <TH className="text-red-500" sortField="shortHourDeduction">ShortHr</TH>
+                  <TH className="text-red-500" sortField="fineDeduction">Fine</TH>
+                  <TH className="text-red-500" sortField="shortageDeduction">Shortage</TH>
+                  <TH className="text-red-500" sortField="advanceDeduction">Advance</TH>
+                  <TH className="text-red-500" sortField="loanDeduction">Loan</TH>
+                  <TH className="text-red-500" sortField="taxDeduction">Tax</TH>
+                  <TH className="text-red-500" sortField="eobiDeduction">EOBI</TH>
+                  <TH className="text-red-500" sortField="otherDeductions">Other Ded</TH>
+                </>
+              )}
               <TH className="text-red-500" sortField="totalDeductions">Deductions</TH>
               <TH className="text-slate-900 bg-slate-100" sortField="finalSalary">Net Pay</TH>
+              <TH sortField="lastPay">Last Pay</TH>
               <TH sortField="paymentStatus">Status</TH>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {pagedRows.length === 0 ? (
-              <tr><td colSpan={19} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={20 + (showDetailColumns ? 14 : 0)} className="px-4 py-8 text-center text-slate-400">
                 {displayRows.length === 0
                   ? (role === "Finance" ? "No published payroll for this month." : 'No payroll data. Click "Generate Payroll" to calculate.')
                   : "No employees match the current filters."}
@@ -1379,9 +1440,32 @@ export default function PayrollAutomation({ role, actorName }) {
                   <TD className="text-blue-600">{roundN(r.workedHours, 2)}</TD>
                   <TD className="text-blue-600">{roundN(r.requiredHours, 1)}</TD>
                   <TD>{money(r.basicSalary)}</TD>
+                  {showDetailColumns && (
+                    <>
+                      <TD className="text-emerald-600">{money(r.extraWorkingDaysAmount)}</TD>
+                      <TD className="text-emerald-600">{money(r.overtimeAmount)}</TD>
+                      <TD className="text-emerald-600">{money(r.commissionAddOn)}</TD>
+                      <TD className="text-emerald-600">{money(r.fuelAllowance)}</TD>
+                      <TD className="text-emerald-600">{money(r.otherEarnings)}</TD>
+                    </>
+                  )}
                   <TD className="text-emerald-600">{money(r.totalEarnings - r.basicSalary)}</TD>
+                  {showDetailColumns && (
+                    <>
+                      <TD className="text-red-500">{money(r.lateDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.shortHourDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.fineDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.shortageDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.advanceDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.loanDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.taxDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.eobiDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.otherDeductions)}</TD>
+                    </>
+                  )}
                   <TD className="text-red-500">{money(r.totalDeductions)}</TD>
                   <TD className="font-bold text-slate-900 bg-slate-50">{money(r.finalSalary)}</TD>
+                  <TD className="text-slate-500">{money(r.lastPay)}</TD>
                   <TD onClick={e => e.stopPropagation()}>
                     <div className="flex flex-col gap-0.5 items-start">
                       {canRequestPaymentStatus ? (
@@ -1411,9 +1495,32 @@ export default function PayrollAutomation({ role, actorName }) {
               <tr>
                 <TD colSpan={14} className="font-bold" sticky="first">Totals ({filteredRows.length} employees)</TD>
                 <TD>{money(filteredTotals.totalBasic)}</TD>
+                {showDetailColumns && (
+                  <>
+                    <TD>{money(sumRows(filteredRows, "extraWorkingDaysAmount"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "overtimeAmount"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "commissionAddOn"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "fuelAllowance"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "otherEarnings"))}</TD>
+                  </>
+                )}
                 <TD className="text-emerald-700">{money(filteredTotals.totalEarnings - filteredTotals.totalBasic)}</TD>
+                {showDetailColumns && (
+                  <>
+                    <TD>{money(sumRows(filteredRows, "lateDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "shortHourDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "fineDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "shortageDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "advanceDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "loanDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "taxDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "eobiDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "otherDeductions"))}</TD>
+                  </>
+                )}
                 <TD className="text-red-700">{money(filteredTotals.totalDeductions)}</TD>
                 <TD className="text-slate-900 bg-slate-200">{money(filteredTotals.netPay)}</TD>
+                <TD>{money(filteredTotals.totalLastPay)}</TD>
                 <TD />
               </tr>
             </tfoot>
