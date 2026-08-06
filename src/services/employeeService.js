@@ -66,6 +66,7 @@ export function mapEmployeeRecord(emp) {
     bankName: emp.bank_name || "",
     accountNumber: emp.account_number || "",
     iban: emp.iban || "",
+    paymentMethod: emp.payment_method || "Bank",
     // Documents
     photoUrl: emp.photo_url || "",
     cnicCopyUrl: emp.cnic_copy_url || "",
@@ -105,6 +106,17 @@ export async function createEmployee(payload) {
 
 export async function updateEmployeeByCode(employeeCode, payload) {
   const { error } = await supabase.from("employees").update(payload).eq("employee_code", employeeCode);
+  if (error) throw error;
+}
+
+// Finance Head can flip Bank/Cash without full employee-edit rights — the
+// `employees` table's own RLS only allows Master/HR to UPDATE, so this goes
+// through a narrow SECURITY DEFINER RPC that touches only this one column.
+export async function setEmployeePaymentMethod(employeeCode, paymentMethod) {
+  const { error } = await supabase.rpc("set_employee_payment_method", {
+    p_employee_code: employeeCode,
+    p_payment_method: paymentMethod,
+  });
   if (error) throw error;
 }
 

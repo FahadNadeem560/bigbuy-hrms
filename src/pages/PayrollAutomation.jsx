@@ -666,14 +666,18 @@ export default function PayrollAutomation({ role, actorName }) {
     const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
     const numberOfWorkingDays = getWorkingDaysInMonth(y, m);
 
-    const [{ data: att }, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }] = await Promise.all([
+    const [{ data: att }, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }] = await Promise.all([
       supabase.from("attendance").select("*").gte("work_date", fromDate).lte("work_date", toDate),
       supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("advances").select("*").eq("advance_month", month).in("status", ["Issued", "Deducted"]),
       supabase.from("one_time_adjustments").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("staff_eligibility_groups").select("code, extra_days_eligible"),
+      // Approved Skip Month requests for this month -- exclude these loans'
+      // deduction below (LoanManagement.jsx's Skip Month / Approval Queue).
+      supabase.from("loan_changes").select("loan_id").eq("change_type", "relief").eq("status", "Approved").eq("effective_month", month),
     ]);
+    const skippedLoanIds = new Set((loanReliefData || []).map(r => r.loan_id));
     const groupByCode = Object.fromEntries((groupsData || []).map(g => [g.code, g]));
 
     // Aggregate attendance per employee
@@ -764,7 +768,7 @@ export default function PayrollAutomation({ role, actorName }) {
       const loanMatch = (loans || []).find(l =>
         l.employee_code === emp.employee_code || l.employee_id === emp.employee_code
       );
-      if (loanMatch) loanRows.push({ employeeCode: emp.employee_code, monthly: Number(loanMatch.monthly_deduction || 0) });
+      if (loanMatch && !skippedLoanIds.has(loanMatch.id)) loanRows.push({ employeeCode: emp.employee_code, monthly: Number(loanMatch.monthly_deduction || 0) });
       return calculatePayrollForEmployee(empMapped, adj, loanRows, [], month);
     });
 
@@ -915,10 +919,16 @@ export default function PayrollAutomation({ role, actorName }) {
     } catch (e) { setErr(e.message); }
   }
 
+  // Routed through mark_payroll_paid (SECURITY DEFINER) instead of a direct
+  // update -- Finance has no write access to `loans`, but marking an
+  // employee paid also needs to decrement that month's loan_deduction off
+  // their active loan's outstanding_balance (previously never happened at
+  // all; see loan_approval_workflow migration notes).
   async function markPaid(code) {
-    await supabase.from("payroll").update({
-      is_paid: true, paid_at: new Date().toISOString(), paid_by: actorName || role,
-    }).eq("payroll_month", month).eq("employee_code", code);
+    const { error } = await supabase.rpc("mark_payroll_paid", {
+      p_payroll_month: month, p_employee_code: code, p_actor_name: actorName || role,
+    });
+    if (error) { setErr(error.message); return; }
     setPayrollRows(prev => prev.map(r => (r.employee_code === code) ? { ...r, is_paid: true, paid_at: new Date().toISOString(), paid_by: actorName || role } : r));
     const paidRow = displayRows.find(r => r.employeeCode === code);
     if (paidRow) {

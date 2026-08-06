@@ -2713,4 +2713,311 @@ ALTER FUNCTION public.run_attendance_processing(date, date) SET statement_timeou
 ALTER FUNCTION public.process_daily_attendance(date, date) SET statement_timeout = '5min';
 ALTER FUNCTION public.generate_employee_work_rosters(date, date) SET statement_timeout = '5min';
 ALTER FUNCTION public.import_zkt_raw_punches(jsonb, text) SET statement_timeout = '5min';
+
+-- =============================================================
+-- Finance Head: bank vs cash payment marking (2026-08-06)
+--
+-- Finance already had SELECT on employees (employees_select /
+-- employees_select_authorized), but UPDATE is restricted to Master/HR only
+-- (employees_update: app_current_role() IN ('Master','HR')). Finance Head
+-- needs to flip a single flag -- whether an employee is paid by bank
+-- transfer or cash -- without being granted broader employee-edit rights
+-- (salary, CNIC, status, etc. must stay Master/HR-only).
+--
+-- Rather than widening employees_update to include Finance (which would
+-- grant a full-row UPDATE via any direct table call, not just this one
+-- column), added a narrow SECURITY DEFINER RPC that only ever touches
+-- payment_method, gated on private.current_hrms_role() (the newer role
+-- helper -- also respects deactivated accounts, unlike app_current_role()).
+-- =============================================================
+ALTER TABLE public.employees
+  ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'Bank'
+  CHECK (payment_method IN ('Bank','Cash'));
+
+CREATE OR REPLACE FUNCTION public.set_employee_payment_method(p_employee_code text, p_payment_method text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF (SELECT private.current_hrms_role()) NOT IN ('Master','Finance') THEN
+    RAISE EXCEPTION 'Not authorized to set employee payment method';
+  END IF;
+  IF p_payment_method NOT IN ('Bank','Cash') THEN
+    RAISE EXCEPTION 'Invalid payment method: %', p_payment_method;
+  END IF;
+  UPDATE public.employees SET payment_method = p_payment_method
+  WHERE employee_code = p_employee_code;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.set_employee_payment_method(text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_employee_payment_method(text, text) TO authenticated;
+-- =============================================================
 ALTER FUNCTION public.process_zkt_raw_punches(date, date) SET statement_timeout = '5min';
+
+-- =============================================================
+-- Loan approval workflow (2026-08-06)
+--
+-- LoanManagement.jsx's "+ New Loan" form inserted straight into `loans`
+-- with status='Active' -- no approval step at all, unlike Salary
+-- Increments/One-Time Adjustments/Settlements/Payment Status changes,
+-- which all already go through a HR-proposes -> Master/GM-approves gate
+-- via the Approval Queue. Mirrors the salary_increments pattern exactly:
+-- HR submissions land as 'Pending Approval' (excluded from payroll
+-- deduction, which already filters loans on status='Active' --
+-- PayrollAutomation.jsx:632 -- so nothing needs to change there), Master's
+-- own submissions apply instantly (Master IS an approver), GM never
+-- proposes, only approves/rejects. Bulk import (historical record
+-- migration, not a new loan grant) is intentionally left as direct
+-- Active/Cleared -- out of scope per user confirmation.
+--
+-- loans_manage_authorized already restricts INSERT/UPDATE/DELETE to
+-- Master/HR (see loan_permission_fixes) -- GM has zero write access, so
+-- both approve and reject route through narrow SECURITY DEFINER RPCs
+-- (same approach as set_employee_payment_method above) rather than
+-- widening GM's general table access. loans_select_authorized also never
+-- included GM, so GM could not have even seen a pending loan in the
+-- Approval Queue -- widened SELECT (read-only) to include GM.
+-- =============================================================
+ALTER TABLE public.loans
+  ADD COLUMN IF NOT EXISTS submitted_by TEXT,
+  ADD COLUMN IF NOT EXISTS approved_by TEXT,
+  ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+
+ALTER POLICY loans_select_authorized ON public.loans
+  USING (
+    ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','HR','Finance','GM','Audit']))
+    OR (employee_code = (SELECT private.current_employee_code()))
+  );
+
+CREATE OR REPLACE FUNCTION public.approve_loan_request(p_loan_id UUID, p_approver_name TEXT)
+RETURNS public.loans
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE r public.loans%ROWTYPE;
+BEGIN
+  IF (SELECT private.current_hrms_role()) NOT IN ('Master','GM') THEN
+    RAISE EXCEPTION 'Only Master or GM can approve loan requests';
+  END IF;
+  SELECT * INTO r FROM public.loans WHERE id = p_loan_id AND status = 'Pending Approval' FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Loan request not found or not pending';
+  END IF;
+  UPDATE public.loans SET status = 'Active', approved_by = p_approver_name, approved_at = NOW()
+  WHERE id = p_loan_id
+  RETURNING * INTO r;
+  RETURN r;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.reject_loan_request(p_loan_id UUID, p_approver_name TEXT, p_reason TEXT)
+RETURNS public.loans
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE r public.loans%ROWTYPE;
+BEGIN
+  IF (SELECT private.current_hrms_role()) NOT IN ('Master','GM') THEN
+    RAISE EXCEPTION 'Only Master or GM can reject loan requests';
+  END IF;
+  SELECT * INTO r FROM public.loans WHERE id = p_loan_id AND status = 'Pending Approval' FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Loan request not found or not pending';
+  END IF;
+  UPDATE public.loans SET status = 'Rejected', approved_by = p_approver_name, approved_at = NOW(), rejection_reason = p_reason
+  WHERE id = p_loan_id
+  RETURNING * INTO r;
+  RETURN r;
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.approve_loan_request(UUID, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.approve_loan_request(UUID, TEXT) FROM anon, PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reject_loan_request(UUID, TEXT, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.reject_loan_request(UUID, TEXT, TEXT) FROM anon, PUBLIC;
+-- =============================================================
+
+-- =============================================================
+-- Loan changes (Reschedule/Skip Month) approval + Clear locked to Master +
+-- outstanding_balance actually decrementing (2026-08-06)
+--
+-- 1) Reschedule and Skip Month (relief) previously wrote straight to
+--    loans/loan_changes from LoanManagement.jsx with zero gate, same class
+--    of bug as the loan-creation one fixed above. `loan_changes` becomes
+--    the proposal record itself (same role loan_changes already played as
+--    an audit log, just with a status now) -- HR inserts status='Pending'
+--    and nothing on `loans` changes yet; Master inserts status='Approved'
+--    directly (applies instantly, same "Master IS an approver" rule as
+--    everywhere else); GM only ever approves/rejects via the RPCs below,
+--    consistent with loans_manage_authorized never granting GM write
+--    access to loans/loan_changes.
+--
+--    Skip Month previously only logged an audit note -- it never actually
+--    stopped that month's deduction from being included in payroll
+--    (PayrollAutomation.jsx's loan-matching had no concept of a skip).
+--    Added `effective_month` so an Approved relief request now genuinely
+--    excludes that loan from that month's payroll generation (see
+--    PayrollAutomation.jsx buildPayrollRows()).
+--
+-- 2) Clear and Early Settle were, and remain, the exact same DB
+--    operation (status='Cleared', outstanding_balance=0) -- there's no way
+--    for RLS to tell them apart since the app sends identical writes for
+--    both. Restricting only "Clear" to Master is therefore enforced by
+--    routing it through this Master-only RPC and removing HR's direct
+--    path to it in the UI; Early Settle is intentionally left as a direct
+--    Master/HR table update, unchanged, since it wasn't part of the ask.
+--    Note for later: HR can still zero out any active loan today via
+--    Early Settle -- if the intent is "no one but Master can write off a
+--    loan balance," Early Settle needs the same treatment.
+--
+-- 3) outstanding_balance was only ever touched by Clear/Early Settle --
+--    the monthly deductions actually taken via payroll never reduced it,
+--    so the Loan Ledger's balance was frozen at the original amount for a
+--    loan's entire life. mark_payroll_paid() now decrements the
+--    employee's active loan by that payroll row's loan_deduction at the
+--    moment Finance marks it Paid (not at Generate/Refresh time, since a
+--    draft can be regenerated before payment), auto-clearing at zero.
+--    Guarded by re-checking is_paid inside the function (FOR UPDATE) so a
+--    double-click/retry can't double-decrement -- same race fixed for
+--    increment approval. Assumes one active loan per employee, same
+--    assumption buildPayrollRows() already makes via Array.find rather
+--    than summing multiple active loans.
+-- =============================================================
+ALTER TABLE public.loan_changes
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'Approved',
+  ADD COLUMN IF NOT EXISTS submitted_by TEXT,
+  ADD COLUMN IF NOT EXISTS approved_by TEXT,
+  ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS rejection_reason TEXT,
+  ADD COLUMN IF NOT EXISTS effective_month TEXT;
+
+ALTER POLICY loan_changes_select_authorized ON public.loan_changes
+  USING ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','HR','Finance','GM','Audit']));
+
+CREATE OR REPLACE FUNCTION public.approve_loan_change(p_change_id UUID, p_approver_name TEXT)
+RETURNS public.loan_changes
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE c public.loan_changes%ROWTYPE;
+DECLARE ln public.loans%ROWTYPE;
+DECLARE new_months INT;
+BEGIN
+  IF (SELECT private.current_hrms_role()) NOT IN ('Master','GM') THEN
+    RAISE EXCEPTION 'Only Master or GM can approve loan change requests';
+  END IF;
+  SELECT * INTO c FROM public.loan_changes WHERE id = p_change_id AND status = 'Pending' FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Loan change request not found or not pending';
+  END IF;
+
+  IF c.change_type = 'reschedule' THEN
+    SELECT * INTO ln FROM public.loans WHERE id = c.loan_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Underlying loan not found';
+    END IF;
+    IF COALESCE(c.new_monthly, 0) <= 0 THEN
+      RAISE EXCEPTION 'Invalid proposed monthly deduction';
+    END IF;
+    new_months := CEIL(ln.outstanding_balance / c.new_monthly);
+    UPDATE public.loans SET monthly_deduction = c.new_monthly, repayment_months = new_months WHERE id = ln.id;
+  END IF;
+  -- change_type = 'relief' (Skip Month) needs no loans-table change --
+  -- buildPayrollRows() checks for an Approved relief row matching
+  -- (loan_id, effective_month) directly.
+
+  UPDATE public.loan_changes SET status = 'Approved', approved_by = p_approver_name, approved_at = NOW()
+  WHERE id = p_change_id
+  RETURNING * INTO c;
+  RETURN c;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.reject_loan_change(p_change_id UUID, p_approver_name TEXT, p_reason TEXT)
+RETURNS public.loan_changes
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE c public.loan_changes%ROWTYPE;
+BEGIN
+  IF (SELECT private.current_hrms_role()) NOT IN ('Master','GM') THEN
+    RAISE EXCEPTION 'Only Master or GM can reject loan change requests';
+  END IF;
+  SELECT * INTO c FROM public.loan_changes WHERE id = p_change_id AND status = 'Pending' FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Loan change request not found or not pending';
+  END IF;
+  UPDATE public.loan_changes SET status = 'Rejected', approved_by = p_approver_name, approved_at = NOW(), rejection_reason = p_reason
+  WHERE id = p_change_id
+  RETURNING * INTO c;
+  RETURN c;
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.approve_loan_change(UUID, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.approve_loan_change(UUID, TEXT) FROM anon, PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reject_loan_change(UUID, TEXT, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.reject_loan_change(UUID, TEXT, TEXT) FROM anon, PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.clear_loan(p_loan_id UUID, p_actor_name TEXT)
+RETURNS public.loans
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE ln public.loans%ROWTYPE;
+DECLARE v_old_balance NUMERIC;
+BEGIN
+  IF (SELECT private.current_hrms_role()) <> 'Master' THEN
+    RAISE EXCEPTION 'Only Master can clear a loan';
+  END IF;
+  SELECT * INTO ln FROM public.loans WHERE id = p_loan_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Loan not found';
+  END IF;
+  v_old_balance := ln.outstanding_balance;
+  UPDATE public.loans SET status = 'Cleared', outstanding_balance = 0 WHERE id = p_loan_id RETURNING * INTO ln;
+  INSERT INTO public.loan_changes (loan_id, employee_code, change_type, old_balance, new_balance, reason, status, submitted_by, approved_by, approved_at)
+  VALUES (p_loan_id, ln.employee_code, 'settlement', v_old_balance, 0, 'Manual clear', 'Approved', p_actor_name, p_actor_name, NOW());
+  RETURN ln;
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.clear_loan(UUID, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.clear_loan(UUID, TEXT) FROM anon, PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.mark_payroll_paid(p_payroll_month TEXT, p_employee_code TEXT, p_actor_name TEXT)
+RETURNS public.payroll
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE pr public.payroll%ROWTYPE;
+DECLARE ln public.loans%ROWTYPE;
+DECLARE v_new_balance NUMERIC;
+BEGIN
+  IF (SELECT private.current_hrms_role()) <> 'Finance' THEN
+    RAISE EXCEPTION 'Only Finance can mark payroll as paid';
+  END IF;
+  SELECT * INTO pr FROM public.payroll WHERE payroll_month = p_payroll_month AND employee_code = p_employee_code FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Payroll row not found for % / %', p_employee_code, p_payroll_month;
+  END IF;
+  IF pr.is_paid THEN
+    RETURN pr;
+  END IF;
+
+  UPDATE public.payroll SET is_paid = true, paid_at = NOW(), paid_by = p_actor_name
+  WHERE id = pr.id
+  RETURNING * INTO pr;
+
+  IF COALESCE(pr.loan_deduction, 0) > 0 THEN
+    SELECT * INTO ln FROM public.loans
+    WHERE employee_code = p_employee_code AND status = 'Active'
+    ORDER BY created_at ASC LIMIT 1 FOR UPDATE;
+    IF FOUND THEN
+      v_new_balance := GREATEST(0, COALESCE(ln.outstanding_balance, 0) - pr.loan_deduction);
+      UPDATE public.loans SET
+        outstanding_balance = v_new_balance,
+        status = CASE WHEN v_new_balance <= 0 THEN 'Cleared' ELSE status END
+      WHERE id = ln.id;
+    END IF;
+  END IF;
+
+  RETURN pr;
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.mark_payroll_paid(TEXT, TEXT, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.mark_payroll_paid(TEXT, TEXT, TEXT) FROM anon, PUBLIC;
+-- =============================================================

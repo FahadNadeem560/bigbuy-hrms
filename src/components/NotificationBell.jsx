@@ -11,6 +11,8 @@ const TYPE_ICONS = {
   increment_due_branch: "📈",
   increment_proposed: "📝",
   increment_decision: "📈",
+  loan_proposed: "💳",
+  loan_decision: "💳",
   advance_requested: "💵",
   advance_issued: "💵",
   general: "🔔",

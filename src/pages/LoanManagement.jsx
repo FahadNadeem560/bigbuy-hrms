@@ -3,6 +3,13 @@ import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
+import { notifyLoanProposed, proposeLoanChange, applyLoanChangeAsMaster, clearLoanAsMaster } from "../services/loanService.js";
+
+function nextMonthStr() {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 function excelDateToJS(serial) {
   if (!serial) return null;
@@ -63,6 +70,7 @@ export default function LoanManagement({ role }) {
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [reliefTarget, setReliefTarget] = useState(null);
   const [reliefReason, setReliefReason] = useState("");
+  const [reliefMonth, setReliefMonth] = useState(nextMonthStr());
   const [loanChanges, setLoanChanges] = useState([]);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -87,22 +95,35 @@ export default function LoanManagement({ role }) {
     setLoanChanges(changes || []);
   }
 
+  // HR proposes (Pending Approval, no payroll effect until Master/GM
+  // approves in the Approval Queue); Master applies instantly since Master
+  // is itself an approver — same split as Salary Increments.
   async function submitLoan() {
     if (!form.employee || !form.loan_amount || !form.monthly_deduction || !form.start_date)
       return setErr("Employee, loan amount, monthly deduction and start date are required.");
     setErr("");
     const months = Math.ceil(Number(form.loan_amount) / Number(form.monthly_deduction));
+    const needsApproval = role === "HR";
     const { error } = await supabase.from("loans").insert({
       employee_code: form.employee.employee_code,
       employee_name: form.employee.full_name, loan_amount: Number(form.loan_amount),
       monthly_deduction: Number(form.monthly_deduction), outstanding_balance: Number(form.loan_amount),
-      start_date: form.start_date, reason: form.reason, status: "Active",
+      start_date: form.start_date, reason: form.reason, status: needsApproval ? "Pending Approval" : "Active",
       repayment_months: months, auto_deduct: true, created_at: new Date().toISOString(),
+      submitted_by: role,
       guarantor_1_code: form.guarantor1?.employee_code || null, guarantor_1_name: form.guarantor1?.full_name || null,
       guarantor_2_code: form.guarantor2?.employee_code || null, guarantor_2_name: form.guarantor2?.full_name || null,
     });
     if (error) return setErr(error.message);
-    setMsg("Loan application created successfully.");
+    if (needsApproval) {
+      await notifyLoanProposed({
+        employeeName: form.employee.full_name, loanAmount: Number(form.loan_amount),
+        monthlyDeduction: Number(form.monthly_deduction), submittedByRole: role,
+      });
+      setMsg("Loan request submitted — awaiting Master/GM approval.");
+    } else {
+      setMsg("Loan application created successfully.");
+    }
     setForm(BLANK); setShowForm(false); loadAll();
   }
 
@@ -207,12 +228,11 @@ export default function LoanManagement({ role }) {
   }
 
   async function clearLoan(id) {
-    const loan = loans.find(l => l.id === id);
-    const { error } = await supabase.from("loans").update({ status: "Cleared", outstanding_balance: 0 }).eq("id", id);
-    if (!error) {
-      await supabase.from("loan_changes").insert({ loan_id: id, employee_code: loan?.employee_code, change_type: "settlement", reason: "Manual clear", created_at: new Date().toISOString() });
+    if (role !== "Master") return setErr("Only Master can clear a loan.");
+    try {
+      await clearLoanAsMaster(id, role);
       setMsg("Loan marked as cleared."); loadAll();
-    }
+    } catch (e) { setErr(e.message); }
   }
 
   async function earlySettle(id) {
@@ -224,22 +244,55 @@ export default function LoanManagement({ role }) {
     } else setErr(error.message);
   }
 
+  // HR can only propose (Pending, no change to loans.monthly_deduction yet);
+  // Master applies instantly — same split as loan creation and everywhere
+  // else in this workflow. GM never proposes, only approves in the Queue.
   async function reschedule(id) {
     if (!rescheduleAmount || !rescheduleDate) return setErr("New monthly deduction amount and effective date required.");
     const loan = loans.find(l => l.id === id);
-    const newMonths = Math.ceil(Number(loan?.outstanding_balance || 0) / Number(rescheduleAmount));
-    const { error } = await supabase.from("loans").update({ monthly_deduction: Number(rescheduleAmount), repayment_months: newMonths }).eq("id", id);
-    if (!error) {
-      await supabase.from("loan_changes").insert({ loan_id: id, employee_code: loan?.employee_code, change_type: "reschedule", old_monthly: loan?.monthly_deduction, new_monthly: Number(rescheduleAmount), reason: `Rescheduled effective ${rescheduleDate}`, created_at: new Date().toISOString() });
-      setMsg("Loan rescheduled."); setRescheduleTarget(null); setRescheduleAmount(""); setRescheduleDate(""); loadAll();
-    } else setErr(error.message);
+    if (!loan) return;
+    try {
+      if (role === "Master") {
+        const newMonths = Math.ceil(Number(loan.outstanding_balance || 0) / Number(rescheduleAmount));
+        await applyLoanChangeAsMaster({
+          loanId: id, employeeCode: loan.employee_code, changeType: "reschedule",
+          oldMonthly: loan.monthly_deduction, newMonthly: Number(rescheduleAmount), newRepaymentMonths: newMonths,
+          reason: `Rescheduled effective ${rescheduleDate}`, actorName: role,
+        });
+        setMsg("Loan rescheduled.");
+      } else {
+        await proposeLoanChange({
+          loanId: id, employeeCode: loan.employee_code, employeeName: loan.employee_name,
+          changeType: "reschedule", oldMonthly: loan.monthly_deduction, newMonthly: Number(rescheduleAmount),
+          reason: `Rescheduled effective ${rescheduleDate}`, submittedByRole: role,
+        });
+        setMsg("Reschedule request submitted — awaiting Master/GM approval.");
+      }
+      setRescheduleTarget(null); setRescheduleAmount(""); setRescheduleDate(""); loadAll();
+    } catch (e) { setErr(e.message); }
   }
 
   async function skipMonth(id) {
     if (!reliefReason.trim()) return setErr("Reason for skipping deduction is required.");
+    if (!reliefMonth) return setErr("Month to skip is required.");
     const loan = loans.find(l => l.id === id);
-    await supabase.from("loan_changes").insert({ loan_id: id, employee_code: loan?.employee_code, change_type: "relief", reason: reliefReason, created_at: new Date().toISOString() });
-    setMsg("Month skip recorded. No deduction this month."); setReliefTarget(null); setReliefReason(""); loadAll();
+    if (!loan) return;
+    try {
+      if (role === "Master") {
+        await applyLoanChangeAsMaster({
+          loanId: id, employeeCode: loan.employee_code, changeType: "relief",
+          effectiveMonth: reliefMonth, reason: reliefReason, actorName: role,
+        });
+        setMsg(`No deduction recorded for ${reliefMonth}.`);
+      } else {
+        await proposeLoanChange({
+          loanId: id, employeeCode: loan.employee_code, employeeName: loan.employee_name,
+          changeType: "relief", effectiveMonth: reliefMonth, reason: reliefReason, submittedByRole: role,
+        });
+        setMsg("Skip-month request submitted — awaiting Master/GM approval.");
+      }
+      setReliefTarget(null); setReliefReason(""); setReliefMonth(nextMonthStr()); loadAll();
+    } catch (e) { setErr(e.message); }
   }
 
   const filtered = useMemo(() => loans.filter(l => {
@@ -249,6 +302,14 @@ export default function LoanManagement({ role }) {
   }), [loans, filterEmp, filterStatus]);
 
   const totalOutstanding = useMemo(() => filtered.filter(l => l.status === "Active").reduce((s, l) => s + Number(l.outstanding_balance || 0), 0), [filtered]);
+
+  // Blocks resubmitting a reschedule/skip while one's already awaiting
+  // Master/GM approval, and surfaces it in the ledger instead of the buttons.
+  const pendingChangeByLoan = useMemo(() => {
+    const map = {};
+    loanChanges.filter(c => c.status === "Pending").forEach(c => { map[c.loan_id] = c; });
+    return map;
+  }, [loanChanges]);
 
   const historyLoan = selectedHistory ? loans.filter(l => l.employee_code === selectedHistory || l.employee_id === selectedHistory) : [];
   const historyChanges = selectedHistory ? loanChanges.filter(c => c.employee_code === selectedHistory) : [];
@@ -370,8 +431,9 @@ export default function LoanManagement({ role }) {
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Active Loans</p><p className="text-2xl font-bold">{loans.filter(l => l.status === "Active").length}</p></div>
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Pending Approval</p><p className="text-2xl font-bold text-amber-600">{loans.filter(l => l.status === "Pending Approval").length}</p></div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Outstanding</p><p className="text-2xl font-bold text-red-500">{money(totalOutstanding)}</p></div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Cleared Loans</p><p className="text-2xl font-bold text-emerald-600">{loans.filter(l => l.status === "Cleared").length}</p></div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Loans</p><p className="text-2xl font-bold">{loans.length}</p></div>
@@ -381,7 +443,7 @@ export default function LoanManagement({ role }) {
         <div className="flex flex-wrap gap-3">
           <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search employee..." className="flex-1 min-w-[160px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-            <option value="All">All Status</option><option>Active</option><option>Cleared</option>
+            <option value="All">All Status</option><option>Active</option><option>Pending Approval</option><option>Cleared</option><option>Rejected</option>
           </select>
         </div>
       </div>
@@ -421,27 +483,40 @@ export default function LoanManagement({ role }) {
                   <td className="px-4 py-3 font-semibold text-red-500">{money(l.outstanding_balance)}</td>
                   <td className="px-4 py-3">{l.start_date}</td>
                   <td className="px-4 py-3">{l.repayment_months || "—"}</td>
-                  <td className="px-4 py-3"><Badge tone={l.status === "Active" ? "yellow" : "green"}>{l.status}</Badge></td>
+                  <td className="px-4 py-3">
+                    <Badge tone={l.status === "Active" ? "yellow" : l.status === "Pending Approval" ? "blue" : l.status === "Rejected" ? "red" : "green"}>{l.status}</Badge>
+                    {l.status === "Rejected" && l.rejection_reason && <div className="text-[11px] text-slate-400 mt-1">{l.rejection_reason}</div>}
+                  </td>
                   {canManage && (
                   <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {l.status === "Active" && (
+                    <div className="flex flex-wrap gap-1 items-center">
+                      {l.status === "Active" && pendingChangeByLoan[l.id] && (
+                        <Badge tone="blue">
+                          Pending: {pendingChangeByLoan[l.id].change_type === "reschedule" ? "Reschedule" : "Skip Month"}
+                        </Badge>
+                      )}
+                      {l.status === "Active" && !pendingChangeByLoan[l.id] && (
                         <>
                           {rescheduleTarget === l.id
                             ? <>
-                                <Button onClick={() => reschedule(l.id)} className="rounded-xl text-xs py-1 px-2">Confirm</Button>
+                                <input type="number" value={rescheduleAmount} onChange={e => setRescheduleAmount(e.target.value)} placeholder="New amount" className="w-24 px-2 py-1 rounded-xl border border-slate-200 text-xs" />
+                                <input type="date" value={rescheduleDate} onChange={e => setRescheduleDate(e.target.value)} className="px-2 py-1 rounded-xl border border-slate-200 text-xs" />
+                                <Button onClick={() => reschedule(l.id)} className="rounded-xl text-xs py-1 px-2">{role === "Master" ? "Confirm" : "Request"}</Button>
                                 <Button variant="outline" onClick={() => setRescheduleTarget(null)} className="rounded-xl text-xs py-1 px-2">Cancel</Button>
                               </>
                             : <Button variant="outline" onClick={() => setRescheduleTarget(l.id)} className="rounded-xl text-xs py-1 px-2">Reschedule</Button>}
                           {reliefTarget === l.id
                             ? <div className="flex gap-1">
+                                <input type="month" value={reliefMonth} onChange={e => setReliefMonth(e.target.value)} className="px-2 py-1 rounded-xl border border-slate-200 text-xs" />
                                 <input value={reliefReason} onChange={e => setReliefReason(e.target.value)} placeholder="Reason..." className="w-28 px-2 py-1 rounded-xl border border-slate-200 text-xs" />
-                                <Button onClick={() => skipMonth(l.id)} className="rounded-xl text-xs py-1 px-2">Skip</Button>
+                                <Button onClick={() => skipMonth(l.id)} className="rounded-xl text-xs py-1 px-2">{role === "Master" ? "Skip" : "Request"}</Button>
                                 <Button variant="outline" onClick={() => setReliefTarget(null)} className="rounded-xl text-xs py-1 px-2">×</Button>
                               </div>
                             : <Button variant="outline" onClick={() => setReliefTarget(l.id)} className="rounded-xl text-xs py-1 px-2">Skip Month</Button>}
                           <Button variant="outline" onClick={() => { if (window.confirm(`Settle remaining ${money(l.outstanding_balance)}?`)) earlySettle(l.id); }} className="rounded-xl text-xs py-1 px-2 text-emerald-600">Early Settle</Button>
-                          <Button variant="outline" onClick={() => clearLoan(l.id)} className="rounded-xl text-xs py-1 px-2">Clear</Button>
+                          {role === "Master" && (
+                            <Button variant="outline" onClick={() => clearLoan(l.id)} className="rounded-xl text-xs py-1 px-2">Clear</Button>
+                          )}
                         </>
                       )}
                     </div>
@@ -463,7 +538,7 @@ export default function LoanManagement({ role }) {
             <div className="space-y-3 max-h-96 overflow-y-auto">
               {historyLoan.map((l, i) => (
                 <div key={i} className="border border-slate-100 rounded-xl p-3 text-sm">
-                  <div className="flex justify-between mb-1"><span className="font-semibold">{money(l.loan_amount)}</span><Badge tone={l.status === "Active" ? "yellow" : "green"}>{l.status}</Badge></div>
+                  <div className="flex justify-between mb-1"><span className="font-semibold">{money(l.loan_amount)}</span><Badge tone={l.status === "Active" ? "yellow" : l.status === "Pending Approval" ? "blue" : l.status === "Rejected" ? "red" : "green"}>{l.status}</Badge></div>
                   <div className="text-slate-500">Monthly: {money(l.monthly_deduction)} · Start: {l.start_date}</div>
                   <div className="text-slate-500">Outstanding: {money(l.outstanding_balance)} · Reason: {l.reason || "—"}</div>
                   {(l.guarantor_1_name || l.guarantor_2_name) && (

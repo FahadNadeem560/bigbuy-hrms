@@ -6,6 +6,7 @@ import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies";
 import { money } from "../utils/format";
 import { sendOnboardingOtp } from "../services/whatsappService.js";
 import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
+import { setEmployeePaymentMethod } from "../services/employeeService.js";
 
 function cnicExpiryStatus(expiryDate) {
   if (!expiryDate) return null;
@@ -328,12 +329,33 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
     Object.fromEntries((employees || []).map(e => [e.id, e.name])),
     [employees]
   );
-  const viewOnly = role === "Branch Manager";
+  const viewOnly = role === "Branch Manager" || role === "Finance";
   const [inactivating, setInactivating] = useState(null); // employee id currently prompting for last working day
   const [lwdInput, setLwdInput] = useState("");
 
   // Confidential — same Master/GM-only gate as CashIncentives.jsx / Dashboard.
   const canSeeIncentive = ["Master", "GM"].includes(role);
+
+  // Finance Head needs to mark how each employee is actually paid (bank
+  // transfer vs cash) without getting broader edit rights — everything
+  // else on this screen stays read-only for Finance (viewOnly above).
+  const canEditPaymentMethod = ["Finance", "Master"].includes(role);
+  const [pmOverride, setPmOverride] = useState({});
+  const [pmSaving, setPmSaving] = useState(null);
+  const [pmError, setPmError] = useState("");
+  async function handlePaymentMethodChange(id, value) {
+    const prev = pmOverride[id];
+    setPmOverride(m => ({ ...m, [id]: value }));
+    setPmSaving(id); setPmError("");
+    try {
+      await setEmployeePaymentMethod(id, value);
+    } catch (e) {
+      setPmOverride(m => ({ ...m, [id]: prev }));
+      setPmError(`Failed to update payment method for ${id}: ${e.message}`);
+    } finally {
+      setPmSaving(null);
+    }
+  }
   const [incentiveMap, setIncentiveMap] = useState({});
   useEffect(() => {
     if (!canSeeIncentive) { setIncentiveMap({}); return; }
@@ -393,11 +415,12 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
       {!viewOnly && showEmployeeForm && <EmployeeAdd employee={newEmployee} setEmployee={setNewEmployee} save={saveEmployee} close={() => setShowEmployeeForm(false)} role={role} nextId={newEmployee._nextId} />}
       {!viewOnly && editingEmployee && <EmployeeEdit employee={editingEmployee} setEmployee={setEditingEmployee} save={updateEmployee} close={() => setEditingEmployee(null)} role={role} />}
       {loadingEmployees && <p className="text-slate-400 text-sm mb-2 print:hidden">Loading employees...</p>}
+      {pmError && <p className="text-red-600 text-xs mb-2 print:hidden">{pmError}</p>}
 
       <Table
         headers={viewOnly
-          ? ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "CNIC Expiry", "Status"]
-          : ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "Salary", ...(canSeeIncentive ? ["Incentive"] : []), "CNIC Expiry", "Status", "Action"]}
+          ? ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "Payment Method", "CNIC Expiry", "Status"]
+          : ["ID", "Name", "Level", "Supervisor", "Branch", "Department", "Joining Date", "Salary", ...(canSeeIncentive ? ["Incentive"] : []), "Payment Method", "CNIC Expiry", "Status", "Action"]}
         rows={filteredEmployees}
         renderRow={e => {
           const cnicStatus = cnicExpiryStatus(e.cnicExpiryDate);
@@ -424,6 +447,20 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
                   {incentiveMap[e.id] ? money(incentiveMap[e.id]) : <span className="text-slate-300">—</span>}
                 </td>
               )}
+              <td className="px-4 py-3">
+                {canEditPaymentMethod ? (
+                  <select value={pmOverride[e.id] ?? e.paymentMethod ?? "Bank"} disabled={pmSaving === e.id}
+                    onChange={ev => handlePaymentMethodChange(e.id, ev.target.value)}
+                    className="px-2 py-1 rounded-lg border border-slate-200 text-xs bg-white print:hidden">
+                    <option value="Bank">Bank</option>
+                    <option value="Cash">Cash</option>
+                  </select>
+                ) : (
+                  <Badge tone={(pmOverride[e.id] ?? e.paymentMethod) === "Cash" ? "yellow" : "green"}>
+                    {pmOverride[e.id] ?? e.paymentMethod ?? "Bank"}
+                  </Badge>
+                )}
+              </td>
               <td className="px-4 py-3">
                 {e.cnicExpiryDate
                   ? <span className={`text-xs px-2 py-1 rounded-xl font-medium ${cnicStatus === "expired" ? "bg-red-100 text-red-700" : cnicStatus === "soon" ? "bg-orange-100 text-orange-700" : "text-slate-500"}`}>

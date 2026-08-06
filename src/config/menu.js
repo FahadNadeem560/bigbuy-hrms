@@ -1,7 +1,7 @@
 export const MENU_ITEMS = [
   // Core HR
   { key: "dashboard",   label: "Dashboard",           icon: "🏢", section: "Core HR",          roles: ["Master","HR","Finance","GM","Branch Manager","Audit"] },
-  { key: "employees",   label: "Employees",            icon: "👥", section: "Core HR",          roles: ["Master","HR","GM","Branch Manager"] },
+  { key: "employees",   label: "Employees",            icon: "👥", section: "Core HR",          roles: ["Master","HR","GM","Branch Manager","Finance"] },
   { key: "departments", label: "Departments",          icon: "🏗️", section: "Core HR",          roles: ["Master","HR","GM"] },
 
   // Attendance — Finance excluded (per spec)

@@ -125,6 +125,18 @@ export default function BigBuyHRMS({ profile }) {
       ? MENU_ITEMS.filter(item => menuOverrides.includes(item.key))
       : MENU_ITEMS.filter(item => item.roles.includes(role))
   ), [role, menuOverrides]);
+  // A stale ?tab= URL (e.g. left over from a different account in the same
+  // browser tab) can point at a menu item this role/override no longer
+  // grants — that screen would render with no sidebar entry to get back to
+  // it. Only correct known menu keys; leave non-menu routes (e.g. "profile")
+  // alone since they're intentionally reachable without a sidebar entry.
+  useEffect(() => {
+    const allMenuKeys = MENU_ITEMS.map(item => item.key);
+    const allowedKeys = visibleMenu.map(item => item.key);
+    if (allMenuKeys.includes(active) && !allowedKeys.includes(active)) {
+      setActive(allowedKeys.includes("dashboard") ? "dashboard" : (allowedKeys[0] || "dashboard"));
+    }
+  }, [visibleMenu]);
   const branchRestriction = getBranchFilter(profile);
   const effectiveBranch = branchRestriction || branch;
   const filteredEmployees = useMemo(() => employees.filter(emp =>

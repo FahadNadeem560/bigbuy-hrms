@@ -16,28 +16,30 @@ const TABS = [
 export default function EmployeesHub({ role, ...props }) {
   const [tab, setTab] = useState("directory");
 
-  // Finance cannot see recruitment or documents; Branch Manager only sees the directory (view-only)
+  // Finance and Branch Manager only see the directory (view-only for both)
   const visibleTabs = TABS.filter(([k]) => {
-    if (role === "Finance") return false; // Finance has no access to Employees hub
+    if (role === "Finance") return k === "directory";
     if (role === "Branch Manager") return k === "directory";
     return true;
   });
+  const visibleKeys = visibleTabs.map(([k]) => k);
+  const effectiveTab = visibleKeys.includes(tab) ? tab : visibleKeys[0];
 
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-5">
         {visibleTabs.map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition ${effectiveTab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
             {l}
           </button>
         ))}
       </div>
-      {tab === "directory"   && <Employees {...props} role={role} />}
-      {tab === "recruitment" && role !== "Finance" && <Recruitment />}
-      {tab === "documents"   && role !== "Finance" && <DocumentManagement />}
-      {tab === "credentials" && <StaffCredentials />}
-      {tab === "permissions" && <Permissions {...props} role={role} />}
+      {effectiveTab === "directory"   && <Employees {...props} role={role} />}
+      {effectiveTab === "recruitment" && <Recruitment />}
+      {effectiveTab === "documents"   && <DocumentManagement />}
+      {effectiveTab === "credentials" && <StaffCredentials />}
+      {effectiveTab === "permissions" && <Permissions {...props} role={role} />}
     </div>
   );
 }

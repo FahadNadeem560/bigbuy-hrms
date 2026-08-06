@@ -5,6 +5,7 @@ import { money } from "../utils/format.js";
 import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } from "../services/leaveApprovalService.js";
 import { approvePaymentStatusRequest, rejectPaymentStatusRequest, PAYMENT_STATUS_LABELS, requiresMasterOnly } from "../services/payrollControlService.js";
 import { approveIncrement as approveIncrementSvc, rejectIncrement as rejectIncrementSvc } from "../services/incrementService.js";
+import { approveLoanRequest, rejectLoanRequest, approveLoanChange, rejectLoanChange } from "../services/loanService.js";
 
 // Hierarchy-routed requests carry dynamic stage names ("Pending Floor
 // Manager Approval", "Pending Owner Approval", ...) so this can't be a fixed
@@ -56,6 +57,7 @@ const TABS = [
   ["adjustments",  "One-Time Adjustments"],
   ["settlements",  "Final Settlements"],
   ["increments",   "Salary Increments"],
+  ["loans",        "Loan Requests"],
   ["payment-status", "Payment Status"],
 ];
 
@@ -93,6 +95,14 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   // Increments
   const [increments, setIncrements] = useState([]);
 
+  // Loan requests
+  const [loanRequests, setLoanRequests] = useState([]);
+  const [processingLoanId, setProcessingLoanId] = useState(null);
+
+  // Loan change requests (reschedule / skip month)
+  const [loanChangeRequests, setLoanChangeRequests] = useState([]);
+  const [processingLoanChangeId, setProcessingLoanChangeId] = useState(null);
+
   // Payment status change requests
   const [paymentRequests, setPaymentRequests] = useState([]);
 
@@ -110,6 +120,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         { data: adj },
         { data: sett },
         { data: inc },
+        { data: loanReqs },
+        { data: loanChangeReqs },
         { data: payReqs },
       ] = await Promise.all([
         supabase.from("leave_requests").select("*").like("status", "Pending%").order("created_at", { ascending: false }).limit(200),
@@ -119,6 +131,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         supabase.from("one_time_adjustments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
         supabase.from("settlement_requests").select("*").neq("status","Completed").order("created_at", { ascending: false }).limit(200),
         supabase.from("salary_increments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
+        supabase.from("loans").select("*").eq("status","Pending Approval").order("created_at", { ascending: false }).limit(200),
+        supabase.from("loan_changes").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
         supabase.from("payment_status_requests").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
       ]);
       setLeaveReqs(lv || []);
@@ -128,6 +142,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       setAdjustments(adj || []);
       setSettlements(sett || []);
       setIncrements(inc || []);
+      setLoanRequests(loanReqs || []);
+      setLoanChangeRequests(loanChangeReqs || []);
       setPaymentRequests(payReqs || []);
     } catch (e) {
       setErr(`Load error: ${e.message}`);
@@ -275,6 +291,52 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
     finally { setProcessingIncrementId(null); }
   }
 
+  // ── Loan requests ──
+  async function approveLoan(id) {
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can approve loan requests.");
+    if (processingLoanId) return;
+    setProcessingLoanId(id);
+    try {
+      await approveLoanRequest(id, actorName || role);
+      setMsg("Loan request approved."); loadAll();
+    } catch (e) { setErr(e.message); }
+    finally { setProcessingLoanId(null); }
+  }
+
+  async function rejectLoan(id, reason) {
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can reject loan requests.");
+    if (processingLoanId) return;
+    setProcessingLoanId(id);
+    try {
+      await rejectLoanRequest(id, actorName || role, reason);
+      setMsg("Loan request rejected."); loadAll();
+    } catch (e) { setErr(e.message); }
+    finally { setProcessingLoanId(null); }
+  }
+
+  // ── Loan change requests (reschedule / skip month) ──
+  async function approveLoanChangeReq(id) {
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can approve loan change requests.");
+    if (processingLoanChangeId) return;
+    setProcessingLoanChangeId(id);
+    try {
+      await approveLoanChange(id, actorName || role);
+      setMsg("Loan change approved."); loadAll();
+    } catch (e) { setErr(e.message); }
+    finally { setProcessingLoanChangeId(null); }
+  }
+
+  async function rejectLoanChangeReq(id, reason) {
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can reject loan change requests.");
+    if (processingLoanChangeId) return;
+    setProcessingLoanChangeId(id);
+    try {
+      await rejectLoanChange(id, actorName || role, reason);
+      setMsg("Loan change rejected."); loadAll();
+    } catch (e) { setErr(e.message); }
+    finally { setProcessingLoanChangeId(null); }
+  }
+
   // ── Payment status change requests ──
   async function approvePaymentReq(id) {
     const req = paymentRequests.find(r => r.id === id);
@@ -314,6 +376,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
             {k === "adjustments" && adjustments.length > 0   && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{adjustments.length}</span>}
             {k === "settlements" && settlements.length > 0   && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{settlements.length}</span>}
             {k === "increments"  && increments.length > 0    && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{increments.length}</span>}
+            {k === "loans"       && (loanRequests.length + loanChangeRequests.length) > 0  && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{loanRequests.length + loanChangeRequests.length}</span>}
             {k === "payment-status" && paymentRequests.length > 0 && <span className="ml-1.5 bg-red-500 text-white text-[10px] rounded-full px-1.5">{paymentRequests.length}</span>}
           </button>
         ))}
@@ -518,6 +581,83 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveIncrement} onReject={rejectIncrement}
                         disabled={!["Master", "GM"].includes(role) || !!processingIncrementId} />
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── LOAN REQUESTS ── */}
+      {tab === "loans" && !loading && (
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Requests</h2><p className="text-xs text-slate-400">{loanRequests.length} pending</p></div>
+          <table className="w-full min-w-[1000px] text-sm">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>{["Employee","Loan Amount","Monthly Ded.","Months","Start Date","Guarantors","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loanRequests.length === 0
+                ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No pending loan requests.</td></tr>
+                : loanRequests.map(l => (
+                  <tr key={l.id}>
+                    <td className="px-4 py-3 font-medium">{l.employee_name || l.employee_code}</td>
+                    <td className="px-4 py-3 font-semibold">{money(l.loan_amount)}</td>
+                    <td className="px-4 py-3">{money(l.monthly_deduction)}</td>
+                    <td className="px-4 py-3">{l.repayment_months || "—"}</td>
+                    <td className="px-4 py-3">{l.start_date}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">
+                      {l.guarantor_1_name ? <div>{l.guarantor_1_code} — {l.guarantor_1_name}</div> : null}
+                      {l.guarantor_2_name ? <div>{l.guarantor_2_code} — {l.guarantor_2_name}</div> : null}
+                      {!l.guarantor_1_name && !l.guarantor_2_name && "—"}
+                    </td>
+                    <td className="px-4 py-3 max-w-[160px] truncate">{l.reason || "—"}</td>
+                    <td className="px-4 py-3 text-slate-500">{l.submitted_by || "HR"}</td>
+                    <td className="px-4 py-3 text-slate-400 text-xs">{l.created_at?.slice(0, 10) || "—"}</td>
+                    <td className="px-4 py-3">
+                      <ApproveRejectBtns
+                        id={l.id} rejectId={rejectId} setRejectId={setRejectId}
+                        rejectNote={rejectNote} setRejectNote={setRejectNote}
+                        onApprove={approveLoan} onReject={rejectLoan}
+                        disabled={!["Master", "GM"].includes(role) || !!processingLoanId} />
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── LOAN CHANGE REQUESTS (RESCHEDULE / SKIP MONTH) ── */}
+      {tab === "loans" && !loading && (
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mt-4">
+          <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Change Requests</h2><p className="text-xs text-slate-400">{loanChangeRequests.length} pending — reschedule or skip-month requests on existing loans</p></div>
+          <table className="w-full min-w-[900px] text-sm">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>{["Employee","Type","Details","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loanChangeRequests.length === 0
+                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No pending loan change requests.</td></tr>
+                : loanChangeRequests.map(c => (
+                  <tr key={c.id}>
+                    <td className="px-4 py-3 font-medium">{empMap[c.employee_code]?.full_name || c.employee_code}</td>
+                    <td className="px-4 py-3"><Badge tone="blue">{c.change_type === "reschedule" ? "Reschedule" : "Skip Month"}</Badge></td>
+                    <td className="px-4 py-3 text-xs text-slate-600">
+                      {c.change_type === "reschedule"
+                        ? <>{money(c.old_monthly)}/mo → {money(c.new_monthly)}/mo</>
+                        : <>Skip deduction for {c.effective_month || "—"}</>}
+                    </td>
+                    <td className="px-4 py-3 max-w-[160px] truncate">{c.reason || "—"}</td>
+                    <td className="px-4 py-3 text-slate-500">{c.submitted_by || "HR"}</td>
+                    <td className="px-4 py-3 text-slate-400 text-xs">{c.created_at?.slice(0, 10) || "—"}</td>
+                    <td className="px-4 py-3">
+                      <ApproveRejectBtns
+                        id={c.id} rejectId={rejectId} setRejectId={setRejectId}
+                        rejectNote={rejectNote} setRejectNote={setRejectNote}
+                        onApprove={approveLoanChangeReq} onReject={rejectLoanChangeReq}
+                        disabled={!["Master", "GM"].includes(role) || !!processingLoanChangeId} />
                     </td>
                   </tr>
                 ))}
