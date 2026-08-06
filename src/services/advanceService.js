@@ -59,7 +59,7 @@ export async function requestAdvance({ employee, requestedAmount, advanceMonth, 
   });
 }
 
-export async function approveAdvance({ id, requestedAmount, approvedAmount, approvedBy, employeeName }) {
+export async function approveAdvance({ id, requestedAmount, approvedAmount, approvedBy, employeeName, actorRole }) {
   const reqAmt = Number(requestedAmount);
   const appAmt = Number(approvedAmount);
   if (!(appAmt > 0)) throw new Error("Approved amount must be greater than zero.");
@@ -74,17 +74,31 @@ export async function approveAdvance({ id, requestedAmount, approvedAmount, appr
     action: "advance_approved", entity: "advances", entity_id: id, performed_by: approvedBy,
     details: `Advance of ${money(appAmt)} approved for ${employeeName}`, created_at: new Date().toISOString(),
   }).then(() => {}, () => {});
+
+  if (actorRole !== "Finance") {
+    await notify({
+      recipientRole: "Finance", type: "advance_decision", link: "loans",
+      title: "Advance Approved", message: `${approvedBy} approved an advance of ${money(appAmt)} for ${employeeName}.`,
+    });
+  }
 }
 
-export async function rejectAdvance({ id, reason, actedBy }) {
+export async function rejectAdvance({ id, reason, actedBy, actorRole, employeeName }) {
   if (!reason || !reason.trim()) throw new Error("A reason is required to reject an advance.");
   const { error } = await supabase.from("advances").update({
     status: "Rejected", rejection_reason: reason, approved_by: actedBy,
   }).eq("id", id);
   if (error) throw error;
+
+  if (actorRole !== "Finance") {
+    await notify({
+      recipientRole: "Finance", type: "advance_decision", link: "loans",
+      title: "Advance Rejected", message: `${actedBy} rejected the advance request for ${employeeName || id}. Reason: ${reason}`,
+    });
+  }
 }
 
-export async function issueAdvance({ id, approvedAmount, issuedAmount, issuedBy, employeeName }) {
+export async function issueAdvance({ id, approvedAmount, issuedAmount, issuedBy, employeeName, actorRole }) {
   const appAmt = Number(approvedAmount);
   const issAmt = Number(issuedAmount);
   if (!(issAmt > 0)) throw new Error("Issued amount must be greater than zero.");
@@ -105,6 +119,12 @@ export async function issueAdvance({ id, approvedAmount, issuedAmount, issuedBy,
     title: "Advance Issued",
     message: `Advance issued to ${employeeName} — ${money(issAmt)}.`,
   });
+  if (actorRole !== "Finance") {
+    await notify({
+      recipientRole: "Finance", type: "advance_decision", link: "loans",
+      title: "Advance Issued", message: `${issuedBy} issued an advance of ${money(issAmt)} to ${employeeName}.`,
+    });
+  }
 }
 
 // Called from payroll generation for the given month — deducts every Issued

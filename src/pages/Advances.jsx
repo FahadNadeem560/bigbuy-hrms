@@ -85,7 +85,7 @@ function issuedIcon(a) {
 }
 
 // ─── Row actions shared by the "All Advances" and "Pending Approval" tables ───
-function RowActions({ a, canApprove, actorName, onChanged, setErr, setMsg }) {
+function RowActions({ a, canApprove, actorName, role, onChanged, setErr, setMsg }) {
   const [mode, setMode] = useState(null); // "approve" | "issue" | "reject"
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
@@ -99,7 +99,7 @@ function RowActions({ a, canApprove, actorName, onChanged, setErr, setMsg }) {
   async function doApprove() {
     setBusy(true); setErr(""); setMsg("");
     try {
-      await approveAdvance({ id: a.id, requestedAmount: a.requested_amount, approvedAmount: amount, approvedBy: actorName, employeeName: a.employee_name });
+      await approveAdvance({ id: a.id, requestedAmount: a.requested_amount, approvedAmount: amount, approvedBy: actorName, employeeName: a.employee_name, actorRole: role });
       setMsg(`Advance approved for ${a.employee_name}.`); setMode(null); onChanged();
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
@@ -107,7 +107,7 @@ function RowActions({ a, canApprove, actorName, onChanged, setErr, setMsg }) {
   async function doIssue() {
     setBusy(true); setErr(""); setMsg("");
     try {
-      await issueAdvance({ id: a.id, approvedAmount: a.approved_amount, issuedAmount: amount, issuedBy: actorName, employeeName: a.employee_name });
+      await issueAdvance({ id: a.id, approvedAmount: a.approved_amount, issuedAmount: amount, issuedBy: actorName, employeeName: a.employee_name, actorRole: role });
       setMsg(`Advance issued to ${a.employee_name}.`); setMode(null); onChanged();
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
@@ -115,7 +115,7 @@ function RowActions({ a, canApprove, actorName, onChanged, setErr, setMsg }) {
   async function doReject() {
     setBusy(true); setErr(""); setMsg("");
     try {
-      await rejectAdvance({ id: a.id, reason, actedBy: actorName });
+      await rejectAdvance({ id: a.id, reason, actedBy: actorName, actorRole: role, employeeName: a.employee_name });
       setMsg("Advance request rejected."); setMode(null); onChanged();
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
@@ -298,7 +298,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
                     <td className="px-4 py-3"><Badge tone={statusTone(a.status)}>{a.status}</Badge></td>
                     <td className="px-4 py-3 text-slate-500">{a.advance_month}</td>
                     <td className="px-4 py-3">
-                      <RowActions a={a} canApprove={canApprove} actorName={actorName} onChanged={reload} setErr={setErr} setMsg={setMsg} />
+                      <RowActions a={a} canApprove={canApprove} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
                     </td>
                   </tr>
                 );
@@ -311,7 +311,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
 }
 
 // ─── Tab 2: Pending Approval (Finance) ────────────────────────────────────
-function PendingApprovalTab({ advances, actorName, reload, setMsg, setErr }) {
+function PendingApprovalTab({ advances, actorName, role, reload, setMsg, setErr }) {
   const pending = useMemo(() => advances.filter(a => a.status === "Pending"), [advances]);
   return (
     <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
@@ -334,7 +334,7 @@ function PendingApprovalTab({ advances, actorName, reload, setMsg, setErr }) {
                 <td className="px-4 py-3 text-slate-500">{a.requested_by || "—"}</td>
                 <td className="px-4 py-3 max-w-[160px] truncate text-slate-500">{a.notes || "—"}</td>
                 <td className="px-4 py-3">
-                  <RowActions a={a} canApprove={true} actorName={actorName} onChanged={reload} setErr={setErr} setMsg={setMsg} />
+                  <RowActions a={a} canApprove={true} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
                 </td>
               </tr>
             ))}
@@ -597,7 +597,7 @@ export default function Advances({ role, actorName }) {
           canRequest={canRequest} canApprove={canApprove} reload={load} setMsg={setMsg} setErr={setErr} />
       )}
       {tab === "pending" && canApprove && (
-        <PendingApprovalTab advances={advances} actorName={actorName || role} reload={load} setMsg={setMsg} setErr={setErr} />
+        <PendingApprovalTab advances={advances} actorName={actorName || role} role={role} reload={load} setMsg={setMsg} setErr={setErr} />
       )}
       {tab === "import" && canImport && (
         <ImportHistoricalTab employees={employees} reload={load} setMsg={setMsg} setErr={setErr} />

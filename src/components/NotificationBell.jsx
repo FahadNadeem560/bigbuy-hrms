@@ -15,6 +15,7 @@ const TYPE_ICONS = {
   loan_decision: "💳",
   advance_requested: "💵",
   advance_issued: "💵",
+  advance_decision: "💵",
   general: "🔔",
 };
 

@@ -3021,3 +3021,85 @@ $function$;
 GRANT EXECUTE ON FUNCTION public.mark_payroll_paid(TEXT, TEXT, TEXT) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.mark_payroll_paid(TEXT, TEXT, TEXT) FROM anon, PUBLIC;
 -- =============================================================
+
+-- =============================================================
+-- Incident (2026-08-06): HR cleared Muhammad Javed's loan (employee_code
+-- 935) minutes after this session's "Clear -> Master only" fix was
+-- committed. Root cause was two-layered:
+--
+-- 1) The commit restricting the Clear button/clearLoan() to Master was
+--    never pushed to origin, so the deployed frontend still ran the old
+--    code (Clear visible to HR, direct client-side update). Pushed now.
+--
+-- 2) Even with the frontend fixed, `loans_manage_authorized` below still
+--    granted HR the SAME UPDATE/DELETE rights as Master at the database
+--    layer -- restricting the button and adding a Master-only clear_loan()
+--    RPC alongside an unchanged permissive policy did nothing to stop HR
+--    from calling `supabase.from("loans").update(...)` directly (which is
+--    exactly what the old deployed bundle did, and what anyone could still
+--    do by hand regardless of which frontend is live). The loan_changes
+--    row this produced (change_type='settlement', old_balance/approved_by
+--    both null) confirms it went through that direct path, not clear_loan().
+--
+--    This is the actual fix: HR loses UPDATE/DELETE on `loans` entirely at
+--    the RLS layer, not just in the UI. HR's only remaining legitimate
+--    paths are INSERT (new loan applications / bulk import, both already
+--    Pending Approval for HR) and INSERT into loan_changes (reschedule/
+--    skip-month proposals) -- neither needs UPDATE/DELETE on loans itself
+--    any more now that Master applies its own changes directly and HR's
+--    requests all route through approval.
+--
+--    Early Settle sets the exact same columns as Clear (status='Cleared',
+--    outstanding_balance=0) -- flagged last session as an open loophole,
+--    now confirmed live by this incident. Locked down the same way via a
+--    new early_settle_loan() RPC; LoanManagement.jsx's Early Settle button
+--    is now Master-only too, matching Clear.
+-- =============================================================
+DROP POLICY IF EXISTS loans_manage_authorized ON public.loans;
+
+CREATE POLICY loans_insert_authorized ON public.loans FOR INSERT TO authenticated
+  WITH CHECK ((SELECT private.current_hrms_role()) = ANY (ARRAY['Master','HR']));
+
+CREATE POLICY loans_master_update_authorized ON public.loans FOR UPDATE TO authenticated
+  USING ((SELECT private.current_hrms_role()) = 'Master')
+  WITH CHECK ((SELECT private.current_hrms_role()) = 'Master');
+
+CREATE POLICY loans_master_delete_authorized ON public.loans FOR DELETE TO authenticated
+  USING ((SELECT private.current_hrms_role()) = 'Master');
+
+CREATE OR REPLACE FUNCTION public.early_settle_loan(p_loan_id UUID, p_actor_name TEXT)
+RETURNS public.loans
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+DECLARE ln public.loans%ROWTYPE;
+DECLARE v_old_balance NUMERIC;
+BEGIN
+  IF (SELECT private.current_hrms_role()) <> 'Master' THEN
+    RAISE EXCEPTION 'Only Master can early-settle a loan';
+  END IF;
+  SELECT * INTO ln FROM public.loans WHERE id = p_loan_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Loan not found';
+  END IF;
+  v_old_balance := ln.outstanding_balance;
+  UPDATE public.loans SET status = 'Cleared', outstanding_balance = 0 WHERE id = p_loan_id RETURNING * INTO ln;
+  INSERT INTO public.loan_changes (loan_id, employee_code, change_type, old_balance, new_balance, reason, status, submitted_by, approved_by, approved_at)
+  VALUES (p_loan_id, ln.employee_code, 'early_settlement', v_old_balance, 0, 'Early settlement — full balance paid', 'Approved', p_actor_name, p_actor_name, NOW());
+  RETURN ln;
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.early_settle_loan(UUID, TEXT) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.early_settle_loan(UUID, TEXT) FROM anon, PUBLIC;
+
+-- Restore Muhammad Javed's loan: created 2026-08-06 14:55, cleared 16:41 the
+-- same day via the unpatched path above -- under 2 hours old, no payroll
+-- cycle could have run against it, so the pre-clear balance is unambiguously
+-- the full loan_amount. Logged as a correction entry for the audit trail.
+UPDATE public.loans SET status = 'Active', outstanding_balance = loan_amount
+WHERE id = '944dc131-a36f-42e1-9edc-af5c36b9020d';
+
+INSERT INTO public.loan_changes (loan_id, employee_code, change_type, old_balance, new_balance, reason, status, submitted_by, approved_by, approved_at)
+VALUES ('944dc131-a36f-42e1-9edc-af5c36b9020d', '935', 'correction', 0, 30000,
+  'Reverted unauthorized HR clear (loans_manage_authorized gap, fixed above) -- restored to pre-clear balance',
+  'Approved', 'System', 'Master', NOW());
+-- =============================================================

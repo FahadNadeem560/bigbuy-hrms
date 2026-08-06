@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { notifyLoanProposed, proposeLoanChange, applyLoanChangeAsMaster, clearLoanAsMaster } from "../services/loanService.js";
+import { notifyLoanProposed, notifyLoanCreatedByMaster, proposeLoanChange, applyLoanChangeAsMaster, clearLoanAsMaster, earlySettleLoanAsMaster } from "../services/loanService.js";
 
 function nextMonthStr() {
   const d = new Date();
@@ -122,6 +122,10 @@ export default function LoanManagement({ role }) {
       });
       setMsg("Loan request submitted — awaiting Master/GM approval.");
     } else {
+      await notifyLoanCreatedByMaster({
+        employeeName: form.employee.full_name, loanAmount: Number(form.loan_amount),
+        monthlyDeduction: Number(form.monthly_deduction),
+      });
       setMsg("Loan application created successfully.");
     }
     setForm(BLANK); setShowForm(false); loadAll();
@@ -235,13 +239,16 @@ export default function LoanManagement({ role }) {
     } catch (e) { setErr(e.message); }
   }
 
+  // Master-only, same as Clear — Early Settle sets the exact same columns
+  // (status='Cleared', outstanding_balance=0), so restricting one without
+  // the other leaves an identical loophole open.
   async function earlySettle(id) {
-    const loan = loans.find(l => l.id === id);
-    const { error } = await supabase.from("loans").update({ status: "Cleared", outstanding_balance: 0 }).eq("id", id);
-    if (!error) {
-      await supabase.from("loan_changes").insert({ loan_id: id, employee_code: loan?.employee_code, change_type: "early_settlement", old_balance: loan?.outstanding_balance, new_balance: 0, reason: "Early settlement — full balance paid", created_at: new Date().toISOString() });
+    if (role !== "Master") return setErr("Only Master can early-settle a loan.");
+    try {
+      await earlySettleLoanAsMaster(id, role);
+      const loan = loans.find(l => l.id === id);
       setMsg(`Early settlement: ${money(loan?.outstanding_balance)} settled.`); loadAll();
-    } else setErr(error.message);
+    } catch (e) { setErr(e.message); }
   }
 
   // HR can only propose (Pending, no change to loans.monthly_deduction yet);
@@ -255,7 +262,7 @@ export default function LoanManagement({ role }) {
       if (role === "Master") {
         const newMonths = Math.ceil(Number(loan.outstanding_balance || 0) / Number(rescheduleAmount));
         await applyLoanChangeAsMaster({
-          loanId: id, employeeCode: loan.employee_code, changeType: "reschedule",
+          loanId: id, employeeCode: loan.employee_code, employeeName: loan.employee_name, changeType: "reschedule",
           oldMonthly: loan.monthly_deduction, newMonthly: Number(rescheduleAmount), newRepaymentMonths: newMonths,
           reason: `Rescheduled effective ${rescheduleDate}`, actorName: role,
         });
@@ -280,7 +287,7 @@ export default function LoanManagement({ role }) {
     try {
       if (role === "Master") {
         await applyLoanChangeAsMaster({
-          loanId: id, employeeCode: loan.employee_code, changeType: "relief",
+          loanId: id, employeeCode: loan.employee_code, employeeName: loan.employee_name, changeType: "relief",
           effectiveMonth: reliefMonth, reason: reliefReason, actorName: role,
         });
         setMsg(`No deduction recorded for ${reliefMonth}.`);
@@ -513,9 +520,11 @@ export default function LoanManagement({ role }) {
                                 <Button variant="outline" onClick={() => setReliefTarget(null)} className="rounded-xl text-xs py-1 px-2">×</Button>
                               </div>
                             : <Button variant="outline" onClick={() => setReliefTarget(l.id)} className="rounded-xl text-xs py-1 px-2">Skip Month</Button>}
-                          <Button variant="outline" onClick={() => { if (window.confirm(`Settle remaining ${money(l.outstanding_balance)}?`)) earlySettle(l.id); }} className="rounded-xl text-xs py-1 px-2 text-emerald-600">Early Settle</Button>
                           {role === "Master" && (
-                            <Button variant="outline" onClick={() => clearLoan(l.id)} className="rounded-xl text-xs py-1 px-2">Clear</Button>
+                            <>
+                              <Button variant="outline" onClick={() => { if (window.confirm(`Settle remaining ${money(l.outstanding_balance)}?`)) earlySettle(l.id); }} className="rounded-xl text-xs py-1 px-2 text-emerald-600">Early Settle</Button>
+                              <Button variant="outline" onClick={() => clearLoan(l.id)} className="rounded-xl text-xs py-1 px-2">Clear</Button>
+                            </>
                           )}
                         </>
                       )}
