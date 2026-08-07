@@ -736,7 +736,13 @@ export default function PayrollAutomation({ role, actorName }) {
       if (Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
       attByEmp[c].otHours += Number(a.overtime_hours ?? a.ot_hours ?? 0);
       attByEmp[c].workedHours += Number(a.worked_hours || 0);
-      attByEmp[c].requiredHours += Number(a.required_hours || 0);
+      // A day overridden to Weekly Off owed nothing — the DB's required_hours
+      // still reflects the pre-override "Absent" classification (the roster
+      // this column is computed from isn't kept current; that's the whole
+      // reason the override exists), so counting it here would inflate the
+      // Required Hours total and any shortfall/variance derived from it for
+      // an employee's legitimate day off. Matches Timesheet's rowRequiredHours().
+      if (!isOverriddenOff) attByEmp[c].requiredHours += Number(a.required_hours || 0);
     });
 
     // Aggregate fines/shortages/advances per employee
