@@ -184,6 +184,15 @@ export default function FinalSettlement({ role }) {
       .eq("employee_code", selEmp.employee_code);
 
     setMsg(`Settlement processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}`);
+    setSelEmp(null);
+    setResignDate("");
+    setLastDay("");
+    setResignReason("");
+    setLoanBalance(0);
+    setAttendanceData([]);
+    setOverrideMode(false);
+    setOverrideReason("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   return (
