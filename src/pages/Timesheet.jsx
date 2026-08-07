@@ -383,30 +383,6 @@ export default function Timesheet({ branchFilter, role }) {
     return policy ? !!policy.overtimeEligible : false;
   }, [selectedEmp]);
 
-  const lateSummary = useMemo(() => {
-    const lateRows = attendance.filter((r) => Number(r.late_minutes || 0) > 0);
-    const totalLateCount = lateRows.length;
-    const totalLateMins = lateRows.reduce((s, r) => s + Number(r.late_minutes || 0), 0);
-    const deductibleLates = Math.max(0, totalLateCount - LATE_WARNING_COUNT);
-    return { totalLateCount, totalLateMins, deductibleLates };
-  }, [attendance]);
-
-  const shortSummary = useMemo(() => {
-    const totalShort = fmt2(attendance.reduce((s, r) => s + Number(r.short_hours || r.short_hour || 0), 0));
-    const deductibleShort = fmt2(Math.max(0, totalShort - SHORT_TOLERANCE));
-    return { totalShort, deductibleShort };
-  }, [attendance]);
-
-  const otSummary = useMemo(() => {
-    const totalOT = fmt2(attendance.reduce((s, r) => s + Number(r.ot_hours || r.overtime_hours || 0), 0));
-    const payableOT = isOtEligible ? fmt2(Math.max(0, totalOT - OT_TOLERANCE)) : 0;
-    return { totalOT, payableOT };
-  }, [attendance, isOtEligible]);
-
-  const totalWorkedHours = useMemo(() => {
-    return fmt2(attendance.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
-  }, [attendance]);
-
   const ledger = useMemo(() => {
     if (!selectedEmp || !fromDate || !toDate) return [];
     const byDate = {};
@@ -435,11 +411,61 @@ export default function Timesheet({ branchFilter, role }) {
     // "Absent" means the same thing, and costs the same deduction, everywhere).
     const overrideDates = getWeeklyOffOverrideKeys(base);
     base.forEach((row) => {
-      if (overrideDates.has(row.work_date)) row.attendance_status = "Weekly Off";
+      if (overrideDates.has(row.work_date)) {
+        // The DB row's short_hours/late/OT were computed for "Absent"
+        // (short by the full required hours) — once the day reads as a
+        // legitimate Weekly Off instead, those figures are stale and would
+        // show e.g. "10.5 short" against a day nothing was owed for.
+        row.attendance_status = "Weekly Off";
+        row.short_hours = 0;
+        row.late_minutes = 0;
+        row.ot_hours = 0;
+        row.overtime_hours = 0;
+      }
     });
 
     return base;
   }, [selectedEmp, attendance, roster, fromDate, toDate]);
+
+  const STATUS_ORDER = ["Present", "Late", "Half Day", "Short Hours", "Early Out", "Absent", "Weekly Off", "Gazetted Holiday", "Leave"];
+  const statusCounts = useMemo(() => {
+    const counts = {};
+    ledger.forEach((row) => {
+      const status = row.attendance_status || row.status || "Pending";
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    const ordered = STATUS_ORDER.filter((s) => counts[s] != null).map((s) => ({ status: s, count: counts[s] }));
+    const extra = Object.keys(counts).filter((s) => !STATUS_ORDER.includes(s)).sort().map((s) => ({ status: s, count: counts[s] }));
+    return [...ordered, ...extra];
+  }, [ledger]);
+
+  // Derived from `ledger`, not raw `attendance` — a Weekly Off day's
+  // short/late/OT were zeroed out above for display, and these totals need
+  // to agree with what the ledger rows actually show, not the pre-override
+  // DB values.
+  const lateSummary = useMemo(() => {
+    const lateRows = ledger.filter((r) => Number(r.late_minutes || 0) > 0);
+    const totalLateCount = lateRows.length;
+    const totalLateMins = lateRows.reduce((s, r) => s + Number(r.late_minutes || 0), 0);
+    const deductibleLates = Math.max(0, totalLateCount - LATE_WARNING_COUNT);
+    return { totalLateCount, totalLateMins, deductibleLates };
+  }, [ledger]);
+
+  const shortSummary = useMemo(() => {
+    const totalShort = fmt2(ledger.reduce((s, r) => s + Number(r.short_hours || r.short_hour || 0), 0));
+    const deductibleShort = fmt2(Math.max(0, totalShort - SHORT_TOLERANCE));
+    return { totalShort, deductibleShort };
+  }, [ledger]);
+
+  const otSummary = useMemo(() => {
+    const totalOT = fmt2(ledger.reduce((s, r) => s + Number(r.ot_hours || r.overtime_hours || 0), 0));
+    const payableOT = isOtEligible ? fmt2(Math.max(0, totalOT - OT_TOLERANCE)) : 0;
+    return { totalOT, payableOT };
+  }, [ledger, isOtEligible]);
+
+  const totalWorkedHours = useMemo(() => {
+    return fmt2(ledger.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
+  }, [ledger]);
 
   const requiredHoursSummary = useMemo(() => {
     const policy = STAFF_LEVEL_POLICIES[selectedEmp?.staff_level];
@@ -462,14 +488,17 @@ export default function Timesheet({ branchFilter, role }) {
       Day: getDayName(r.work_date),
       In: formatTime(r.check_in || r.time_in),
       Out: formatTime(r.check_out || r.time_out),
-      "Hours Worked": r.actual_hours ?? r.hours_worked ?? 0,
+      "Hours Worked": hoursToHHMM(r.actual_hours ?? r.hours_worked ?? 0),
       "Late (mins)": r.late_minutes || 0,
-      "Short (hrs)": r.short_hours || 0,
-      "OT (hrs)": r.ot_hours ?? r.overtime_hours ?? 0,
+      "Short (hrs)": hoursToHHMM(r.short_hours || 0),
+      "OT (hrs)": hoursToHHMM(r.ot_hours ?? r.overtime_hours ?? 0),
       Status: r.attendance_status || r.status || "",
     }));
 
     const summaryRows = [
+      {},
+      { Date: "--- ATTENDANCE BREAKDOWN ---" },
+      ...statusCounts.map(({ status, count }) => ({ Date: status, Day: count })),
       {},
       { Date: "--- REQUIRED HOURS SUMMARY ---" },
       { Date: "Total Required Hours", Day: hoursToHHMM(requiredHoursSummary.totalRequired) },
@@ -483,15 +512,15 @@ export default function Timesheet({ branchFilter, role }) {
       { Date: "Deductible Lates", Day: lateSummary.deductibleLates },
       {},
       { Date: "--- SHORT HOURS SUMMARY ---" },
-      { Date: "Monthly Short Hours", Day: shortSummary.totalShort },
-      { Date: "Tolerance (hrs)", Day: SHORT_TOLERANCE },
-      { Date: "Deductible Short Hours", Day: shortSummary.deductibleShort },
+      { Date: "Monthly Short Hours", Day: hoursToHHMM(shortSummary.totalShort) },
+      { Date: "Tolerance", Day: hoursToHHMM(SHORT_TOLERANCE) },
+      { Date: "Deductible Short Hours", Day: hoursToHHMM(shortSummary.deductibleShort) },
       {},
       { Date: "--- OT SUMMARY ---" },
-      { Date: "Monthly OT (hrs)", Day: otSummary.totalOT },
-      { Date: "Tolerance (hrs)", Day: OT_TOLERANCE },
+      { Date: "Monthly OT", Day: hoursToHHMM(otSummary.totalOT) },
+      { Date: "Tolerance", Day: hoursToHHMM(OT_TOLERANCE) },
       { Date: "OT Eligible", Day: isOtEligible ? "Yes" : "No" },
-      { Date: "Payable OT (hrs)", Day: otSummary.payableOT },
+      { Date: "Payable OT", Day: hoursToHHMM(otSummary.payableOT) },
     ];
 
     if (leaveData) {
@@ -748,17 +777,17 @@ export default function Timesheet({ branchFilter, role }) {
                           </td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : formatTime(row.check_in || row.time_in)}</td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : formatTime(row.check_out || row.time_out)}</td>
-                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : (row.actual_hours ?? row.hours_worked ?? 0)}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : hoursToHHMM(row.actual_hours ?? row.hours_worked ?? 0)}</td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {Number(row.late_minutes || 0) > 0 ? <span className="text-amber-600 font-medium">{row.late_minutes}</span> : "0"}
                           </td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
-                            {Number(row.short_hours || 0) > 0 ? <span className="text-red-500 font-medium">{row.short_hours}</span> : "0"}
+                            {Number(row.short_hours || 0) > 0 ? <span className="text-red-500 font-medium">{hoursToHHMM(row.short_hours)}</span> : "00:00"}
                           </td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {Number(row.ot_hours || row.overtime_hours || 0) > 0 ? (
-                              <span className="text-blue-600 font-medium">{row.ot_hours ?? row.overtime_hours}</span>
-                            ) : "0"}
+                              <span className="text-blue-600 font-medium">{hoursToHHMM(row.ot_hours ?? row.overtime_hours)}</span>
+                            ) : "00:00"}
                           </td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             <StatusBadge status={status} />
@@ -807,8 +836,8 @@ export default function Timesheet({ branchFilter, role }) {
                       <td colSpan={5} className="px-4 py-3 text-right text-slate-600 print:px-1.5 print:py-1">Totals</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{hoursToHHMM(totalWorkedHours)}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{lateSummary.totalLateMins}</td>
-                      <td className="px-4 py-3 print:px-1.5 print:py-1">{shortSummary.totalShort}</td>
-                      <td className="px-4 py-3 print:px-1.5 print:py-1">{otSummary.totalOT}</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1">{hoursToHHMM(shortSummary.totalShort)}</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1">{hoursToHHMM(otSummary.totalOT)}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1"></td>
                       {canToggle && <td colSpan={5} className="px-4 py-3 print:hidden"></td>}
                     </tr>
@@ -824,6 +853,22 @@ export default function Timesheet({ branchFilter, role }) {
                 </div>
               )}
             </div>
+
+          {/* Attendance Breakdown */}
+          <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4 print:p-2 print:border-slate-300 print:mb-1">
+            <div className="flex items-center gap-2 mb-4 print:mb-1">
+              <span className="h-9 w-9 rounded-xl bg-indigo-50 flex items-center justify-center text-lg shrink-0 print:hidden">📊</span>
+              <h3 className="font-bold text-slate-800 print:text-xs">Attendance Breakdown</h3>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3 print:gap-1.5">
+              {statusCounts.map(({ status, count }) => (
+                <div key={status} className="text-center rounded-xl p-3 bg-slate-50 print:p-1 print:border print:border-slate-300">
+                  <div className="text-xl font-bold text-slate-900 print:text-sm">{count}</div>
+                  <div className="text-xs text-slate-500 print:text-[8px]">{status}</div>
+                </div>
+              ))}
+            </div>
+          </div>
 
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 print:gap-2 print:mb-1">
@@ -867,17 +912,17 @@ export default function Timesheet({ branchFilter, role }) {
               <div className="space-y-2.5 print:space-y-1">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">Monthly Short Hours</span>
-                  <span className="font-semibold">{shortSummary.totalShort} hrs</span>
+                  <span className="font-semibold">{hoursToHHMM(shortSummary.totalShort)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">Tolerance</span>
-                  <span className="text-slate-400">{SHORT_TOLERANCE} hrs</span>
+                  <span className="text-slate-400">{hoursToHHMM(SHORT_TOLERANCE)}</span>
                 </div>
                 <div className="h-px bg-slate-100" />
                 <div className="flex items-center justify-between text-sm font-semibold">
                   <span className="text-slate-700">Deductible Short Hours</span>
                   <Badge tone={shortSummary.deductibleShort > 0 ? "red" : "green"}>
-                    {shortSummary.deductibleShort} hrs
+                    {hoursToHHMM(shortSummary.deductibleShort)}
                   </Badge>
                 </div>
               </div>
@@ -892,11 +937,11 @@ export default function Timesheet({ branchFilter, role }) {
               <div className="space-y-2.5 print:space-y-1">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">Monthly OT</span>
-                  <span className="font-semibold">{otSummary.totalOT} hrs</span>
+                  <span className="font-semibold">{hoursToHHMM(otSummary.totalOT)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">Tolerance</span>
-                  <span className="text-slate-400">{OT_TOLERANCE} hrs</span>
+                  <span className="text-slate-400">{hoursToHHMM(OT_TOLERANCE)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">OT Eligible</span>
@@ -906,7 +951,7 @@ export default function Timesheet({ branchFilter, role }) {
                 <div className="flex items-center justify-between text-sm font-semibold">
                   <span className="text-slate-700">Payable OT</span>
                   <Badge tone={otSummary.payableOT > 0 ? "blue" : "slate"}>
-                    {otSummary.payableOT} hrs
+                    {hoursToHHMM(otSummary.payableOT)}
                   </Badge>
                 </div>
               </div>
