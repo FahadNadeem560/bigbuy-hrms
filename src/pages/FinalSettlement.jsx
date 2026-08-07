@@ -183,7 +183,35 @@ export default function FinalSettlement({ role }) {
       .update({ status: "Resigned", resignation_date: resignDate, last_working_day: lastDay })
       .eq("employee_code", selEmp.employee_code);
 
-    setMsg(`Settlement processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}`);
+    // No amount payable, or notice period not served and Master hasn't
+    // overridden it -> No F&F. Otherwise some amount is due -> F&F.
+    // Written straight onto payroll.payment_status (bypassing the normal
+    // request/approval flow -- this IS the approval, decided at settlement
+    // time) for the month last_working_day falls in. If that month's
+    // payroll hasn't been generated yet, mergePersistentPayrollFields
+    // carries this forward once it is (see payrollControlService.js).
+    const fnfStatus = (settlement.net === 0 || (!noticeComplete && !overrideMode)) ? "No_FnF" : "FnF";
+    const payrollMonth = lastDay.slice(0, 7);
+    const nowIso = new Date().toISOString();
+    const paymentStatusPayload = {
+      payment_status: fnfStatus,
+      payment_status_changed_by: role || "Master",
+      payment_status_changed_at: nowIso,
+      payment_status_approved_by: role || "Master",
+      payment_status_reason: `Final settlement processed — net payable ${money(settlement.net)}`,
+    };
+    const { data: existingPayrollRow } = await supabase.from("payroll")
+      .select("id").eq("employee_code", selEmp.employee_code).eq("payroll_month", payrollMonth).maybeSingle();
+    if (existingPayrollRow) {
+      await supabase.from("payroll").update(paymentStatusPayload).eq("id", existingPayrollRow.id);
+    } else {
+      await supabase.from("payroll").insert({
+        employee_code: selEmp.employee_code, payroll_month: payrollMonth,
+        status: "Draft", ...paymentStatusPayload,
+      });
+    }
+
+    setMsg(`Settlement processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}. Payroll status set to ${fnfStatus === "FnF" ? "F&F" : "No F&F"} for ${payrollMonth}.`);
     setSelEmp(null);
     setResignDate("");
     setLastDay("");

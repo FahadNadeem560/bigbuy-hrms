@@ -611,7 +611,7 @@ export default function PayrollAutomation({ role, actorName }) {
   const canRequestPaymentStatus = ["HR", "Master"].includes(role) && !isLocked;
   const canMarkPaid = role === "Finance" && isPublished && !isLocked;
 
-  useEffect(() => { loadBase(); }, []);
+  useEffect(() => { loadBase(); }, [month]);
   useEffect(() => { loadPayroll(); loadLockAndExtras(); }, [month]);
 
   useEffect(() => {
@@ -628,11 +628,21 @@ export default function PayrollAutomation({ role, actorName }) {
   }, [month]);
 
   async function loadBase() {
-    const [{ data: emps }, { data: lns }] = await Promise.all([
+    const fromDate = month + "-01";
+    const [y, m] = month.split("-").map(Number);
+    const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
+    // A resigned employee only belongs in the payroll of the month their
+    // last_working_day falls in -- before that they're still Active, after
+    // it their Final Settlement already paid them out. Without this,
+    // resigning employees vanished from payroll entirely the moment
+    // FinalSettlement.jsx flipped their status to "Resigned".
+    const [{ data: activeEmps }, { data: resignedEmps }, { data: lns }] = await Promise.all([
       supabase.from("employees").select("*").eq("status", "Active"),
+      supabase.from("employees").select("*").eq("status", "Resigned")
+        .gte("last_working_day", fromDate).lte("last_working_day", toDate),
       supabase.from("loans").select("*").eq("status", "Active"),
     ]);
-    setEmployees(emps || []);
+    setEmployees([...(activeEmps || []), ...(resignedEmps || [])]);
     setLoans(lns || []);
   }
 
@@ -816,6 +826,20 @@ export default function PayrollAutomation({ role, actorName }) {
         otherEarnings: oneTimeAdj.otherEarnings || 0,
         otherDeductions: oneTimeAdj.otherDeductions || 0,
       };
+      // Resigned mid-month: monthlySalary is always paid in full by
+      // calculatePayrollForEmployee and the only day-based deduction is
+      // absentDeduction (dailyRate * absentDays) -- but no attendance rows
+      // exist past last_working_day, so those trailing days were never
+      // counted anywhere and the employee got a full month's pay. Fold the
+      // days after last_working_day into absentDays so the existing
+      // dailyRate * absentDays deduction prorates them out, same dailyRate
+      // (salary/30) convention Final Settlement already uses.
+      if (emp.status === "Resigned" && emp.last_working_day >= fromDate && emp.last_working_day <= toDate) {
+        const daysInMonth = new Date(y, m, 0).getDate();
+        const lastDayOfMonth = Number(emp.last_working_day.slice(8, 10));
+        const unemployedDays = daysInMonth - lastDayOfMonth;
+        adj.absentDays = Number(adj.absentDays || 0) + unemployedDays;
+      }
       const loanRows = [];
       const loanMatch = (loans || []).find(l =>
         l.employee_code === emp.employee_code || l.employee_id === emp.employee_code
