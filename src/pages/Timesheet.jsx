@@ -21,6 +21,15 @@ function fmt2(n) {
   return Math.round(Number(n || 0) * 100) / 100;
 }
 
+function hoursToHHMM(n) {
+  const total = Number(n || 0);
+  const sign = total < 0 ? "-" : "";
+  const abs = Math.abs(total);
+  const h = Math.floor(abs);
+  const m = Math.round((abs - h) * 60);
+  return `${sign}${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 function fmtDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -71,12 +80,14 @@ function AdjustTimeModal({ row, form, setForm, onSubmit, onClose, submitting }) 
         <div className="space-y-3">
           <div>
             <p className="text-xs text-slate-500 mb-1">Corrected In</p>
-            <input type="time" value={form.in} onChange={e => setForm(f => ({ ...f, in: e.target.value }))}
+            {/* lang="en-GB" makes the browser render this as a 24-hour picker
+                instead of the 12-hour AM/PM widget the default locale gives. */}
+            <input type="time" lang="en-GB" value={form.in} onChange={e => setForm(f => ({ ...f, in: e.target.value }))}
               className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
           </div>
           <div>
             <p className="text-xs text-slate-500 mb-1">Corrected Out</p>
-            <input type="time" value={form.out} onChange={e => setForm(f => ({ ...f, out: e.target.value }))}
+            <input type="time" lang="en-GB" value={form.out} onChange={e => setForm(f => ({ ...f, out: e.target.value }))}
               className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
           </div>
           <div>
@@ -461,9 +472,9 @@ export default function Timesheet({ branchFilter, role }) {
     const summaryRows = [
       {},
       { Date: "--- REQUIRED HOURS SUMMARY ---" },
-      { Date: "Total Required Hours", Day: requiredHoursSummary.totalRequired },
-      { Date: "Total Worked Hours", Day: totalWorkedHours },
-      { Date: "Variance (Worked - Required)", Day: requiredHoursSummary.variance },
+      { Date: "Total Required Hours", Day: hoursToHHMM(requiredHoursSummary.totalRequired) },
+      { Date: "Total Worked Hours", Day: hoursToHHMM(totalWorkedHours) },
+      { Date: "Variance (Worked - Required)", Day: (requiredHoursSummary.variance > 0 ? "+" : "") + hoursToHHMM(requiredHoursSummary.variance) },
       {},
       { Date: "--- LATE SUMMARY ---" },
       { Date: "Total Late Count", Day: lateSummary.totalLateCount },
@@ -692,11 +703,11 @@ export default function Timesheet({ branchFilter, role }) {
                   {fromDate} — {toDate} · {ledger.length} day{ledger.length !== 1 ? "s" : ""}
                 </p>
                 <p className="text-xs mt-1.5 print:hidden">
-                  <span className="text-slate-500">Required Hours: <span className="font-semibold text-slate-700">{requiredHoursSummary.totalRequired}</span></span>
+                  <span className="text-slate-500">Required Hours: <span className="font-semibold text-slate-700">{hoursToHHMM(requiredHoursSummary.totalRequired)}</span></span>
                   <span className="mx-2 text-slate-300">|</span>
-                  <span className="text-slate-500">Worked Hours: <span className="font-semibold text-slate-700">{totalWorkedHours}</span></span>
+                  <span className="text-slate-500">Worked Hours: <span className="font-semibold text-slate-700">{hoursToHHMM(totalWorkedHours)}</span></span>
                   <span className="mx-2 text-slate-300">|</span>
-                  <span className="text-slate-500">Variance: <span className={`font-semibold ${requiredHoursSummary.variance < 0 ? "text-red-500" : "text-green-600"}`}>{requiredHoursSummary.variance > 0 ? "+" : ""}{requiredHoursSummary.variance}</span></span>
+                  <span className="text-slate-500">Variance: <span className={`font-semibold ${requiredHoursSummary.variance < 0 ? "text-red-500" : "text-green-600"}`}>{requiredHoursSummary.variance > 0 ? "+" : ""}{hoursToHHMM(requiredHoursSummary.variance)}</span></span>
                 </p>
                 {notice && <p className="text-xs text-blue-700 bg-blue-50 rounded-lg px-3 py-1.5 mt-2 inline-block print:hidden">{notice}</p>}
               </div>
@@ -794,7 +805,7 @@ export default function Timesheet({ branchFilter, role }) {
                   <tfoot>
                     <tr className="bg-slate-50 font-semibold border-t-2 border-slate-200 print:bg-slate-100">
                       <td colSpan={5} className="px-4 py-3 text-right text-slate-600 print:px-1.5 print:py-1">Totals</td>
-                      <td className="px-4 py-3 print:px-1.5 print:py-1">{totalWorkedHours}</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1">{hoursToHHMM(totalWorkedHours)}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{lateSummary.totalLateMins}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{shortSummary.totalShort}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{otSummary.totalOT}</td>
