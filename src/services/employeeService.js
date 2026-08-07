@@ -40,6 +40,11 @@ export function mapEmployeeRecord(emp) {
     otEligible: emp.ot_eligible,
     extraDaysEligible: emp.extra_days_eligible,
     ghEligible: emp.gazetted_holiday_eligible,
+    leaveEligible: emp.leave_eligible !== false, // column defaults to true; null reads as true too
+    singlePunchOk: !!emp.single_punch_ok,
+    monthlyHoursBased: !!emp.monthly_hours_based,
+    whatsappVerified: !!emp.whatsapp_verified,
+    enrollmentCompleted: !!emp.enrollment_completed,
     phone: emp.phone || emp.whatsapp_number || "-",
     whatsappNumber: emp.whatsapp_number || "",
     cnic: emp.cnic || "",

@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Badge, PageTitle } from "../components/ui.jsx";
+import { BRANCH_CODE_MAP } from "../constants/branches.js";
+
+const STAFF_LEVELS = ["Management", "Floor Management", "Non-Management"];
 
 const GROUP_LABELS = {
   MANAGEMENT_ADMIN: "Management / Admin",
@@ -15,6 +18,9 @@ function YesNoBadge({ value }) {
 export default function Permissions({ employees, role }) {
   const [groups, setGroups] = useState([]);
   const [search, setSearch] = useState("");
+  const [filterBranch, setFilterBranch] = useState("All");
+  const [filterDept, setFilterDept] = useState("");
+  const [filterLevel, setFilterLevel] = useState("All");
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
   const [pending, setPending] = useState({}); // employee_code -> true while a write is in flight
@@ -55,10 +61,14 @@ export default function Permissions({ employees, role }) {
       .filter(e => !e.isDeleted)
       .map(e => overrides[e.id] ? { ...e, ...overrides[e.id] } : e);
     const q = search.trim().toLowerCase();
+    const dq = filterDept.trim().toLowerCase();
     return list
       .filter(e => !q || e.name?.toLowerCase().includes(q) || e.id?.toLowerCase().includes(q) || e.dept?.toLowerCase().includes(q))
+      .filter(e => filterBranch === "All" || e.branch === filterBranch)
+      .filter(e => !dq || e.dept?.toLowerCase().includes(dq))
+      .filter(e => filterLevel === "All" || e.level === filterLevel)
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  }, [employees, search, overrides]);
+  }, [employees, search, overrides, filterBranch, filterDept, filterLevel]);
 
   // dbPatch: snake_case columns written to Supabase. localPatch: the same
   // change in the camelCase shape mapEmployeeRecord() produces, merged into
@@ -107,6 +117,48 @@ export default function Permissions({ employees, role }) {
     logAudit(next ? "field_employee_enabled" : "field_employee_disabled", e.id, `Field employee ${next ? "enabled" : "disabled"}.`);
   }
 
+  async function toggleLeaveEligible(e) {
+    const next = !e.leaveEligible;
+    if (!(await saveField(e.id, { leave_eligible: next }, { leaveEligible: next }))) return;
+    logAudit(next ? "leave_eligible_enabled" : "leave_eligible_disabled", e.id, `Leave eligibility ${next ? "enabled" : "disabled"}.`);
+  }
+
+  async function toggleSinglePunchOk(e) {
+    const next = !e.singlePunchOk;
+    if (!(await saveField(e.id, { single_punch_ok: next }, { singlePunchOk: next }))) return;
+    logAudit(next ? "single_punch_ok_enabled" : "single_punch_ok_disabled", e.id, `Single-punch-OK ${next ? "enabled" : "disabled"}.`);
+  }
+
+  async function toggleMonthlyHoursBased(e) {
+    const next = !e.monthlyHoursBased;
+    if (!(await saveField(e.id, { monthly_hours_based: next }, { monthlyHoursBased: next }))) return;
+    logAudit(next ? "monthly_hours_based_enabled" : "monthly_hours_based_disabled", e.id, `Monthly-hours-based ${next ? "enabled" : "disabled"}.`);
+  }
+
+  async function toggleSupervisor(e) {
+    const next = !e.isSupervisor;
+    if (!(await saveField(e.id, { is_supervisor: next }, { isSupervisor: next }))) return;
+    logAudit(next ? "supervisor_flag_enabled" : "supervisor_flag_disabled", e.id, `Supervisor flag ${next ? "enabled" : "disabled"}.`);
+  }
+
+  async function toggleManager(e) {
+    const next = !e.isManager;
+    if (!(await saveField(e.id, { is_manager: next }, { isManager: next }))) return;
+    logAudit(next ? "manager_flag_enabled" : "manager_flag_disabled", e.id, `Manager flag ${next ? "enabled" : "disabled"}.`);
+  }
+
+  async function toggleWhatsappVerified(e) {
+    const next = !e.whatsappVerified;
+    if (!(await saveField(e.id, { whatsapp_verified: next }, { whatsappVerified: next }))) return;
+    logAudit(next ? "whatsapp_verified_enabled" : "whatsapp_verified_disabled", e.id, `WhatsApp verified flag ${next ? "enabled" : "disabled"}.`);
+  }
+
+  async function toggleEnrollmentCompleted(e) {
+    const next = !e.enrollmentCompleted;
+    if (!(await saveField(e.id, { enrollment_completed: next }, { enrollmentCompleted: next }))) return;
+    logAudit(next ? "enrollment_completed_enabled" : "enrollment_completed_disabled", e.id, `Enrollment completed flag ${next ? "enabled" : "disabled"}.`);
+  }
+
   async function toggleAttendanceExempt(e) {
     const turningOn = !e.isAttendanceExempt;
     let reason = null;
@@ -130,7 +182,7 @@ export default function Permissions({ employees, role }) {
     <div>
       <PageTitle
         title="Permissions"
-        subtitle="Eligibility checks per employee — overtime, extra day, gazetted holiday, attendance exemption and field status."
+        subtitle="Feature checklist per employee — every eligibility/exemption flag the app supports, in one place."
       />
 
       {notice && (
@@ -206,26 +258,43 @@ export default function Permissions({ employees, role }) {
       </div>
 
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search by name, ID or department..."
-          className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm"
-        />
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by name, ID or department..."
+            className="px-4 py-2 rounded-xl border border-slate-200 text-sm"
+          />
+          <select value={filterBranch} onChange={e => setFilterBranch(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="All">All Branches</option>
+            {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
+          </select>
+          <input
+            value={filterDept}
+            onChange={e => setFilterDept(e.target.value)}
+            placeholder="Filter by department"
+            className="px-4 py-2 rounded-xl border border-slate-200 text-sm"
+          />
+          <select value={filterLevel} onChange={e => setFilterLevel(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="All">All Staff Levels</option>
+            {STAFF_LEVELS.map(l => <option key={l}>{l}</option>)}
+          </select>
+        </div>
       </div>
 
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
-        <table className="w-full min-w-[1100px] text-sm">
+        <p className="px-4 pt-3 text-xs text-slate-400">{rows.length} employee{rows.length !== 1 ? "s" : ""}</p>
+        <table className="w-full min-w-[2000px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
-              {["Employee", "Department", "Staff Level", "Eligibility Group", "OT Eligible", "Extra Day Eligible", "Gazetted Holiday Eligible", "Attendance Exempt", "Field Employee"].map(h => (
+              {["Employee", "Branch", "Department", "Staff Level", "Eligibility Group", "OT Eligible", "Extra Day Eligible", "Gazetted Holiday Eligible", "Leave Eligible", "Attendance Exempt", "Field Employee", "Single Punch OK", "Monthly Hours Based", "Supervisor", "Manager", "WhatsApp Verified", "Enrollment Completed", "Temporary"].map(h => (
                 <th key={h} className="text-left px-3 py-3 font-medium">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No employees match.</td></tr>
+              <tr><td colSpan={18} className="px-4 py-8 text-center text-slate-400">No employees match.</td></tr>
             ) : rows.map(e => {
               const group = e.eligibilityGroup ? groupByCode[e.eligibilityGroup] : null;
               const otEffective = e.otEligible != null ? !!e.otEligible : !!group?.overtime_eligible;
@@ -238,6 +307,7 @@ export default function Permissions({ employees, role }) {
                     {e.name}
                     <div className="text-xs text-slate-400 font-mono">{e.id}</div>
                   </td>
+                  <td className="px-3 py-2.5 text-slate-500">{e.branch}</td>
                   <td className="px-3 py-2.5 text-slate-500">{e.dept}</td>
                   <td className="px-3 py-2.5">{e.level}</td>
                   <td className="px-3 py-2.5">
@@ -279,6 +349,11 @@ export default function Permissions({ employees, role }) {
                     </button>
                   </td>
                   <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} onClick={() => toggleLeaveEligible(e)} className="disabled:cursor-default">
+                      <YesNoBadge value={e.leaveEligible} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
                     <button
                       disabled={!canEdit || busy}
                       onClick={() => toggleAttendanceExempt(e)}
@@ -297,6 +372,41 @@ export default function Permissions({ employees, role }) {
                       <YesNoBadge value={e.isFieldEmployee} />
                     </button>
                   </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} onClick={() => toggleSinglePunchOk(e)} className="disabled:cursor-default"
+                      title="A single punch (in or out only) is treated as a full required-hours day instead of a review exception.">
+                      <YesNoBadge value={e.singlePunchOk} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} onClick={() => toggleMonthlyHoursBased(e)} className="disabled:cursor-default">
+                      <YesNoBadge value={e.monthlyHoursBased} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} onClick={() => toggleSupervisor(e)} className="disabled:cursor-default">
+                      <YesNoBadge value={e.isSupervisor} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} onClick={() => toggleManager(e)} className="disabled:cursor-default">
+                      <YesNoBadge value={e.isManager} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} onClick={() => toggleWhatsappVerified(e)} className="disabled:cursor-default"
+                      title="Normally set automatically once the employee completes WhatsApp OTP verification — override only for support cases.">
+                      <YesNoBadge value={e.whatsappVerified} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button disabled={!canEdit || busy} onClick={() => toggleEnrollmentCompleted(e)} className="disabled:cursor-default">
+                      <YesNoBadge value={e.enrollmentCompleted} />
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5" title="Change via the temp-to-permanent conversion flow on the Directory tab, not here.">
+                    <YesNoBadge value={e.isTemporary} />
+                  </td>
                 </tr>
               );
             })}
@@ -306,7 +416,7 @@ export default function Permissions({ employees, role }) {
 
       {canEdit && (
         <p className="text-xs text-slate-400 mt-2">
-          OT Eligible, Extra Day Eligible and Gazetted Holiday Eligible all cycle through: group default → Yes → No → group default. Set the staff-level default in the "Eligibility Group Defaults" table above, then override an individual employee here only when they're an exception to their group.
+          OT Eligible, Extra Day Eligible and Gazetted Holiday Eligible all cycle through: group default → Yes → No → group default. Set the staff-level default in the "Eligibility Group Defaults" table above, then override an individual employee here only when they're an exception to their group. All other columns are a direct Yes/No toggle per employee — click a badge to flip it. "Temporary" is read-only here; change it via the temp-to-permanent conversion flow on the Directory tab.
         </p>
       )}
     </div>
