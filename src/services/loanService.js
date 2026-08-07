@@ -5,9 +5,14 @@ import { supabase } from "../lib/supabaseClient.js";
 // ones where Finance is the approver. Every action below notifies Finance
 // in addition to whoever else needs to act or be told the outcome.
 async function notifyFinance(title, message, type = "loan_decision") {
+  // .catch() alone doesn't exist on a Postgrest query builder (it only
+  // implements .then()) -- calling it directly throws synchronously before
+  // the request is even sent, which was silently killing whatever ran after
+  // this in the calling function (see approveLoanRequest below). .then()
+  // with both handlers is the real fire-and-forget swallow.
   await supabase.from("notifications").insert({
     recipient_role: "Finance", type, title, message, is_read: false,
-  }).catch(() => {});
+  }).then(() => {}, () => {});
 }
 
 // ══════════════════════ Loan Approval Workflow ══════════════════════
@@ -44,7 +49,7 @@ export async function approveLoanRequest(loanId, approverName) {
   if (row?.submitted_by) {
     await supabase.from("notifications").insert({
       recipient_role: row.submitted_by, type: "loan_decision", title: "Loan Request Approved", message, is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
   await notifyFinance("Loan Approved", message);
   return row;
@@ -60,7 +65,7 @@ export async function rejectLoanRequest(loanId, approverName, reason) {
   if (row?.submitted_by) {
     await supabase.from("notifications").insert({
       recipient_role: row.submitted_by, type: "loan_decision", title: "Loan Request Rejected", message, is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
   await notifyFinance("Loan Rejected", message);
   return row;
@@ -124,7 +129,7 @@ export async function approveLoanChange(changeId, approverName) {
   if (row?.submitted_by) {
     await supabase.from("notifications").insert({
       recipient_role: row.submitted_by, type: "loan_decision", title: "Loan Change Approved", message, is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
   await notifyFinance("Loan Change Approved", message);
   return row;
@@ -141,7 +146,7 @@ export async function rejectLoanChange(changeId, approverName, reason) {
   if (row?.submitted_by) {
     await supabase.from("notifications").insert({
       recipient_role: row.submitted_by, type: "loan_decision", title: "Loan Change Rejected", message, is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
   await notifyFinance("Loan Change Rejected", message);
   return row;

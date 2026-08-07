@@ -62,7 +62,7 @@ export async function approvePaymentStatusRequest(request, approverRole, approve
     title: "Payment Status Change Approved",
     message: `${approverName} approved ${request.employee_name} (${request.employee_code}) → ${PAYMENT_STATUS_LABELS[request.requested_status]} for ${request.payroll_month}.`,
     is_read: false,
-  }).catch(() => {});
+  }).then(() => {}, () => {});
   queueWhatsappMessage({
     employeeCode: request.employee_code, messageType: MESSAGE_TYPES.PAYMENT_STATUS_CHANGED,
     templateVariables: [request.employee_name, request.payroll_month, PAYMENT_STATUS_LABELS[request.requested_status]],
@@ -80,7 +80,7 @@ export async function rejectPaymentStatusRequest(request, approverName, rejectio
     title: "Payment Status Change Rejected",
     message: `${approverName} rejected the change for ${request.employee_name} (${request.employee_code}). Reason: ${rejectionReason}`,
     is_read: false,
-  }).catch(() => {});
+  }).then(() => {}, () => {});
 }
 
 // ══════════════════════════ Month helpers ══════════════════════════
@@ -221,7 +221,7 @@ export async function sendHoldReminderIfNeeded() {
       title: "Hold Employees Need Review",
       message: `${count} employee${count > 1 ? "s are" : " is"} on Hold status. Please review and action.`,
       is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
   localStorage.setItem(key, "1");
 }
@@ -417,7 +417,7 @@ export async function generateVerificationsForMonth(month) {
         title: "Payroll Ready for Your Verification",
         message: `${month} payroll is ready for your verification. Please review your team's payroll and confirm.`,
         is_read: false,
-      }).catch(() => {});
+      }).then(() => {}, () => {});
     }
   }
   return created;
@@ -450,7 +450,7 @@ export async function respondToFlag(notification, responseMessage) {
     await supabase.from("notifications").insert({
       recipient_code: supervisorCode, recipient_role: "Employee", type: "payroll_flag_response",
       title: "HR Response to Your Flag", message: responseMessage, is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
 }
 

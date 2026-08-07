@@ -53,7 +53,7 @@ export async function checkIncrementDueNotifications() {
         message: lines.join(" "),
         reference_id: branch, reference_type: "increment_due_branch",
         link: branch, is_read: false,
-      }).catch(() => {});
+      }).then(() => {}, () => {});
     }
   }
 }
@@ -95,7 +95,7 @@ export async function approveIncrement(incrementId, approverName) {
       title: "Increment Approved",
       message: `Increment for ${row.employee_name} approved: Rs.${Number(row.old_salary || 0).toLocaleString()} → Rs.${Number(row.new_salary).toLocaleString()}.`,
       is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
   return row;
 }
@@ -138,6 +138,6 @@ export async function rejectIncrement(incrementId, approverName, reason) {
       title: "Increment Rejected",
       message: `Increment for ${inc.employee_name} rejected. Reason: ${reason}`,
       is_read: false,
-    }).catch(() => {});
+    }).then(() => {}, () => {});
   }
 }

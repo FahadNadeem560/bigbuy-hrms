@@ -32,6 +32,46 @@ function StageBadge({ status }) {
   return <Badge tone="slate">{status}</Badge>;
 }
 
+// Compact Name + ID/Designation/Department/Branch cell, reused across every
+// tab so reviewers don't have to cross-reference an employee code by hand.
+function EmployeeCell({ code, name, empMap }) {
+  const emp = empMap[code] || {};
+  const parts = [code, emp.designation, emp.department, emp.branch].filter(Boolean);
+  return (
+    <div>
+      <div className="font-medium">{name || code || "—"}</div>
+      {parts.length > 0 && <div className="text-xs text-slate-400">{parts.join(" · ")}</div>}
+    </div>
+  );
+}
+
+function SelectAllCheckbox({ ids, selectedIds, onToggleAll }) {
+  const allSelected = ids.length > 0 && ids.every(id => selectedIds.has(id));
+  const someSelected = !allSelected && ids.some(id => selectedIds.has(id));
+  return (
+    <input type="checkbox" checked={allSelected} disabled={ids.length === 0}
+      ref={el => { if (el) el.indeterminate = someSelected; }}
+      onChange={() => onToggleAll(ids)} className="rounded" />
+  );
+}
+
+function RowCheckbox({ id, selectedIds, onToggle, disabled }) {
+  return <input type="checkbox" checked={selectedIds.has(id)} disabled={disabled} onChange={() => onToggle(id)} className="rounded" />;
+}
+
+function BulkActionsBar({ selectedCount, onApprove, onReject, busy }) {
+  if (selectedCount === 0) return null;
+  return (
+    <div className="px-5 py-2.5 bg-blue-50 border-b border-blue-100 flex items-center justify-between text-sm">
+      <span className="text-blue-700 font-medium">{selectedCount} selected</span>
+      <div className="flex gap-2">
+        <Button onClick={onApprove} disabled={busy} className="rounded-xl text-xs py-1.5 px-3">{busy ? "Working…" : "Approve Selected"}</Button>
+        <Button variant="outline" onClick={onReject} disabled={busy} className="rounded-xl text-xs py-1.5 px-3">Reject Selected</Button>
+      </div>
+    </div>
+  );
+}
+
 function ApproveRejectBtns({ onApprove, onReject, rejectId, id, setRejectId, rejectNote, setRejectNote, disabled }) {
   if (rejectId === id) return (
     <div className="flex flex-col gap-1 min-w-[160px]">
@@ -106,7 +146,62 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   // Payment status change requests
   const [paymentRequests, setPaymentRequests] = useState([]);
 
+  // Bulk selection — one shared set, cleared whenever the tab changes so a
+  // selection never silently carries over and gets actioned against the
+  // wrong queue.
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   useEffect(() => { loadAll(); }, []);
+  useEffect(() => { setSelectedIds(new Set()); }, [tab]);
+
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll(ids) {
+    setSelectedIds(prev => {
+      const allSelected = ids.length > 0 && ids.every(id => prev.has(id));
+      return allSelected ? new Set() : new Set(ids);
+    });
+  }
+
+  // Runs the same single-item approve/reject function already used by each
+  // row's own buttons, once per selected id, sequentially — reuses the
+  // exact tested logic (including its own reload) instead of a parallel
+  // bulk RPC per queue type. `ids` is always this section's own id list
+  // intersected with the current selection (not the whole shared set) —
+  // the "loans" tab renders two independent lists (Loan Requests and Loan
+  // Change Requests) under one selection, so blindly running the whole
+  // selectedIds set through one function could call approveLoan() on a
+  // loan_changes id or vice versa.
+  function selectedIn(ids) { return ids.filter(id => selectedIds.has(id)); }
+
+  async function bulkApprove(ids, approveFn) {
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    for (const id of ids) {
+      try { await approveFn(id); } catch { /* individual errors already surfaced via setErr */ }
+    }
+    setSelectedIds(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
+    setBulkBusy(false);
+  }
+
+  async function bulkReject(ids, rejectFn) {
+    if (ids.length === 0) return;
+    const reason = window.prompt(`Reason for rejecting ${ids.length} selected item(s):`, "");
+    if (!reason || !reason.trim()) return;
+    setBulkBusy(true);
+    for (const id of ids) {
+      try { await rejectFn(id, reason); } catch { /* individual errors already surfaced via setErr */ }
+    }
+    setSelectedIds(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
+    setBulkBusy(false);
+  }
 
   async function loadAll() {
     setLoading(true);
@@ -126,7 +221,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       ] = await Promise.all([
         supabase.from("leave_requests").select("*").like("status", "Pending%").order("created_at", { ascending: false }).limit(200),
         supabase.from("timesheet_signoffs").select("*").order("created_at", { ascending: false }).limit(200),
-        supabase.from("employees").select("employee_code,full_name,department,branch,supervisor_id").order("full_name"),
+        supabase.from("employees").select("employee_code,full_name,department,branch,designation,supervisor_id").order("full_name"),
         supabase.from("attendance_adjustments").select("*").eq("status", "Pending Approval").order("adjusted_at", { ascending: false }).limit(200),
         supabase.from("one_time_adjustments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
         supabase.from("settlement_requests").select("*").neq("status","Completed").order("created_at", { ascending: false }).limit(200),
@@ -394,19 +489,30 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       {loading && <div className="text-center py-8 text-slate-400">Loading…</div>}
 
       {/* ── LEAVE ── */}
-      {tab === "leave" && !loading && (
+      {tab === "leave" && !loading && (() => {
+        const actionableIds = pendingLeave.filter(r => canActOnStage(role, r, actorEmployeeCode)).map(r => r.id);
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Leave Approval Queue</h2><p className="text-xs text-slate-400">{pendingLeave.length} pending</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approveLeave)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectLeave)} />
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Awaiting","Type","From","To","Days","Stage","Submitted","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Awaiting","Type","From","To","Days","Stage","Submitted","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {pendingLeave.length === 0
-                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending leave requests.</td></tr>
-                : pendingLeave.map(r => (
+                ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No pending leave requests.</td></tr>
+                : pendingLeave.map(r => {
+                  const canAct = canActOnStage(role, r, actorEmployeeCode);
+                  return (
                   <tr key={r.id}>
-                    <td className="px-4 py-3 font-medium">{r.employee_name || r.employee_id}</td>
+                    <td className="px-4 py-3"><RowCheckbox id={r.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canAct} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={r.employee_code || r.employee_id} name={r.employee_name} empMap={empMap} /></td>
                     <td className="px-4 py-3 text-slate-500 text-xs">{r.current_approver_name || supervisorName(r.employee_code)}</td>
                     <td className="px-4 py-3"><Badge tone="blue">{r.leave_type}</Badge></td>
                     <td className="px-4 py-3">{r.from_date}</td>
@@ -419,14 +525,16 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         id={r.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveLeave} onReject={rejectLeave}
-                        disabled={!canActOnStage(role, r, actorEmployeeCode)} />
+                        disabled={!canAct} />
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── TIMESHEET ── */}
       {tab === "timesheet" && !loading && (
@@ -441,7 +549,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                 ? <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No timesheet records. Supervisors sign off from their portal.</td></tr>
                 : signoffs.map(s => (
                   <tr key={s.id}>
-                    <td className="px-4 py-3 font-medium">{s.employee_name || s.employee_code}</td>
+                    <td className="px-4 py-3"><EmployeeCell code={s.employee_code} name={s.employee_name} empMap={empMap} /></td>
                     <td className="px-4 py-3">{s.month}</td>
                     <td className="px-4 py-3">{s.supervisor_signed_off ? <Badge tone="green">Signed Off</Badge> : <Badge tone="yellow">Pending</Badge>}</td>
                     <td className="px-4 py-3">{s.hr_reviewed ? <Badge tone="green">Reviewed</Badge> : <Badge tone="slate">Pending</Badge>}</td>
@@ -462,19 +570,29 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       )}
 
       {/* ── ATTENDANCE CORRECTIONS ── */}
-      {tab === "attendance" && !loading && (
+      {tab === "attendance" && !loading && (() => {
+        const canActAttendance = ["Master","GM"].includes(role);
+        const actionableIds = canActAttendance ? pendingCorr.map(a => a.id) : [];
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Attendance Corrections</h2><p className="text-xs text-slate-400">{pendingCorr.length} pending</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approveAttCorr)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectAttCorr)} />
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Date","Orig In","Orig Out","Adj In","Adj Out","Reason","Stage","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Date","Orig In","Orig Out","Adj In","Adj Out","Reason","Stage","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {pendingCorr.length === 0
-                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending attendance corrections.</td></tr>
+                ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No pending attendance corrections.</td></tr>
                 : pendingCorr.map(a => (
                   <tr key={a.id}>
-                    <td className="px-4 py-3 font-medium">{empMap[a.employee_code]?.full_name || a.employee_code}</td>
+                    <td className="px-4 py-3"><RowCheckbox id={a.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canActAttendance} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={a.employee_code} name={empMap[a.employee_code]?.full_name} empMap={empMap} /></td>
                     <td className="px-4 py-3">{a.attendance_date}</td>
                     <td className="px-4 py-3">{formatAdjTime(a.original_check_in)}</td>
                     <td className="px-4 py-3">{formatAdjTime(a.original_check_out)}</td>
@@ -487,29 +605,39 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         id={a.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveAttCorr} onReject={rejectAttCorr}
-                        disabled={!["Master","GM"].includes(role)} />
+                        disabled={!canActAttendance} />
                     </td>
                   </tr>
                 ))}
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── ONE-TIME ADJUSTMENTS ── */}
-      {tab === "adjustments" && !loading && (
+      {tab === "adjustments" && !loading && (() => {
+        const actionableIds = adjustments.map(a => a.id);
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">One-Time Adjustments</h2><p className="text-xs text-slate-400">{adjustments.length} pending</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approveAdj)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectAdj)} />
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Type","Amount","Month","Submitted By","Reason","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Type","Amount","Month","Submitted By","Reason","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {adjustments.length === 0
-                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No pending adjustments.</td></tr>
+                ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No pending adjustments.</td></tr>
                 : adjustments.map(a => (
                   <tr key={a.id}>
-                    <td className="px-4 py-3 font-medium">{a.employee_name || a.employee_code}</td>
+                    <td className="px-4 py-3"><RowCheckbox id={a.id} selectedIds={selectedIds} onToggle={toggleSelect} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={a.employee_code} name={a.employee_name} empMap={empMap} /></td>
                     <td className="px-4 py-3"><Badge tone={["Deduction","Penalty","Fine"].includes(a.type) ? "red" : "blue"}>{a.type}</Badge></td>
                     <td className="px-4 py-3 font-semibold">{money(a.amount)}</td>
                     <td className="px-4 py-3">{a.payroll_month}</td>
@@ -526,22 +654,32 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── FINAL SETTLEMENTS ── */}
-      {tab === "settlements" && !loading && (
+      {tab === "settlements" && !loading && (() => {
+        const actionableIds = settlements.map(s => s.id);
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Final Settlements</h2><p className="text-xs text-slate-400">{settlements.length} pending</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approveSettlement)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectSettlement)} />
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Branch","Resign Date","Last Working Day","Net Settlement","Supervisor","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Branch","Resign Date","Last Working Day","Net Settlement","Supervisor","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {settlements.length === 0
-                ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No pending settlements.</td></tr>
+                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending settlements.</td></tr>
                 : settlements.map(s => (
                   <tr key={s.id}>
-                    <td className="px-4 py-3 font-medium">{s.employee_name || s.employee_code}</td>
+                    <td className="px-4 py-3"><RowCheckbox id={s.id} selectedIds={selectedIds} onToggle={toggleSelect} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={s.employee_code} name={s.employee_name} empMap={empMap} /></td>
                     <td className="px-4 py-3">{s.branch || "—"}</td>
                     <td className="px-4 py-3">{s.resign_date || "—"}</td>
                     <td className="px-4 py-3">{s.last_working_day || "—"}</td>
@@ -559,22 +697,33 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── SALARY INCREMENTS ── */}
-      {tab === "increments" && !loading && (
+      {tab === "increments" && !loading && (() => {
+        const canActIncrement = ["Master", "GM"].includes(role);
+        const actionableIds = canActIncrement ? increments.map(inc => inc.id) : [];
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Salary Increments</h2><p className="text-xs text-slate-400">{increments.length} pending</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approveIncrement)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectIncrement)} />
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Branch","Old Salary","New Salary","Increment","Effective From","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Branch","Old Salary","New Salary","Increment","Effective From","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {increments.length === 0
-                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending increments.</td></tr>
+                ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No pending increments.</td></tr>
                 : increments.map(inc => (
                   <tr key={inc.id}>
-                    <td className="px-4 py-3 font-medium">{inc.employee_name || inc.employee_code}</td>
+                    <td className="px-4 py-3"><RowCheckbox id={inc.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canActIncrement} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={inc.employee_code} name={inc.employee_name} empMap={empMap} /></td>
                     <td className="px-4 py-3 text-slate-500">{empMap[inc.employee_code]?.branch || "—"}</td>
                     <td className="px-4 py-3">{money(inc.old_salary || 0)}</td>
                     <td className="px-4 py-3 font-semibold text-emerald-700">{money(inc.new_salary || 0)}</td>
@@ -589,29 +738,40 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         id={inc.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveIncrement} onReject={rejectIncrement}
-                        disabled={!["Master", "GM"].includes(role) || !!processingIncrementId} />
+                        disabled={!canActIncrement || !!processingIncrementId} />
                     </td>
                   </tr>
                 ))}
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── LOAN REQUESTS ── */}
-      {tab === "loans" && !loading && (
+      {tab === "loans" && !loading && (() => {
+        const canActLoan = ["Master", "GM"].includes(role);
+        const actionableIds = canActLoan ? loanRequests.map(l => l.id) : [];
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Requests</h2><p className="text-xs text-slate-400">{loanRequests.length} pending</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approveLoan)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectLoan)} />
           <table className="w-full min-w-[1000px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Loan Amount","Monthly Ded.","Months","Start Date","Guarantors","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Loan Amount","Monthly Ded.","Months","Start Date","Guarantors","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loanRequests.length === 0
-                ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No pending loan requests.</td></tr>
+                ? <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No pending loan requests.</td></tr>
                 : loanRequests.map(l => (
                   <tr key={l.id}>
-                    <td className="px-4 py-3 font-medium">{l.employee_name || l.employee_code}</td>
+                    <td className="px-4 py-3"><RowCheckbox id={l.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canActLoan} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={l.employee_code} name={l.employee_name} empMap={empMap} /></td>
                     <td className="px-4 py-3 font-semibold">{money(l.loan_amount)}</td>
                     <td className="px-4 py-3">{money(l.monthly_deduction)}</td>
                     <td className="px-4 py-3">{l.repayment_months || "—"}</td>
@@ -629,29 +789,40 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         id={l.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveLoan} onReject={rejectLoan}
-                        disabled={!["Master", "GM"].includes(role) || !!processingLoanId} />
+                        disabled={!canActLoan || !!processingLoanId} />
                     </td>
                   </tr>
                 ))}
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── LOAN CHANGE REQUESTS (RESCHEDULE / SKIP MONTH) ── */}
-      {tab === "loans" && !loading && (
+      {tab === "loans" && !loading && (() => {
+        const canActLoanChange = ["Master", "GM"].includes(role);
+        const actionableIds = canActLoanChange ? loanChangeRequests.map(c => c.id) : [];
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mt-4">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Change Requests</h2><p className="text-xs text-slate-400">{loanChangeRequests.length} pending — reschedule or skip-month requests on existing loans</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approveLoanChangeReq)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectLoanChangeReq)} />
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Type","Details","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Type","Details","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loanChangeRequests.length === 0
-                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No pending loan change requests.</td></tr>
+                ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No pending loan change requests.</td></tr>
                 : loanChangeRequests.map(c => (
                   <tr key={c.id}>
-                    <td className="px-4 py-3 font-medium">{empMap[c.employee_code]?.full_name || c.employee_code}</td>
+                    <td className="px-4 py-3"><RowCheckbox id={c.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canActLoanChange} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={c.employee_code} name={empMap[c.employee_code]?.full_name} empMap={empMap} /></td>
                     <td className="px-4 py-3"><Badge tone="blue">{c.change_type === "reschedule" ? "Reschedule" : "Skip Month"}</Badge></td>
                     <td className="px-4 py-3 text-xs text-slate-600">
                       {c.change_type === "reschedule"
@@ -666,32 +837,44 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                         id={c.id} rejectId={rejectId} setRejectId={setRejectId}
                         rejectNote={rejectNote} setRejectNote={setRejectNote}
                         onApprove={approveLoanChangeReq} onReject={rejectLoanChangeReq}
-                        disabled={!["Master", "GM"].includes(role) || !!processingLoanChangeId} />
+                        disabled={!canActLoanChange || !!processingLoanChangeId} />
                     </td>
                   </tr>
                 ))}
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── PAYMENT STATUS REQUESTS ── */}
-      {tab === "payment-status" && !loading && (
+      {tab === "payment-status" && !loading && (() => {
+        const actionableIds = paymentRequests
+          .filter(r => ["Master", "GM"].includes(role) && !(requiresMasterOnly(r.current_status, r.requested_status) && role !== "Master"))
+          .map(r => r.id);
+        return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payment Status Change Requests</h2><p className="text-xs text-slate-400">{paymentRequests.length} pending</p></div>
+          <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
+            onApprove={() => bulkApprove(selectedIn(actionableIds), approvePaymentReq)}
+            onReject={() => bulkReject(selectedIn(actionableIds), rejectPaymentReq)} />
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Month","From","To","Reason","Requested By","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>
+                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Month","From","To","Reason","Requested By","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paymentRequests.length === 0
-                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No pending payment status requests.</td></tr>
+                ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No pending payment status requests.</td></tr>
                 : paymentRequests.map(r => {
                   const masterOnly = requiresMasterOnly(r.current_status, r.requested_status);
                   const canApprove = ["Master", "GM"].includes(role) && !(masterOnly && role !== "Master");
                   return (
                     <tr key={r.id}>
-                      <td className="px-4 py-3 font-medium">{r.employee_name}<div className="text-xs text-slate-400">{r.employee_code}</div></td>
+                      <td className="px-4 py-3"><RowCheckbox id={r.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canApprove} /></td>
+                      <td className="px-4 py-3"><EmployeeCell code={r.employee_code} name={r.employee_name} empMap={empMap} /></td>
                       <td className="px-4 py-3">{r.payroll_month}</td>
                       <td className="px-4 py-3"><Badge tone="slate">{PAYMENT_STATUS_LABELS[r.current_status] || r.current_status}</Badge></td>
                       <td className="px-4 py-3">
@@ -713,7 +896,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
             </tbody>
           </table>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
