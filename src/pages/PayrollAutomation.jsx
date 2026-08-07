@@ -723,6 +723,21 @@ export default function PayrollAutomation({ role, actorName }) {
     // with the same rule on the Timesheet and Final Settlement pages.
     const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code" });
 
+    // Attendance is generated daily for every employee regardless of
+    // resignation status (confirmed: a resigned employee's post-departure
+    // days show up as real "Absent"/"Weekly Off" rows), so absentDeduction
+    // below already prorates a mid-month resignation correctly on its own.
+    // This tracks which dates actually have a row per employee so the
+    // resigned-employee proration further down only fills a *genuine* gap
+    // (e.g. a ZKT export outage) instead of double-deducting days that are
+    // already accounted for.
+    const attDatesByEmp = {};
+    (att || []).forEach(a => {
+      const c = a.employee_code;
+      if (!attDatesByEmp[c]) attDatesByEmp[c] = new Set();
+      attDatesByEmp[c].add(a.work_date);
+    });
+
     // Aggregate attendance per employee
     const attByEmp = {};
     (att || []).forEach(a => {
@@ -826,19 +841,23 @@ export default function PayrollAutomation({ role, actorName }) {
         otherEarnings: oneTimeAdj.otherEarnings || 0,
         otherDeductions: oneTimeAdj.otherDeductions || 0,
       };
-      // Resigned mid-month: monthlySalary is always paid in full by
-      // calculatePayrollForEmployee and the only day-based deduction is
-      // absentDeduction (dailyRate * absentDays) -- but no attendance rows
-      // exist past last_working_day, so those trailing days were never
-      // counted anywhere and the employee got a full month's pay. Fold the
-      // days after last_working_day into absentDays so the existing
-      // dailyRate * absentDays deduction prorates them out, same dailyRate
-      // (salary/30) convention Final Settlement already uses.
+      // Resigned mid-month: attendance already carries real Absent/Weekly
+      // Off rows for every day after last_working_day in the normal case,
+      // so absentDeduction (dailyRate * absentDays) already prorates this
+      // employee correctly via attByEmp above -- adding to absentDays again
+      // here would double-deduct. Only fill days that have NO attendance
+      // row at all (e.g. a ZKT export outage swallowed them), as a safety
+      // net so a genuine gap doesn't silently pay out in full instead.
       if (emp.status === "Resigned" && emp.last_working_day >= fromDate && emp.last_working_day <= toDate) {
         const daysInMonth = new Date(y, m, 0).getDate();
         const lastDayOfMonth = Number(emp.last_working_day.slice(8, 10));
-        const unemployedDays = daysInMonth - lastDayOfMonth;
-        adj.absentDays = Number(adj.absentDays || 0) + unemployedDays;
+        const trackedDates = attDatesByEmp[emp.employee_code] || new Set();
+        let missingDays = 0;
+        for (let d = lastDayOfMonth + 1; d <= daysInMonth; d++) {
+          const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          if (!trackedDates.has(dateStr)) missingDays++;
+        }
+        adj.absentDays = Number(adj.absentDays || 0) + missingDays;
       }
       const loanRows = [];
       const loanMatch = (loans || []).find(l =>
