@@ -472,6 +472,9 @@ export default function LoanManagement({ role }) {
                     <button onClick={() => setSelectedHistory(l.employee_code || l.employee_id)} className="font-medium text-blue-600 hover:underline">
                       {l.employee_name || l.employee_code || l.employee_id}
                     </button>
+                    {l.employee_name && (l.employee_code || l.employee_id) && (
+                      <div className="text-xs text-slate-400 font-mono">{l.employee_code || l.employee_id}</div>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {l.guarantor_1_name ? <div>{l.guarantor_1_code} — {l.guarantor_1_name}</div> : null}
