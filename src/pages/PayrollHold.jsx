@@ -43,6 +43,8 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
     .map(r => ({ ...r, emp: empByCode[r.employee_code] || {} })), [rows, empByCode]);
   const noFnfRows = useMemo(() => rows.filter(r => (r.payment_status || "Normal") === "No_FnF")
     .map(r => ({ ...r, emp: empByCode[r.employee_code] || {} })), [rows, empByCode]);
+  const fnfRows = useMemo(() => rows.filter(r => (r.payment_status || "Normal") === "FnF")
+    .map(r => ({ ...r, emp: empByCode[r.employee_code] || {} })), [rows, empByCode]);
 
   async function requestChange(row, target) {
     const reason = window.prompt(`Reason for requesting ${target === "Normal" ? "Payment" : "No F&F"} for ${row.emp.full_name || row.employee_code}?`);
@@ -128,6 +130,30 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
                       </Button>
                     )}
                   </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Section 3: F&F */}
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mt-6">
+        <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">F&F Employees</h2><p className="text-xs text-slate-400">{fnfRows.length} employees settled with amount payable</p></div>
+        <table className="w-full min-w-[880px] text-sm">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr>{["Employee", "Branch", "Department", "Month", "Amount", "Reason"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {fnfRows.length === 0
+              ? <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No employees marked F&F for {month}.</td></tr>
+              : fnfRows.map(r => (
+                <tr key={r.id}>
+                  <td className="px-4 py-3 font-medium">{r.emp.full_name || r.employee_code}<div className="text-xs text-slate-400">{r.employee_code}</div></td>
+                  <td className="px-4 py-3">{r.emp.branch || "—"}</td>
+                  <td className="px-4 py-3">{r.emp.department || "—"}</td>
+                  <td className="px-4 py-3">{month}</td>
+                  <td className="px-4 py-3 font-semibold">{money(r.net_salary)}</td>
+                  <td className="px-4 py-3 max-w-[200px] truncate">{r.payment_status_reason || "—"}</td>
                 </tr>
               ))}
           </tbody>
