@@ -101,7 +101,7 @@ export default function LoanManagement({ role }) {
   async function submitLoan() {
     if (!form.employee || !form.loan_amount || !form.monthly_deduction || !form.start_date)
       return setErr("Employee, loan amount, monthly deduction and start date are required.");
-    setErr("");
+    setErr(""); setMsg("");
     const months = Math.ceil(Number(form.loan_amount) / Number(form.monthly_deduction));
     const needsApproval = role === "HR";
     const { error } = await supabase.from("loans").insert({
@@ -114,21 +114,31 @@ export default function LoanManagement({ role }) {
       guarantor_1_code: form.guarantor1?.employee_code || null, guarantor_1_name: form.guarantor1?.full_name || null,
       guarantor_2_code: form.guarantor2?.employee_code || null, guarantor_2_name: form.guarantor2?.full_name || null,
     });
-    if (error) return setErr(error.message);
-    if (needsApproval) {
-      await notifyLoanProposed({
-        employeeName: form.employee.full_name, loanAmount: Number(form.loan_amount),
-        monthlyDeduction: Number(form.monthly_deduction), submittedByRole: role,
-      });
-      setMsg("Loan request submitted — awaiting Master/GM approval.");
-    } else {
-      await notifyLoanCreatedByMaster({
-        employeeName: form.employee.full_name, loanAmount: Number(form.loan_amount),
-        monthlyDeduction: Number(form.monthly_deduction),
-      });
-      setMsg("Loan application created successfully.");
+    if (error) { setErr(error.message); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+    // The loan row is already committed at this point — everything below is
+    // just notifications, so a failure there must never look like the
+    // submission itself silently did nothing (previously an uncaught
+    // rejection here would skip setMsg entirely, leaving HR with no
+    // confirmation either way even though the loan had actually gone through).
+    try {
+      if (needsApproval) {
+        await notifyLoanProposed({
+          employeeName: form.employee.full_name, loanAmount: Number(form.loan_amount),
+          monthlyDeduction: Number(form.monthly_deduction), submittedByRole: role,
+        });
+        setMsg("Loan request submitted — awaiting Master/GM approval.");
+      } else {
+        await notifyLoanCreatedByMaster({
+          employeeName: form.employee.full_name, loanAmount: Number(form.loan_amount),
+          monthlyDeduction: Number(form.monthly_deduction),
+        });
+        setMsg("Loan application created successfully.");
+      }
+    } catch {
+      setMsg("Loan submitted and saved (a notification failed to send, but the loan itself was recorded).");
     }
     setForm(BLANK); setShowForm(false); loadAll();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   // ─── Bulk Import ───────────────────────────────────────────────────────
