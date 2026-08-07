@@ -173,8 +173,8 @@ export default function FinalSettlement({ role }) {
 
     if (overrideMode) {
       await supabase.from("audit_logs").insert({
-        action: "settlement_master_override", entity: "employee", entity_id: selEmp.employee_code,
-        details: JSON.stringify({ reason: overrideReason, settlement }),
+        action_type: "settlement_master_override",
+        details: JSON.stringify({ employeeCode: selEmp.employee_code, reason: overrideReason, settlement }),
         performed_by: role || "Master", created_at: new Date().toISOString(),
       });
     }
