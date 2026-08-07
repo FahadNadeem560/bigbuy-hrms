@@ -734,7 +734,6 @@ export default function PayrollAutomation({ role, actorName }) {
       // of re-deriving "worked on a Sunday" here.
       if (a.extra_day_eligible) attByEmp[c].extraWorkingDays++;
       if (Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
-      attByEmp[c].otHours += Number(a.overtime_hours ?? a.ot_hours ?? 0);
       attByEmp[c].workedHours += Number(a.worked_hours || 0);
       // A day overridden to Weekly Off owed nothing — the DB's required_hours
       // still reflects the pre-override "Absent" classification (the roster
@@ -743,6 +742,18 @@ export default function PayrollAutomation({ role, actorName }) {
       // Required Hours total and any shortfall/variance derived from it for
       // an employee's legitimate day off. Matches Timesheet's rowRequiredHours().
       if (!isOverriddenOff) attByEmp[c].requiredHours += Number(a.required_hours || 0);
+    });
+
+    // OT is the month's NET excess (total worked - total required), not a
+    // sum of each day's individual positive overage -- summing daily
+    // overages paid OT for good days while separately docking short days,
+    // even when the employee finished the month behind overall. Confirmed
+    // against the old system's own numbers (employee 1169, July 2026:
+    // required 297 / worked 290.03 / OT 0 -- net short, so no OT despite
+    // most individual days running ~15-30 min over their own daily
+    // requirement).
+    Object.values(attByEmp).forEach(a => {
+      a.otHours = Math.max(0, roundN(a.workedHours - a.requiredHours, 2));
     });
 
     // Aggregate fines/shortages/advances per employee
