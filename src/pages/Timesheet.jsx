@@ -467,27 +467,32 @@ export default function Timesheet({ branchFilter, role }) {
     return fmt2(ledger.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
   }, [ledger]);
 
+  const EXEMPT_REQUIRED_HOURS_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave"];
+  function rowRequiredHours(row, policy) {
+    if (!policy) return 0;
+    const status = row.attendance_status || row.status;
+    if (EXEMPT_REQUIRED_HOURS_STATUSES.includes(status)) return 0;
+    const isFriday = new Date(`${row.work_date}T00:00:00`).getDay() === 5;
+    return isFriday ? policy.fridayHours : policy.requiredHours;
+  }
+
   const requiredHoursSummary = useMemo(() => {
     const policy = STAFF_LEVEL_POLICIES[selectedEmp?.staff_level];
     if (!policy) return { totalRequired: 0, variance: 0 };
-    const EXEMPT_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave"];
-    const totalRequired = ledger.reduce((sum, row) => {
-      const status = row.attendance_status || row.status;
-      if (EXEMPT_STATUSES.includes(status)) return sum;
-      const isFriday = new Date(`${row.work_date}T00:00:00`).getDay() === 5;
-      return sum + (isFriday ? policy.fridayHours : policy.requiredHours);
-    }, 0);
+    const totalRequired = ledger.reduce((sum, row) => sum + rowRequiredHours(row, policy), 0);
     return { totalRequired: fmt2(totalRequired), variance: fmt2(totalWorkedHours - totalRequired) };
   }, [selectedEmp, ledger, totalWorkedHours]);
 
   function exportExcel() {
     if (!selectedEmp) return;
+    const exportPolicy = STAFF_LEVEL_POLICIES[selectedEmp.staff_level];
     const ledgerRows = ledger.map((r) => ({
       "Employee Number": selectedEmp.employee_code,
       Date: r.work_date,
       Day: getDayName(r.work_date),
       In: formatTime(r.check_in || r.time_in),
       Out: formatTime(r.check_out || r.time_out),
+      "Required Hours": hoursToHHMM(rowRequiredHours(r, exportPolicy)),
       "Hours Worked": hoursToHHMM(r.actual_hours ?? r.hours_worked ?? 0),
       "Late (mins)": r.late_minutes || 0,
       "Short (hrs)": hoursToHHMM(r.short_hours || 0),
@@ -743,7 +748,7 @@ export default function Timesheet({ branchFilter, role }) {
               <table className="w-full min-w-[820px] text-sm print:min-w-0 print:text-[9px]">
                 <thead className="bg-slate-50 text-slate-500 print:bg-slate-200">
                   <tr>
-                    {["Date", "Day", "Shift", "In", "Out", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status",
+                    {["Date", "Day", "Shift", "In", "Out", "Required Hours", "Hours", "Late (min)", "Short (hrs)", "OT (hrs)", "Status",
                       ...(canToggle ? ["HD Exempt", "Late Exempt", "Holiday", "Adj Status", "Adjust"] : [])
                     ].map((h) => (
                       <th key={h} className={`text-left px-4 py-3 font-medium print:px-1.5 print:py-1 sticky top-0 z-10 bg-slate-50 print:static print:bg-slate-200 shadow-[0_1px_3px_rgba(0,0,0,0.08)] print:shadow-none ${canToggle && ["HD Exempt","Late Exempt","Holiday","Adj Status","Adjust"].includes(h) ? "print:hidden" : ""}`}>{h}</th>
@@ -753,13 +758,14 @@ export default function Timesheet({ branchFilter, role }) {
                 <tbody className="divide-y divide-slate-100">
                   {ledger.length === 0 ? (
                     <tr>
-                      <td colSpan={canToggle ? 15 : 10} className="px-4 py-10 text-center text-slate-400">
+                      <td colSpan={canToggle ? 16 : 11} className="px-4 py-10 text-center text-slate-400">
                         No attendance records found for this period.
                       </td>
                     </tr>
                   ) : (
                     ledger.map((row, i) => {
                       const status = row.attendance_status || row.status || "Pending";
+                      const rowPolicy = STAFF_LEVEL_POLICIES[selectedEmp.staff_level];
                       const shift = row.detected_shift;
                       const rowClass = status === "Absent" ? "bg-red-50/40"
                         : (status === "Weekly Off" || status === "Gazetted Holiday") ? "bg-slate-50/60"
@@ -777,6 +783,7 @@ export default function Timesheet({ branchFilter, role }) {
                           </td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : formatTime(row.check_in || row.time_in)}</td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : formatTime(row.check_out || row.time_out)}</td>
+                          <td className="px-4 py-3 print:px-1.5 print:py-0.5 text-slate-500">{hoursToHHMM(rowRequiredHours(row, rowPolicy))}</td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">{row.is_synthetic ? "—" : hoursToHHMM(row.actual_hours ?? row.hours_worked ?? 0)}</td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             {Number(row.late_minutes || 0) > 0 ? <span className="text-amber-600 font-medium">{row.late_minutes}</span> : "0"}
@@ -834,6 +841,7 @@ export default function Timesheet({ branchFilter, role }) {
                   <tfoot>
                     <tr className="bg-slate-50 font-semibold border-t-2 border-slate-200 print:bg-slate-100">
                       <td colSpan={5} className="px-4 py-3 text-right text-slate-600 print:px-1.5 print:py-1">Totals</td>
+                      <td className="px-4 py-3 print:px-1.5 print:py-1 text-slate-500">{hoursToHHMM(requiredHoursSummary.totalRequired)}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{hoursToHHMM(totalWorkedHours)}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{lateSummary.totalLateMins}</td>
                       <td className="px-4 py-3 print:px-1.5 print:py-1">{hoursToHHMM(shortSummary.totalShort)}</td>

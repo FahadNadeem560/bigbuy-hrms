@@ -661,14 +661,39 @@ export default function PayrollAutomation({ role, actorName }) {
     }
   }
 
+  // A full month's attendance across every employee is ~11,000 rows (July
+  // 2026) — PostgREST silently caps an unranged .select("*") well below
+  // that, so a plain query here was quietly truncating whichever employees
+  // didn't fit in the first page, undercounting their present/absent days
+  // and worked hours (confirmed: employee 1169 showed 139 worked hours in
+  // payroll vs. a real 290.28 in the Timesheet/DB). Page through with
+  // .range() until a page comes back short, same pattern already used in
+  // attendanceService.js's fetchRecentAttendance for exactly this reason.
+  async function fetchAllAttendanceForMonth(fromDate, toDate) {
+    const pageSize = 1000;
+    let all = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase.from("attendance").select("*")
+        .gte("work_date", fromDate).lte("work_date", toDate)
+        .order("work_date", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw error;
+      all = all.concat(data || []);
+      if (!data || data.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  }
+
   async function buildPayrollRows() {
     const fromDate = month + "-01";
     const [y, m] = month.split("-").map(Number);
     const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
     const numberOfWorkingDays = getWorkingDaysInMonth(y, m);
 
-    const [{ data: att }, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }] = await Promise.all([
-      supabase.from("attendance").select("*").gte("work_date", fromDate).lte("work_date", toDate),
+    const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }] = await Promise.all([
+      fetchAllAttendanceForMonth(fromDate, toDate),
       supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("advances").select("*").eq("advance_month", month).in("status", ["Issued", "Deducted"]),
@@ -828,16 +853,26 @@ export default function PayrollAutomation({ role, actorName }) {
     try {
       const rows = await buildPayrollRows();
       const payloadRows = buildPayloadRows(rows);
-      // Update existing payroll records (don't delete — preserve status)
+      // Update existing payroll records (don't delete — preserve status).
+      // Was one sequential awaited request per employee (~300 serial round
+      // trips for a full company, far slower than Generate's single bulk
+      // delete+insert) — run with limited concurrency instead, same batch
+      // pattern already used for paging attendance.
       let failed = 0;
       let firstError = "";
-      for (const r of payloadRows) {
-        const { error } = await supabase.from("payroll")
-          .update({ ...r, generated_at: new Date().toISOString() })
-          .eq("payroll_month", month)
-          .eq("employee_code", r.employee_code);
-        if (error) { failed++; firstError = firstError || error.message; }
+      const concurrency = 8;
+      let cursor = 0;
+      async function updateWorker() {
+        while (cursor < payloadRows.length) {
+          const r = payloadRows[cursor++];
+          const { error } = await supabase.from("payroll")
+            .update({ ...r, generated_at: new Date().toISOString() })
+            .eq("payroll_month", month)
+            .eq("employee_code", r.employee_code);
+          if (error) { failed++; firstError = firstError || error.message; }
+        }
       }
+      await Promise.all(Array.from({ length: Math.min(concurrency, payloadRows.length) }, updateWorker));
       await loadPayroll();
       const ts = new Date().toLocaleTimeString("en-PK");
       if (failed > 0) {
