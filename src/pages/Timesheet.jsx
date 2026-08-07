@@ -5,6 +5,7 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
+import { getWeeklyOffOverrideKeys } from "../utils/attendanceRules.js";
 
 const SHORT_TOLERANCE = 1.5;
 const OT_TOLERANCE = 1.5;
@@ -403,22 +404,49 @@ export default function Timesheet({ branchFilter, role }) {
     roster.forEach((r) => { rosterByDate[r.roster_date] = r; });
     const todayStr = fmtDate(new Date());
 
-    return enumerateDates(fromDate, toDate)
+    const base = enumerateDates(fromDate, toDate)
       .map((date) => {
-        if (byDate[date]) return byDate[date];
+        if (byDate[date]) return { ...byDate[date] };
         if (date > todayStr) return null;
         const rosterEntry = rosterByDate[date];
-        let status = "Absent";
-        if (rosterEntry?.is_weekly_off) status = "Weekly Off";
-        else if (rosterEntry?.is_gazetted_holiday) status = "Gazetted Holiday";
+        // Weekly off is no longer roster-driven (the roster table isn't kept
+        // current) — see the Mon-Fri single-absence rule applied below.
+        // Gazetted holidays still come from the roster since that's a
+        // separate, explicitly-marked concept.
+        const status = rosterEntry?.is_gazetted_holiday ? "Gazetted Holiday" : "Absent";
         return { work_date: date, attendance_status: status, is_synthetic: true };
       })
       .filter(Boolean);
+
+    // One employee at a time here, so no employeeKey grouping needed — see
+    // getWeeklyOffOverrideKeys for the shared Mon-Fri single-absence rule
+    // (also applied in PayrollAutomation.jsx and FinalSettlement.jsx so
+    // "Absent" means the same thing, and costs the same deduction, everywhere).
+    const overrideDates = getWeeklyOffOverrideKeys(base);
+    base.forEach((row) => {
+      if (overrideDates.has(row.work_date)) row.attendance_status = "Weekly Off";
+    });
+
+    return base;
   }, [selectedEmp, attendance, roster, fromDate, toDate]);
+
+  const requiredHoursSummary = useMemo(() => {
+    const policy = STAFF_LEVEL_POLICIES[selectedEmp?.staff_level];
+    if (!policy) return { totalRequired: 0, variance: 0 };
+    const EXEMPT_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave"];
+    const totalRequired = ledger.reduce((sum, row) => {
+      const status = row.attendance_status || row.status;
+      if (EXEMPT_STATUSES.includes(status)) return sum;
+      const isFriday = new Date(`${row.work_date}T00:00:00`).getDay() === 5;
+      return sum + (isFriday ? policy.fridayHours : policy.requiredHours);
+    }, 0);
+    return { totalRequired: fmt2(totalRequired), variance: fmt2(totalWorkedHours - totalRequired) };
+  }, [selectedEmp, ledger, totalWorkedHours]);
 
   function exportExcel() {
     if (!selectedEmp) return;
     const ledgerRows = ledger.map((r) => ({
+      "Employee Number": selectedEmp.employee_code,
       Date: r.work_date,
       Day: getDayName(r.work_date),
       In: formatTime(r.check_in || r.time_in),
@@ -431,6 +459,11 @@ export default function Timesheet({ branchFilter, role }) {
     }));
 
     const summaryRows = [
+      {},
+      { Date: "--- REQUIRED HOURS SUMMARY ---" },
+      { Date: "Total Required Hours", Day: requiredHoursSummary.totalRequired },
+      { Date: "Total Worked Hours", Day: totalWorkedHours },
+      { Date: "Variance (Worked - Required)", Day: requiredHoursSummary.variance },
       {},
       { Date: "--- LATE SUMMARY ---" },
       { Date: "Total Late Count", Day: lateSummary.totalLateCount },
@@ -657,6 +690,13 @@ export default function Timesheet({ branchFilter, role }) {
                 <h2 className="font-bold text-slate-800 print:text-sm">Attendance Ledger</h2>
                 <p className="text-xs text-slate-400 mt-0.5 print:hidden">
                   {fromDate} — {toDate} · {ledger.length} day{ledger.length !== 1 ? "s" : ""}
+                </p>
+                <p className="text-xs mt-1.5 print:hidden">
+                  <span className="text-slate-500">Required Hours: <span className="font-semibold text-slate-700">{requiredHoursSummary.totalRequired}</span></span>
+                  <span className="mx-2 text-slate-300">|</span>
+                  <span className="text-slate-500">Worked Hours: <span className="font-semibold text-slate-700">{totalWorkedHours}</span></span>
+                  <span className="mx-2 text-slate-300">|</span>
+                  <span className="text-slate-500">Variance: <span className={`font-semibold ${requiredHoursSummary.variance < 0 ? "text-red-500" : "text-green-600"}`}>{requiredHoursSummary.variance > 0 ? "+" : ""}{requiredHoursSummary.variance}</span></span>
                 </p>
                 {notice && <p className="text-xs text-blue-700 bg-blue-50 rounded-lg px-3 py-1.5 mt-2 inline-block print:hidden">{notice}</p>}
               </div>

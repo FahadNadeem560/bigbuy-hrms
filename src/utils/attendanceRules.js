@@ -5,6 +5,57 @@ export function getPolicyForLevel(level) {
   return STAFF_LEVEL_POLICIES[level] || STAFF_LEVEL_POLICIES["Non-Management"];
 }
 
+// Company policy: every employee gets one unpaid day off per week, taken
+// Mon-Fri only (Sat/Sun are working days at this business, not eligible as
+// an off day). Rather than relying on a pre-generated roster (which isn't
+// kept current — see attendance_pipeline_gotchas), a week's single Mon-Fri
+// Absent day is treated as that week's off day instead of a real absence.
+// Weeks with zero or more than one such Absent day are left as-is since the
+// intended off day is ambiguous.
+//
+// Shared by Timesheet.jsx, PayrollAutomation.jsx and FinalSettlement.jsx so
+// "Absent" always means the same thing — and costs the same deduction —
+// everywhere it's read.
+function fmtDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// rows: array of objects with at least a date field and a status field.
+// employeeKey: pass null/undefined when rows are already scoped to one
+// employee (e.g. FinalSettlement's per-employee fetch); pass the field name
+// to group by when rows span multiple employees (e.g. payroll's month-wide
+// fetch).
+// Returns a Set of override keys: `${date}` (no employeeKey) or
+// `${employee_code}|${date}` (with employeeKey) for rows that should read
+// as "Weekly Off" instead of "Absent".
+export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null } = {}) {
+  const weeks = {};
+  (rows || []).forEach((row) => {
+    const status = row[statusKey];
+    if (status !== "Absent") return;
+    const dateStr = row[dateKey];
+    if (!dateStr) return;
+    const d = new Date(`${dateStr}T00:00:00`);
+    const dow = d.getDay(); // 0=Sun..6=Sat
+    if (dow === 0 || dow === 6) return;
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - (dow - 1));
+    const empPart = employeeKey ? `${row[employeeKey]}|` : "";
+    const weekKey = `${empPart}${fmtDate(monday)}`;
+    (weeks[weekKey] ||= []).push(row);
+  });
+
+  const overrideKeys = new Set();
+  Object.values(weeks).forEach((group) => {
+    if (group.length === 1) {
+      const row = group[0];
+      const empPart = employeeKey ? `${row[employeeKey]}|` : "";
+      overrideKeys.add(`${empPart}${row[dateKey]}`);
+    }
+  });
+  return overrideKeys;
+}
+
 // Detect shift from punch-in time.
 // Returns { shift: 'A' | 'B' | 'HalfDay' | null, shiftStart: minutes, graceMinutes }
 export function detectShift(checkIn) {

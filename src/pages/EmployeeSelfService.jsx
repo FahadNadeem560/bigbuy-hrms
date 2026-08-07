@@ -18,6 +18,12 @@ const BASE_TABS = [
 
 const BLANK_TIME_LOG = { date: "", timeIn: "", timeOut: "", location: "", remarks: "" };
 
+function fmtDatePlusOneDay(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 const SHORT_TOLERANCE = 1.5;
 const OT_TOLERANCE = 1.5;
 const LATE_WARNING_COUNT = 2;
@@ -368,11 +374,16 @@ export default function EmployeeSelfService({ profile: authProfile }) {
     if (entryDate < cutoff) { setTimeLogMsg("Date must be within the last 48 hours."); return; }
     setTimeLogSubmitting(true); setTimeLogMsg("");
     try {
-      const inTime = timeLogForm.date + "T" + timeLogForm.timeIn + ":00";
-      const outTime = timeLogForm.date + "T" + timeLogForm.timeOut + ":00";
       const inMin = timeLogForm.timeIn.split(":").reduce((h, m) => h * 60 + parseInt(m), 0);
       const outMin = timeLogForm.timeOut.split(":").reduce((h, m) => h * 60 + parseInt(m), 0);
-      const actualHours = Math.max(0, Math.round((outMin - inMin) / 60 * 100) / 100);
+      // A time-out earlier than time-in means the employee checked out after
+      // midnight (overnight shift) — roll check-out onto the next calendar
+      // day instead of silently producing 0 (or negative-clamped) hours.
+      const overnight = outMin < inMin;
+      const inTime = timeLogForm.date + "T" + timeLogForm.timeIn + ":00";
+      const outDate = overnight ? fmtDatePlusOneDay(timeLogForm.date) : timeLogForm.date;
+      const outTime = outDate + "T" + timeLogForm.timeOut + ":00";
+      const actualHours = Math.round(((overnight ? outMin + 24 * 60 : outMin) - inMin) / 60 * 100) / 100;
       const { error } = await supabase.from("attendance").insert({
         employee_code: session.employee_code,
         work_date: timeLogForm.date,
@@ -909,6 +920,9 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                       <p className="text-xs text-slate-500 mb-1">Time Out *</p>
                       <input type="time" value={timeLogForm.timeOut} onChange={e => setTimeLogForm(f => ({ ...f, timeOut: e.target.value }))} required
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+                      {timeLogForm.timeIn && timeLogForm.timeOut && timeLogForm.timeOut < timeLogForm.timeIn && (
+                        <p className="text-xs text-blue-500 mt-1">Time out is earlier than time in — this will be logged as checking out after midnight the next day.</p>
+                      )}
                     </div>
                     <div>
                       <p className="text-xs text-slate-500 mb-1">Location / Site</p>

@@ -21,12 +21,12 @@ function cnicExpiryStatus(expiryDate) {
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // Company policy: Admin/Warehouse staff always get Sunday off; Floor Management
-// and Non-Management (sales/support floor staff) can only be off Mon-Thu;
-// Management staff default to Sunday.
+// and Non-Management (sales/support floor staff) can be off any one day
+// Mon-Fri, excluding the Sat/Sun weekend; Management staff default to Sunday.
 function allowedOffDays(department, level) {
   const dept = String(department || "").toLowerCase();
   if (dept.startsWith("admin") || dept.startsWith("warehouse")) return [0];
-  if (level === "Floor Management" || level === "Non-Management") return [1, 2, 3, 4];
+  if (level === "Floor Management" || level === "Non-Management") return [1, 2, 3, 4, 5];
   return [0];
 }
 

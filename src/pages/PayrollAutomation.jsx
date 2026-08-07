@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { calculatePayrollForEmployee, getWorkingDaysInMonth } from "../utils/payrollRules.js";
+import { getWeeklyOffOverrideKeys } from "../utils/attendanceRules.js";
 import * as XLSX from "xlsx";
 import {
   PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, PAYMENT_STATUS_TONES,
@@ -680,17 +681,26 @@ export default function PayrollAutomation({ role, actorName }) {
     const skippedLoanIds = new Set((loanReliefData || []).map(r => r.loan_id));
     const groupByCode = Object.fromEntries((groupsData || []).map(g => [g.code, g]));
 
+    // Every employee gets one unpaid Mon-Fri day off per week; a week's lone
+    // Mon-Fri Absent day is that off day, not a real absence (see
+    // getWeeklyOffOverrideKeys) — otherwise absentDeduction in payrollRules.js
+    // would wrongly dock a day's pay for it. Applied here so it's consistent
+    // with the same rule on the Timesheet and Final Settlement pages.
+    const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code" });
+
     // Aggregate attendance per employee
     const attByEmp = {};
     (att || []).forEach(a => {
       const c = a.employee_code;
       if (!attByEmp[c]) attByEmp[c] = {
-        presentDays: 0, absentDays: 0, halfDays: 0,
+        presentDays: 0, absentDays: 0, halfDays: 0, weeklyOffDays: 0,
         lateCount: 0, otHours: 0, extraWorkingDays: 0, leaveDaysUsed: 0, numberOfWorkingDays,
         workedHours: 0, requiredHours: 0,
       };
-      const s = a.attendance_status || a.status || "";
+      const isOverriddenOff = weeklyOffOverrides.has(`${c}|${a.work_date}`);
+      const s = isOverriddenOff ? "Weekly Off" : (a.attendance_status || a.status || "");
       if (s === "Absent") { attByEmp[c].absentDays++; }
+      else if (s === "Weekly Off") { attByEmp[c].weeklyOffDays++; }
       else if (s === "Half Day" || s === "HalfDay") { attByEmp[c].presentDays++; attByEmp[c].halfDays++; }
       else if (s === "Leave") { attByEmp[c].leaveDaysUsed++; }
       else { attByEmp[c].presentDays++; }

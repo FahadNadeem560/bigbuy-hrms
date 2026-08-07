@@ -130,6 +130,7 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     numberOfWorkingDays,
     presentDays:   Number(adjustments.presentDays || 0),
     absentDays:    Number(adjustments.absentDays || 0),
+    weeklyOffDays: Number(adjustments.weeklyOffDays || 0),
     lateCount:     Number(adjustments.lateCount || 0),
     otHours,
     workedHours,

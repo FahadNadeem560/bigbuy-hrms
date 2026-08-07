@@ -218,13 +218,22 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
     };
     const { data: existing } = await supabase.from("attendance").select("id")
       .eq("employee_code", item.employee_code).eq("work_date", item.attendance_date).maybeSingle();
+    let attendanceRowId = existing?.id || null;
     if (existing) {
       await supabase.from("attendance").update(attUpdate).eq("id", existing.id);
     } else {
-      await supabase.from("attendance").insert({
+      const { data: inserted } = await supabase.from("attendance").insert({
         employee_code: item.employee_code, work_date: item.attendance_date, attendance_date: item.attendance_date,
         ...attUpdate,
-      });
+      }).select("id").single();
+      attendanceRowId = inserted?.id || null;
+    }
+
+    // Recalculate status/late/short/OT against the corrected punches instead
+    // of leaving them stale from before the correction (mirrors the fix on
+    // the Attendance Adjustments page — same underlying issue, same fix).
+    if (attendanceRowId) {
+      await supabase.rpc("reclassify_attendance_row", { p_attendance_id: attendanceRowId });
     }
 
     await notify(item.adjusted_by, "attendance_adjustment", "Time Adjustment Approved",

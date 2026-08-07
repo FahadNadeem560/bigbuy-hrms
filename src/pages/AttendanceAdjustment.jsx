@@ -38,7 +38,7 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-const BLANK_FORM = { employee: null, work_date: "", original_in: "", original_out: "", adjusted_in: "", adjusted_out: "", reason: "" };
+const BLANK_FORM = { employee: null, work_date: "", original_in: "", original_out: "", adjusted_in: "", adjusted_out: "", adjusted_out_date: "", reason: "" };
 
 function toTimeInput(t) {
   if (!t) return "";
@@ -71,6 +71,16 @@ export default function AttendanceAdjustment({ role }) {
 
   useEffect(() => { loadAll(); }, []);
 
+  const previewHours = useMemo(() => {
+    if (!form.work_date || !form.adjusted_in || !form.adjusted_out) return null;
+    const outDate = form.adjusted_out_date || form.work_date;
+    const inTs = new Date(`${form.work_date}T${form.adjusted_in}:00`);
+    const outTs = new Date(`${outDate}T${form.adjusted_out}:00`);
+    const hrs = (outTs - inTs) / 3600000;
+    if (!Number.isFinite(hrs) || hrs < 0) return null;
+    return Math.round(hrs * 100) / 100;
+  }, [form.work_date, form.adjusted_in, form.adjusted_out, form.adjusted_out_date]);
+
   // Auto-fetch the real punch times so the form doesn't require typing the
   // original in/out from memory — only the corrected values need entering.
   useEffect(() => {
@@ -84,7 +94,11 @@ export default function AttendanceAdjustment({ role }) {
         setOriginalRow(data || null);
         const origIn = toTimeInput(data?.check_in || data?.first_check_in);
         const origOut = toTimeInput(data?.check_out || data?.last_check_out);
-        setForm(f => ({ ...f, original_in: origIn, original_out: origOut, adjusted_in: f.adjusted_in || origIn, adjusted_out: f.adjusted_out || origOut }));
+        setForm(f => ({
+          ...f, original_in: origIn, original_out: origOut,
+          adjusted_in: f.adjusted_in || origIn, adjusted_out: f.adjusted_out || origOut,
+          adjusted_out_date: f.adjusted_out_date || f.work_date,
+        }));
       });
     return () => { active = false; };
   }, [form.employee, form.work_date]);
@@ -132,9 +146,16 @@ export default function AttendanceAdjustment({ role }) {
     const { error } = await supabase.from("attendance").update({
       manual_entry_status: "Approved",
       manual_entry_approved_by: role || "HR",
+      review_status: "Locked",
       updated_at: now,
     }).eq("id", entry.id);
     if (error) { setErr(error.message); return; }
+    // The self-submitted row is left at attendance_status "Pending" with no
+    // late/short/OT computed until this reclassifies it against the same
+    // rules the rest of the pipeline uses (same root cause as the manual
+    // adjustment hours bug — approving alone never computed these fields).
+    const { error: reclassifyErr } = await supabase.rpc("reclassify_attendance_row", { p_attendance_id: entry.id });
+    if (reclassifyErr) setErr(`Entry approved, but recalculating status/hours failed: ${reclassifyErr.message}`);
     await supabase.from("audit_logs").insert({
       action: "manual_entry_approved", entity: "attendance", entity_id: entry.id,
       performed_by: role || "HR",
@@ -169,6 +190,7 @@ export default function AttendanceAdjustment({ role }) {
     if (!form.adjusted_in && !form.adjusted_out) return setErr("Enter at least one corrected time.");
     setErr("");
     const now = new Date().toISOString();
+    const outDate = form.adjusted_out_date || form.work_date;
     // Column names here must match the live attendance_adjustments table
     // (attendance_date, original_check_in/out, adjusted_check_in/out) — not
     // work_date/original_in/adjusted_in, which don't exist on this table and
@@ -176,10 +198,13 @@ export default function AttendanceAdjustment({ role }) {
     const payload = {
       employee_code: form.employee.employee_code,
       attendance_date: form.work_date,
-      original_check_in: form.original_in ? `${form.work_date}T${form.original_in}:00` : null,
-      original_check_out: form.original_out ? `${form.work_date}T${form.original_out}:00` : null,
+      // Use the original row's real timestamps (already correct across
+      // midnight) instead of reconstructing from the HH:mm display value +
+      // work_date, which silently forced the wrong date for overnight shifts.
+      original_check_in: originalRow?.check_in || originalRow?.first_check_in || null,
+      original_check_out: originalRow?.check_out || originalRow?.last_check_out || null,
       adjusted_check_in: form.adjusted_in ? `${form.work_date}T${form.adjusted_in}:00` : null,
-      adjusted_check_out: form.adjusted_out ? `${form.work_date}T${form.adjusted_out}:00` : null,
+      adjusted_check_out: form.adjusted_out ? `${outDate}T${form.adjusted_out}:00` : null,
       reason: form.reason, adjusted_by: role || "HR", adjusted_at: now,
       // This page applies the correction immediately (unlike the Timesheet's
       // quick-adjust button, which routes through Master/GM approval) — mark
@@ -194,7 +219,7 @@ export default function AttendanceAdjustment({ role }) {
     // audit entry disconnected from what everyone else sees. Locking it
     // protects the correction from being overwritten by the next ZKT re-sync.
     const checkInTs = form.adjusted_in ? `${form.work_date}T${form.adjusted_in}:00` : null;
-    const checkOutTs = form.adjusted_out ? `${form.work_date}T${form.adjusted_out}:00` : null;
+    const checkOutTs = form.adjusted_out ? `${outDate}T${form.adjusted_out}:00` : null;
     const workedHours = (checkInTs && checkOutTs)
       ? Math.max(0, Math.round(((new Date(checkOutTs) - new Date(checkInTs)) / 3600000) * 100) / 100)
       : (originalRow?.actual_hours ?? originalRow?.worked_hours ?? null);
@@ -206,13 +231,26 @@ export default function AttendanceAdjustment({ role }) {
       adjustment_status: "Adjusted", adjustment_approved_by: role || "HR",
       review_status: "Locked",
     };
+    let attendanceRowId = originalRow?.id || null;
     if (originalRow) {
       await supabase.from("attendance").update(attUpdate).eq("id", originalRow.id);
     } else {
-      await supabase.from("attendance").insert({
+      const { data: inserted } = await supabase.from("attendance").insert({
         employee_code: form.employee.employee_code, work_date: form.work_date, attendance_date: form.work_date,
         ...attUpdate,
-      });
+      }).select("id").single();
+      attendanceRowId = inserted?.id || null;
+    }
+
+    // Status/late/short/OT are derived fields that a plain time correction
+    // leaves stale (they were computed for the pre-adjustment punches, e.g.
+    // a corrected 21-hr overnight shift still showing "Short Hours" from the
+    // original 0-hour reading) — reclassify server-side against the same
+    // rules process_daily_attendance uses so the row is fully consistent,
+    // not just check_in/check_out.
+    if (attendanceRowId) {
+      const { error: reclassifyErr } = await supabase.rpc("reclassify_attendance_row", { p_attendance_id: attendanceRowId });
+      if (reclassifyErr) setErr(`Adjustment saved, but recalculating status/hours failed: ${reclassifyErr.message}`);
     }
 
     await supabase.from("audit_logs").insert({
@@ -259,7 +297,7 @@ export default function AttendanceAdjustment({ role }) {
           <h2 className="font-bold text-slate-800 mb-4">New Attendance Adjustment</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div><p className="text-xs text-slate-500 mb-1">Employee</p><EmpPicker employees={employees} value={form.employee} onChange={v => setForm(f => ({ ...f, employee: v, adjusted_in: "", adjusted_out: "" }))} /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Date</p><input type="date" value={form.work_date} onChange={e => setForm(f => ({ ...f, work_date: e.target.value, adjusted_in: "", adjusted_out: "" }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Date</p><input type="date" value={form.work_date} onChange={e => setForm(f => ({ ...f, work_date: e.target.value, adjusted_in: "", adjusted_out: "", adjusted_out_date: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             <div className="lg:col-span-1" />
             <div>
               <p className="text-xs text-slate-500 mb-1">Original In {originalRow === undefined ? "" : originalRow ? "(recorded)" : "(no record)"}</p>
@@ -275,10 +313,22 @@ export default function AttendanceAdjustment({ role }) {
             </div>
             <div className="lg:col-span-1" />
             <div><p className="text-xs text-slate-500 mb-1">Corrected In</p><input type="time" value={form.adjusted_in} onChange={e => setForm(f => ({ ...f, adjusted_in: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-blue-200 text-sm" /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Corrected Out</p><input type="time" value={form.adjusted_out} onChange={e => setForm(f => ({ ...f, adjusted_out: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-blue-200 text-sm" /></div>
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Corrected Out</p>
+              <div className="flex gap-2">
+                <input type="time" value={form.adjusted_out} onChange={e => setForm(f => ({ ...f, adjusted_out: e.target.value }))} className="w-1/2 px-4 py-2 rounded-xl border border-blue-200 text-sm" />
+                <input type="date" value={form.adjusted_out_date || form.work_date} min={form.work_date || undefined}
+                  onChange={e => setForm(f => ({ ...f, adjusted_out_date: e.target.value }))}
+                  className="w-1/2 px-2 py-2 rounded-xl border border-blue-200 text-sm" title="Check-out date — change this if the employee checked out after midnight" />
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Hours (preview)</p>
+              <div className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm bg-slate-50 text-slate-700 font-medium">{previewHours === null ? "—" : `${previewHours} hrs`}</div>
+            </div>
             <div className="lg:col-span-3"><p className="text-xs text-slate-500 mb-1">Reason</p><input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
           </div>
-          <p className="text-xs text-slate-400 mt-2">Original times are pulled automatically from the recorded attendance for that day — only enter the corrected time(s).</p>
+          <p className="text-xs text-slate-400 mt-2">Original times are pulled automatically from the recorded attendance for that day — only enter the corrected time(s). If the employee checked out after midnight, set the Corrected Out date to the next day.</p>
           <div className="mt-4 flex gap-2">
             <Button onClick={saveAdjustment} className="rounded-2xl">Save Adjustment</Button>
             <Button variant="outline" onClick={() => { setShowForm(false); setForm(BLANK_FORM); setOriginalRow(undefined); }} className="rounded-2xl">Cancel</Button>

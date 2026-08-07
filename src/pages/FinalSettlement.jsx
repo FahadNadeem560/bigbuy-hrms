@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
+import { getWeeklyOffOverrideKeys } from "../utils/attendanceRules.js";
 
 // Calendar days required per staff level (no exclusions)
 const NOTICE_CALENDAR_DAYS = {
@@ -108,9 +109,14 @@ export default function FinalSettlement({ role }) {
   const attendanceSummary = useMemo(() => {
     const PRESENT_STATUSES = ["Present", "Late", "Half Day", "Gazetted Holiday"];
     const WEEKLY_OFF_STATUSES = ["Weekly Off", "Day Off", "Off"];
+    // Single employee's data here, so no employeeKey grouping needed — see
+    // getWeeklyOffOverrideKeys for the shared Mon-Fri single-absence rule
+    // (also applied on Timesheet and Payroll so "Absent" means the same
+    // thing, and costs the same deduction, everywhere).
+    const overrideDates = getWeeklyOffOverrideKeys(attendanceData);
     let daysPresent = 0, weeklyOffs = 0, absentDays = 0;
     for (const a of attendanceData) {
-      const s = a.attendance_status || "";
+      const s = overrideDates.has(a.work_date) ? "Weekly Off" : (a.attendance_status || "");
       if (PRESENT_STATUSES.includes(s)) daysPresent++;
       else if (WEEKLY_OFF_STATUSES.includes(s)) weeklyOffs++;
       else if (s === "Absent") absentDays++;
