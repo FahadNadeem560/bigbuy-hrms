@@ -164,7 +164,6 @@ export default function FinalSettlement({ role }) {
   async function processSettlement() {
     if (!selEmp || !resignDate || !lastDay) return setErr("Complete all resignation details first.");
     if (isAbsconding && !overrideMode) return setErr("Cannot process: absconding case. Master override required.");
-    if (!noticeComplete && !overrideMode) return setErr("Notice period incomplete. Override required to proceed.");
     setErr("");
 
     // Zero out all leave balances on resignation
