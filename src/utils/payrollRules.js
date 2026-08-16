@@ -35,7 +35,7 @@ export function getWorkingDaysInMonth(year, month) {
   return count;
 }
 
-export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows = [], taxSlabs = [], month = null) {
+export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows = [], taxSlabs = [], month = null, taxSetting = null) {
   const policy = getPolicyForLevel(employee.level);
   const monthlySalary = Number(employee.salary || 0);
   const isExempt = !!employee.isAttendanceExempt;
@@ -101,7 +101,13 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const shortageDeduction = Number(adjustments.shortageDeduction || 0);
   const advanceDeduction  = Number(adjustments.advanceDeduction || adjustments.advance || 0);
   const loanDeduction     = loanRows.find(l => l.employeeCode === employee.id)?.monthly || 0;
-  const taxDeduction      = calculateMonthlyTax(monthlySalary * 12, taxSlabs);
+  // Manual/Exempt mode set on Tax Management (employee_tax_settings) must
+  // supersede the auto FBR-slab calculation, not just display alongside it.
+  const taxMode = taxSetting?.tax_mode || "auto";
+  const taxDeduction =
+    taxMode === "manual" ? Number(taxSetting?.manual_tax_amount || 0) :
+    taxMode === "exempt" ? 0 :
+    calculateMonthlyTax(monthlySalary * 12, taxSlabs);
   const eobiDeduction     = EOBI_EMPLOYEE_CONTRIBUTION;
   const otherDeductions   = Number(adjustments.otherDeductions || 0);
 

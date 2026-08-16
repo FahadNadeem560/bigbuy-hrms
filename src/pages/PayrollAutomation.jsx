@@ -702,7 +702,7 @@ export default function PayrollAutomation({ role, actorName }) {
     const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
     const numberOfWorkingDays = getWorkingDaysInMonth(y, m);
 
-    const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }] = await Promise.all([
+    const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }, { data: taxSlabsData }, { data: taxSettingsData }] = await Promise.all([
       fetchAllAttendanceForMonth(fromDate, toDate),
       supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
@@ -712,9 +712,15 @@ export default function PayrollAutomation({ role, actorName }) {
       // Approved Skip Month requests for this month -- exclude these loans'
       // deduction below (LoanManagement.jsx's Skip Month / Approval Queue).
       supabase.from("loan_changes").select("loan_id").eq("change_type", "relief").eq("status", "Approved").eq("effective_month", month),
+      supabase.from("tax_slabs").select("*").order("min_amount"),
+      // Tax Management page (TaxManagement.jsx) lets Master/Finance set a
+      // per-employee Manual amount or Exempt status -- this must override
+      // the auto slab calculation below, not just be a display-only setting.
+      supabase.from("employee_tax_settings").select("*"),
     ]);
     const skippedLoanIds = new Set((loanReliefData || []).map(r => r.loan_id));
     const groupByCode = Object.fromEntries((groupsData || []).map(g => [g.code, g]));
+    const taxSettingByEmp = Object.fromEntries((taxSettingsData || []).map(t => [t.employee_code, t]));
 
     // Every employee gets one unpaid Mon-Fri day off per week; a week's lone
     // Mon-Fri Absent day is that off day, not a real absence (see
@@ -864,7 +870,8 @@ export default function PayrollAutomation({ role, actorName }) {
         l.employee_code === emp.employee_code || l.employee_id === emp.employee_code
       );
       if (loanMatch && !skippedLoanIds.has(loanMatch.id)) loanRows.push({ employeeCode: emp.employee_code, monthly: Number(loanMatch.monthly_deduction || 0) });
-      return calculatePayrollForEmployee(empMapped, adj, loanRows, [], month);
+      const taxSetting = taxSettingByEmp[emp.employee_code];
+      return calculatePayrollForEmployee(empMapped, adj, loanRows, taxSlabsData || [], month, taxSetting);
     });
 
     return rows;
