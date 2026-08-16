@@ -43,6 +43,7 @@ export function normalizeImportRow(row) {
     phone,
     whatsapp_number: phone,
     cnic: clean.cnic || clean.nic_number || clean.nic || "",
+    fathers_name: clean.fathers_name || clean.father_name || "",
     fathers_cnic: clean.fathers_cnic || clean.father_cnic || clean.father_nic || "",
     joining_date: clean.joining_date || clean.date_of_joining || "",
     eobi_status: clean.eobi_status || clean.eobi || "Pending",

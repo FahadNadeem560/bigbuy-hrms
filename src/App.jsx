@@ -68,7 +68,7 @@ function mapAttendanceRow(row) {
 
 const BLANK_EMPLOYEE = {
   branch: "Main Branch", fullName: "", designation: "", department: "",
-  level: "Non-Management", salary: "", phone: "", cnic: "", fathersCnic: "",
+  level: "Non-Management", salary: "", phone: "", cnic: "", fathersName: "", fathersCnic: "",
   joiningDate: "", employeeType: "Permanent",
   cnicIssueDate: "", cnicExpiryDate: "",
   referencePersonName: "", referencePersonContact: "",
@@ -246,7 +246,7 @@ export default function BigBuyHRMS({ profile }) {
       department: newEmployee.department, branch: newEmployee.branch, staff_level: newEmployee.level,
       employee_type: newEmployee.employeeType || "Permanent", salary: Number(newEmployee.salary || 0),
       phone: newEmployee.phone, whatsapp_number: newEmployee.phone,
-      cnic: newEmployee.cnic, fathers_cnic: newEmployee.fathersCnic,
+      cnic: newEmployee.cnic, fathers_name: newEmployee.fathersName, fathers_cnic: newEmployee.fathersCnic,
       joining_date: joiningDate, eobi_status: "Pending", status: "Active",
       cnic_issue_date: newEmployee.cnicIssueDate || null, cnic_expiry_date: newEmployee.cnicExpiryDate || null,
       reference_person_name: newEmployee.referencePersonName, reference_person_contact: newEmployee.referencePersonContact,
@@ -276,7 +276,7 @@ export default function BigBuyHRMS({ profile }) {
         full_name: editingEmployee.name, department: editingEmployee.dept,
         branch: editingEmployee.branch, staff_level: editingEmployee.level,
         salary: Number(editingEmployee.salary || 0), status: editingEmployee.status,
-        cnic: editingEmployee.cnic, fathers_cnic: editingEmployee.fathersCnic,
+        cnic: editingEmployee.cnic, fathers_name: editingEmployee.fathersName, fathers_cnic: editingEmployee.fathersCnic,
         cnic_issue_date: editingEmployee.cnicIssueDate || null, cnic_expiry_date: editingEmployee.cnicExpiryDate || null,
         reference_person_name: editingEmployee.referencePersonName, reference_person_contact: editingEmployee.referencePersonContact,
         emergency_contact_name: editingEmployee.emergencyContactName, emergency_contact_number: editingEmployee.emergencyContactNumber,
@@ -319,7 +319,7 @@ export default function BigBuyHRMS({ profile }) {
         department: r.department, category_department: r.category_department,
         branch: r.branch, staff_level: r.level, employee_type: r.employee_type,
         salary: r.salary === "" ? 0 : Number(r.salary), phone: r.phone,
-        whatsapp_number: r.whatsapp_number, cnic: r.cnic, fathers_cnic: r.fathers_cnic,
+        whatsapp_number: r.whatsapp_number, cnic: r.cnic, fathers_name: r.fathers_name, fathers_cnic: r.fathers_cnic,
         joining_date: r.joining_date, eobi_status: r.eobi_status, status: r.status, shift: r.shift,
       }));
       const result = await importEmployeeMasterBatch(rows, selectedFile?.name || "Employee Master Upload");

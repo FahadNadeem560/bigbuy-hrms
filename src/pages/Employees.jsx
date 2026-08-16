@@ -170,6 +170,7 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
 
       <Section title="Identity & CNIC">
         <Field label="CNIC">{inp("cnic", "00000-0000000-0")}</Field>
+        <Field label="Father Name">{inp("fathersName", "Father Name")}</Field>
         <Field label="Father CNIC">{inp("fathersCnic", "00000-0000000-0")}</Field>
         <Field label="CNIC Issue Date">{inp("cnicIssueDate", "", "date")}</Field>
         <Field label="CNIC Expiry Date">{inp("cnicExpiryDate", "", "date")}</Field>
@@ -282,6 +283,7 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
         <Field label="CNIC">{inp("cnic", "CNIC")}</Field>
         <Field label="CNIC Issue Date">{inp("cnicIssueDate", "", "date")}</Field>
         <Field label="CNIC Expiry Date">{inp("cnicExpiryDate", "", "date")}</Field>
+        <Field label="Father Name">{inp("fathersName", "Father Name")}</Field>
         <Field label="Father CNIC">{inp("fathersCnic", "Father CNIC")}</Field>
       </Section>
 

@@ -1139,6 +1139,7 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                   <h2 className="font-bold text-slate-800 mb-4">Personal Information</h2>
                   <InfoRow label="Full Name" value={profile?.full_name || session.name} />
                   <InfoRow label="CNIC" value={profile?.cnic} />
+                  <InfoRow label="Father's Name" value={profile?.fathers_name} />
                   <InfoRow label="Father's CNIC" value={profile?.fathers_cnic} />
                   <InfoRow label="Designation" value={profile?.designation || session.designation} />
                   <InfoRow label="Employee Code" value={session.employee_code} />

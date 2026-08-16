@@ -21,7 +21,7 @@ export function downloadTemplate(type) {
   // flow (see App.jsx onPreview/onImport). Loans, leave balances etc. have their
   // own dedicated import panels on their own pages.
   const templates = {
-    employees: [{ employee_code: "1001", name: "Ali Raza", designation: "Sales Associate", department: "Grocery", category_department: "Sales", branch: "Main Branch", level: "Non-Management", employee_type: "Permanent", salary: 42000, whatsapp_number: "923001234567", cnic: "42101-0000000-0", fathers_cnic: "42101-0000001-0", joining_date: "2026-04-01", eobi_status: "Pending", status: "Active", shift: "SHIFT_A" }],
+    employees: [{ employee_code: "1001", name: "Ali Raza", designation: "Sales Associate", department: "Grocery", category_department: "Sales", branch: "Main Branch", level: "Non-Management", employee_type: "Permanent", salary: 42000, whatsapp_number: "923001234567", cnic: "42101-0000000-0", fathers_name: "Muhammad Raza", fathers_cnic: "42101-0000001-0", joining_date: "2026-04-01", eobi_status: "Pending", status: "Active", shift: "SHIFT_A" }],
   };
   const rows = templates[type] || [];
   const ws = XLSX.utils.json_to_sheet(rows);

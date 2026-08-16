@@ -48,6 +48,7 @@ export function mapEmployeeRecord(emp) {
     phone: emp.phone || emp.whatsapp_number || "-",
     whatsappNumber: emp.whatsapp_number || "",
     cnic: emp.cnic || "",
+    fathersName: emp.fathers_name || "",
     fathersCnic: emp.fathers_cnic || "",
     joiningDate: emp.joining_date || "",
     // CNIC
