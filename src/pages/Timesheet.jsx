@@ -421,6 +421,11 @@ export default function Timesheet({ branchFilter, role }) {
         row.late_minutes = 0;
         row.ot_hours = 0;
         row.overtime_hours = 0;
+      } else if (row.attendance_status === "Absent") {
+        // Absent already costs a full-day deduction on its own; counting the
+        // same day again in short_hours would double-deduct it, same reason
+        // Weekly Off is zeroed above.
+        row.short_hours = 0;
       }
     });
 
@@ -462,6 +467,13 @@ export default function Timesheet({ branchFilter, role }) {
     const payableOT = isOtEligible ? fmt2(Math.max(0, totalOT - OT_TOLERANCE)) : 0;
     return { totalOT, payableOT };
   }, [ledger, isOtEligible]);
+
+  // extra_day_eligible is only true when the employee actually punched in on
+  // a weekly-off day (see classify_attendance_day) -- a weekly off with no
+  // punches at all does not count, so this matches what payroll pays for.
+  const extraWorkingDaysCount = useMemo(() => {
+    return ledger.filter((r) => !!r.extra_day_eligible).length;
+  }, [ledger]);
 
   const totalWorkedHours = useMemo(() => {
     return fmt2(ledger.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
@@ -879,7 +891,7 @@ export default function Timesheet({ branchFilter, role }) {
           </div>
 
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 print:gap-2 print:mb-1">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 print:gap-2 print:mb-1">
             {/* Late Summary */}
             <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm print:p-2 print:border-slate-300">
               <div className="flex items-center gap-2 mb-4 print:mb-1">
@@ -962,6 +974,22 @@ export default function Timesheet({ branchFilter, role }) {
                     {hoursToHHMM(otSummary.payableOT)}
                   </Badge>
                 </div>
+              </div>
+            </div>
+
+            {/* Extra Working Days */}
+            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm print:p-2 print:border-slate-300">
+              <div className="flex items-center gap-2 mb-4 print:mb-1">
+                <span className="h-9 w-9 rounded-xl bg-indigo-50 flex items-center justify-center text-lg shrink-0 print:hidden">📅</span>
+                <h3 className="font-bold text-slate-800 print:text-xs">Extra Working Days</h3>
+              </div>
+              <div className="space-y-2.5 print:space-y-1">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-500">Weekly Offs Worked</span>
+                  <Badge tone={extraWorkingDaysCount > 0 ? "blue" : "slate"}>{extraWorkingDaysCount}</Badge>
+                </div>
+                <div className="h-px bg-slate-100" />
+                <p className="text-xs text-slate-400">Counts only weekly-off days the employee actually punched in on — this is what payroll pays EWD for.</p>
               </div>
             </div>
           </div>
