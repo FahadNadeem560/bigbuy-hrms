@@ -52,14 +52,18 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
+// Opening balances entered when this system went live (Aug 2026) already
+// account for everything earned through end of 2026 -- no further accrual
+// is generated until the new leave year starts on Jan 1, 2027.
+const ACCRUAL_START = new Date(2027, 0, 1);
+
 function calcEarned(staffLevel, joiningDate) {
   const quota = LEAVE_QUOTA[staffLevel] || LEAVE_QUOTA["Non-Management"];
   const now = new Date();
-  const monthsElapsed = (now.getFullYear() - 2025) * 12 + now.getMonth() + 1;
-  const joiningMonths = joiningDate
-    ? Math.max(0, (now.getFullYear() - new Date(joiningDate).getFullYear()) * 12 + (now.getMonth() - new Date(joiningDate).getMonth()) + 1)
-    : monthsElapsed;
-  const months = Math.min(monthsElapsed, joiningMonths);
+  if (now < ACCRUAL_START) return 0;
+  const joinDate = joiningDate ? new Date(joiningDate) : ACCRUAL_START;
+  const start = joinDate > ACCRUAL_START ? joinDate : ACCRUAL_START;
+  const months = Math.max(0, (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1);
   return Math.round((quota / 12) * months * 10) / 10;
 }
 
