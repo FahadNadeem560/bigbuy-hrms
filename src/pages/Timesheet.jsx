@@ -107,6 +107,34 @@ function AdjustTimeModal({ row, form, setForm, onSubmit, onClose, submitting }) 
   );
 }
 
+function StatusOverrideModal({ row, target, reason, setReason, onSubmit, onClose, submitting }) {
+  if (!row || !target) return null;
+  const isAbsent = target === "Absent";
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl p-6 shadow-xl w-full max-w-sm">
+        <h3 className="font-bold text-slate-800 mb-1">Mark as {target} — {row.work_date}</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          {isAbsent
+            ? "Overrides this day to Absent (full-day deduction) even though it was recorded as worked. Applied immediately and locked against the next attendance sync."
+            : "Overrides this day to Weekly Off so it's excluded from short/late/OT and absence counts. Applied immediately and locked against the next attendance sync."}
+        </p>
+        <div>
+          <p className="text-xs text-slate-500 mb-1">Reason</p>
+          <input value={reason} onChange={e => setReason(e.target.value)}
+            placeholder="Reason for this override..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        </div>
+        <div className="flex gap-2 mt-5">
+          <Button onClick={onSubmit} disabled={submitting} className="rounded-xl flex-1">
+            {submitting ? "Saving…" : `Confirm ${target}`}
+          </Button>
+          <Button variant="outline" onClick={onClose} className="rounded-xl flex-1">Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Timesheet({ branchFilter, role }) {
   const [empSearch, setEmpSearch] = useState("");
   const [department, setDepartment] = useState("");
@@ -149,6 +177,14 @@ export default function Timesheet({ branchFilter, role }) {
   const [adjustRow, setAdjustRow] = useState(null);
   const [adjustForm, setAdjustForm] = useState({ in: "", out: "", reason: "" });
   const [adjustSubmitting, setAdjustSubmitting] = useState(false);
+
+  // Manual status override (Mark as Weekly Off / Mark as Absent) — applied
+  // directly like markDayAsLeave, not routed through the Adj Time approval
+  // queue, since this corrects the day's classification rather than punches.
+  const [overrideRow, setOverrideRow] = useState(null);
+  const [overrideTarget, setOverrideTarget] = useState(null);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideSubmitting, setOverrideSubmitting] = useState(false);
 
   const canToggle = role === "HR" || role === "Master";
 
@@ -376,6 +412,71 @@ export default function Timesheet({ branchFilter, role }) {
     loadTimesheet(selectedEmp);
   }
 
+  function openOverrideModal(row, target) {
+    setOverrideRow(row);
+    setOverrideTarget(target);
+    setOverrideReason("");
+  }
+
+  // Case-by-case day status correction: "Weekly Off" for a genuine absence
+  // that management wants excused (e.g. a working-day no-show they're
+  // choosing to treat as the employee's off day), or "Absent" as a penalty
+  // override on a day that was actually worked. Applied directly and locked
+  // (review_status: 'Locked') so the next attendance sync/reprocess can't
+  // silently overwrite the correction — same protection markDayAsLeave and
+  // the Adj Time flow already rely on.
+  async function submitStatusOverride() {
+    if (!overrideRow || !selectedEmp || !overrideTarget) return;
+    if (!overrideReason.trim()) { setNotice("Enter a reason for the override."); return; }
+    setOverrideSubmitting(true);
+    const row = overrideRow;
+    const work_date = row.work_date;
+    const now = new Date().toISOString();
+    const priorStatus = row.attendance_status || row.status || "Pending";
+    const reason = overrideReason.trim();
+
+    const update = overrideTarget === "Weekly Off"
+      ? {
+          attendance_status: "Weekly Off", is_weekly_off: true,
+          // required_hours also zeroed, not just short_hours -- PayrollAutomation
+          // sums the raw required_hours column for its OT net calc and only skips
+          // rows caught by the client-side single-Mon-Fri-absence heuristic, which
+          // this row won't match once its status is directly "Weekly Off".
+          required_hours: 0, short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
+          needs_review: false, exception_reason: null,
+          review_status: "Locked", is_manual_entry: true, manual_entry_by: role,
+          adjustment_status: `Weekly Off Override: ${reason}`, adjustment_approved_by: role,
+        }
+      : {
+          // Punches are left as-is (not nulled) so the record still shows the
+          // employee actually worked that day -- only the classification and
+          // the hours it feeds into payroll are overridden to a full absence.
+          attendance_status: "Absent",
+          worked_hours: 0, actual_hours: 0, short_hours: Number(row.required_hours || 0),
+          late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
+          needs_review: false, exception_reason: null,
+          review_status: "Locked", is_manual_entry: true, manual_entry_by: role,
+          adjustment_status: `Absent Penalty: ${reason}`, adjustment_approved_by: role,
+        };
+
+    const { error: updErr } = row.id
+      ? await supabase.from("attendance").update(update).eq("id", row.id)
+      : await supabase.from("attendance").insert({ employee_code: selectedEmp.employee_code, work_date, attendance_date: work_date, ...update });
+    if (updErr) { setNotice(`Error: ${updErr.message}`); setOverrideSubmitting(false); return; }
+
+    await supabase.from("audit_logs").insert({
+      action: "attendance_status_override", entity: "attendance", entity_id: row.id || null,
+      performed_by: role,
+      details: `${selectedEmp.employee_code} ${work_date}: ${priorStatus} -> ${overrideTarget}. Reason: ${reason}`,
+      created_at: now,
+    }).then(() => {});
+
+    setOverrideRow(null); setOverrideTarget(null); setOverrideReason(""); setOverrideSubmitting(false);
+    setNotice(`${work_date} marked as ${overrideTarget}.`);
+    setTimeout(() => setNotice(""), 3000);
+    loadTimesheet(selectedEmp);
+  }
+
   const isOtEligible = useMemo(() => {
     if (!selectedEmp) return false;
     if (selectedEmp.ot_eligible != null) return !!selectedEmp.ot_eligible;
@@ -572,6 +673,11 @@ export default function Timesheet({ branchFilter, role }) {
       <AdjustTimeModal
         row={adjustRow} form={adjustForm} setForm={setAdjustForm}
         onSubmit={submitAdjustment} onClose={() => setAdjustRow(null)} submitting={adjustSubmitting}
+      />
+      <StatusOverrideModal
+        row={overrideRow} target={overrideTarget} reason={overrideReason} setReason={setOverrideReason}
+        onSubmit={submitStatusOverride} onClose={() => { setOverrideRow(null); setOverrideTarget(null); }}
+        submitting={overrideSubmitting}
       />
       <PageTitle
         title="Employee Timesheet"
@@ -820,8 +926,18 @@ export default function Timesheet({ branchFilter, role }) {
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             <StatusBadge status={status} />
                             {canToggle && status === "Absent" && (
-                              <button onClick={() => markDayAsLeave(row)} className="block mt-1 text-[10px] text-blue-600 underline print:hidden">
-                                Mark as Leave
+                              <>
+                                <button onClick={() => markDayAsLeave(row)} className="block mt-1 text-[10px] text-blue-600 underline print:hidden">
+                                  Mark as Leave
+                                </button>
+                                <button onClick={() => openOverrideModal(row, "Weekly Off")} className="block mt-1 text-[10px] text-purple-600 underline print:hidden">
+                                  Mark as Weekly Off
+                                </button>
+                              </>
+                            )}
+                            {canToggle && ["Present", "Late", "Half Day", "Short Hours", "Early Out"].includes(status) && (
+                              <button onClick={() => openOverrideModal(row, "Absent")} className="block mt-1 text-[10px] text-red-600 underline print:hidden">
+                                Mark as Absent
                               </button>
                             )}
                           </td>
