@@ -426,6 +426,15 @@ export default function Timesheet({ branchFilter, role }) {
         // same day again in short_hours would double-deduct it, same reason
         // Weekly Off is zeroed above.
         row.short_hours = 0;
+      } else if (row.attendance_status === "Weekly Off" || row.attendance_status === "Gazetted Holiday") {
+        // Some DB rows already carry "Weekly Off"/"Gazetted Holiday" directly
+        // (not just the derived override above) but still have short_hours
+        // populated from whatever punches existed that day — nothing is owed
+        // on these days, so the same double-deduct fix applies here too.
+        row.short_hours = 0;
+        row.late_minutes = 0;
+        row.ot_hours = 0;
+        row.overtime_hours = 0;
       }
     });
 
