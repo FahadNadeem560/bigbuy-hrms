@@ -488,7 +488,7 @@ export default function Timesheet({ branchFilter, role }) {
     return fmt2(ledger.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
   }, [ledger]);
 
-  const EXEMPT_REQUIRED_HOURS_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave"];
+  const EXEMPT_REQUIRED_HOURS_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave", "Absent"];
   function rowRequiredHours(row, policy) {
     if (!policy) return 0;
     const status = row.attendance_status || row.status;
