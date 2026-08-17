@@ -72,6 +72,11 @@ function formatTime(t) {
 
 function AdjustTimeModal({ row, form, setForm, onSubmit, onClose, submitting }) {
   if (!row) return null;
+  const outDate = form.outDate || row.work_date;
+  const previewHours = (form.in && form.out)
+    ? (new Date(`${outDate}T${form.out}:00`) - new Date(`${row.work_date}T${form.in}:00`)) / 3600000
+    : null;
+  const isNegative = previewHours !== null && previewHours < 0;
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl p-6 shadow-xl w-full max-w-sm">
@@ -87,9 +92,22 @@ function AdjustTimeModal({ row, form, setForm, onSubmit, onClose, submitting }) 
           </div>
           <div>
             <p className="text-xs text-slate-500 mb-1">Corrected Out</p>
-            <input type="time" lang="en-GB" value={form.out} onChange={e => setForm(f => ({ ...f, out: e.target.value }))}
-              className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+            <div className="flex gap-2">
+              <input type="time" lang="en-GB" value={form.out} onChange={e => setForm(f => ({ ...f, out: e.target.value }))}
+                className="w-1/2 px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+              <input type="date" value={form.outDate || row.work_date} min={row.work_date}
+                onChange={e => setForm(f => ({ ...f, outDate: e.target.value }))}
+                className="w-1/2 px-2 py-2 rounded-xl border border-slate-200 text-sm" title="Check-out date — change this if the employee checked out after midnight" />
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1">If the employee checked out after midnight, set this to the next day — otherwise the correction records a negative shift.</p>
           </div>
+          {previewHours !== null && (
+            <p className={`text-xs rounded-lg px-3 py-1.5 ${isNegative ? "bg-red-50 text-red-700" : "bg-slate-50 text-slate-600"}`}>
+              {isNegative
+                ? `Corrected Out is before Corrected In — this would record ${previewHours.toFixed(2)} hours. Fix the Out date above.`
+                : `Preview: ${previewHours.toFixed(2)} hours`}
+            </p>
+          )}
           <div>
             <p className="text-xs text-slate-500 mb-1">Reason</p>
             <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
@@ -97,7 +115,7 @@ function AdjustTimeModal({ row, form, setForm, onSubmit, onClose, submitting }) 
           </div>
         </div>
         <div className="flex gap-2 mt-5">
-          <Button onClick={onSubmit} disabled={submitting} className="rounded-xl flex-1">
+          <Button onClick={onSubmit} disabled={submitting || isNegative} className="rounded-xl flex-1">
             {submitting ? "Submitting…" : "Submit for Approval"}
           </Button>
           <Button variant="outline" onClick={onClose} className="rounded-xl flex-1">Cancel</Button>
@@ -175,7 +193,7 @@ export default function Timesheet({ branchFilter, role }) {
   // Adj Time In/Out (HR proposes, Master/GM approve via the Approval Queue)
   const [pendingAdjByDate, setPendingAdjByDate] = useState({});
   const [adjustRow, setAdjustRow] = useState(null);
-  const [adjustForm, setAdjustForm] = useState({ in: "", out: "", reason: "" });
+  const [adjustForm, setAdjustForm] = useState({ in: "", out: "", outDate: "", reason: "" });
   const [adjustSubmitting, setAdjustSubmitting] = useState(false);
 
   // Manual status override (Mark as Weekly Off / Mark as Absent) — applied
@@ -274,7 +292,14 @@ export default function Timesheet({ branchFilter, role }) {
   function openAdjustModal(row) {
     const curIn = formatTime(row.check_in || row.time_in);
     const curOut = formatTime(row.check_out || row.time_out);
-    setAdjustForm({ in: curIn === "-" ? "" : curIn, out: curOut === "-" ? "" : curOut, reason: "" });
+    // Default the out-date to whatever the existing checkout's real date is
+    // (falls back to work_date if there's no recorded checkout yet) so an
+    // already-overnight shift stays overnight unless the user changes it.
+    const rawOut = row.check_out || row.time_out;
+    const curOutDate = rawOut && String(rawOut).includes("T") ? String(rawOut).slice(0, 10)
+      : rawOut && String(rawOut).includes(" ") ? String(rawOut).slice(0, 10)
+      : row.work_date;
+    setAdjustForm({ in: curIn === "-" ? "" : curIn, out: curOut === "-" ? "" : curOut, outDate: curOutDate, reason: "" });
     setAdjustRow(row);
   }
 
@@ -283,6 +308,7 @@ export default function Timesheet({ branchFilter, role }) {
     if (!adjustForm.in && !adjustForm.out) { setNotice("Enter at least one corrected time."); return; }
     setAdjustSubmitting(true);
     const work_date = adjustRow.work_date;
+    const outDate = adjustForm.outDate || work_date;
     const now = new Date().toISOString();
     const payload = {
       employee_code: selectedEmp.employee_code,
@@ -290,7 +316,7 @@ export default function Timesheet({ branchFilter, role }) {
       original_check_in: adjustRow.is_synthetic ? null : (adjustRow.check_in || adjustRow.time_in || null),
       original_check_out: adjustRow.is_synthetic ? null : (adjustRow.check_out || adjustRow.time_out || null),
       adjusted_check_in: adjustForm.in ? `${work_date}T${adjustForm.in}:00` : null,
-      adjusted_check_out: adjustForm.out ? `${work_date}T${adjustForm.out}:00` : null,
+      adjusted_check_out: adjustForm.out ? `${outDate}T${adjustForm.out}:00` : null,
       reason: adjustForm.reason, adjusted_by: role, adjusted_at: now,
       status: "Pending Approval",
     };
