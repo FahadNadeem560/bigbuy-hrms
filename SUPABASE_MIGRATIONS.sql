@@ -3430,4 +3430,152 @@ begin
 end;
 $function$;
 -- =============================================================
+
+-- =============================================================
+-- Migration: auto_detect_shift_in_reclassify_attendance_row
+-- Applied: 2026-08-17
+-- Companion to auto_detect_shift_in_process_daily_attendance -- that fix
+-- only covered the bulk daily pipeline; reclassify_attendance_row() (used
+-- by AttendanceAdjustment.jsx and the Timesheet "Adjust" time-correction
+-- flow, via reclassify after a check-in/out edit) still resolved shift
+-- through the old private.resolve_employee_shift(), which fell back to the
+-- blanket SHIFT_A default nobody was actually assigned. Same auto-detect
+-- now applied here: unless there's a genuine explicit override (a roster
+-- entry for that date, or an assigned_shift_code other than the SHIFT_A
+-- default), grade the row's already-recorded check-in against whichever
+-- shift its time-of-day implies (<=12:30 -> SHIFT_A/11:00, else
+-- SHIFT_B/13:00), same cutoffs as the daily pipeline.
+-- =============================================================
+CREATE OR REPLACE FUNCTION public.reclassify_attendance_row(p_attendance_id uuid)
+ RETURNS attendance
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'private', 'pg_temp'
+AS $function$
+declare
+  v_att public.attendance%rowtype;
+  v_emp record;
+  v_group text;
+  v_required_hours numeric;
+  v_day_required_hours numeric;
+  v_friday_override numeric;
+  v_shift_code text;
+  v_shift public.shift_definitions%rowtype;
+  v_start timestamp without time zone;
+  v_end timestamp without time zone;
+  v_roster record;
+  v_weekly_off boolean;
+  v_gh boolean;
+  v_auto_detect boolean;
+  v_class record;
+  v_needs_review boolean;
+  v_exception_reason text;
+begin
+  select * into v_att from public.attendance where id = p_attendance_id;
+  if not found then
+    raise exception 'attendance row not found: %', p_attendance_id;
+  end if;
+
+  select e.eligibility_group, e.assigned_shift_code into v_emp
+    from public.employees e where e.employee_code = v_att.employee_code;
+
+  v_group := coalesce(nullif(v_emp.eligibility_group, ''), 'SALES_SUPPORT');
+  select required_hours into v_required_hours
+    from public.staff_eligibility_groups where code = v_group and is_active = true;
+  if v_required_hours is null then
+    raise exception 'Attendance eligibility group not configured: %', v_group;
+  end if;
+
+  v_day_required_hours := v_required_hours;
+  if extract(dow from v_att.work_date) = 5 then
+    select value::numeric into v_friday_override
+      from public.hrms_policy_settings
+     where key = case when v_group = 'MANAGEMENT_ADMIN' then 'friday_hours_management' else 'friday_hours_non_management' end
+     limit 1;
+    if v_friday_override is not null then
+      v_day_required_hours := v_friday_override;
+    end if;
+  end if;
+
+  select r.shift_code, r.is_weekly_off, r.is_gazetted_holiday into v_roster
+    from public.employee_work_rosters r
+   where r.employee_code = v_att.employee_code and r.roster_date = v_att.work_date
+   limit 1;
+  v_weekly_off := coalesce(v_roster.is_weekly_off, false);
+  v_gh := coalesce(v_roster.is_gazetted_holiday, exists(select 1 from public.gazetted_holidays g where g.holiday_date = v_att.work_date and g.is_active = true));
+
+  v_auto_detect := v_group <> 'MANAGEMENT_ADMIN'
+    and v_roster.shift_code is null
+    and (nullif(v_emp.assigned_shift_code, '') is null or v_emp.assigned_shift_code = 'SHIFT_A');
+
+  if v_auto_detect then
+    if v_att.check_in is null then
+      v_shift_code := 'SHIFT_A';
+    elsif v_att.check_in::time <= time '12:30' then
+      v_shift_code := 'SHIFT_A';
+    else
+      v_shift_code := 'SHIFT_B';
+    end if;
+
+    select * into v_shift from public.shift_definitions where shift_code = v_shift_code and is_active = true;
+    v_start := v_att.work_date::timestamp + v_shift.start_time;
+    v_end := v_att.work_date::timestamp + v_shift.end_time;
+    if v_shift.crosses_midnight or v_shift.end_time < v_shift.start_time then
+      v_end := v_end + interval '1 day';
+    end if;
+  else
+    v_shift_code := private.resolve_employee_shift(v_att.employee_code, v_att.work_date, v_emp.assigned_shift_code);
+    select * into v_shift from public.shift_definitions where shift_code = v_shift_code and is_active = true;
+    if not found then
+      v_shift.shift_code := v_shift_code;
+      v_shift.start_time := '00:00'::time;
+      v_shift.end_time := '00:00'::time;
+      v_shift.crosses_midnight := false;
+    end if;
+
+    if v_group = 'MANAGEMENT_ADMIN' then
+      v_start := null;
+      v_end := null;
+    else
+      v_start := v_att.work_date::timestamp + v_shift.start_time;
+      v_end := v_att.work_date::timestamp + v_shift.end_time;
+      if v_shift.crosses_midnight or v_shift.end_time < v_shift.start_time then
+        v_end := v_end + interval '1 day';
+      end if;
+    end if;
+  end if;
+
+  select * into v_class from public.classify_attendance_day(
+    v_group, v_day_required_hours, v_start, v_end,
+    v_att.check_in, v_att.check_out, v_weekly_off, v_gh
+  );
+
+  v_needs_review := v_class.needs_review;
+  v_exception_reason := v_class.exception_reason;
+
+  if v_att.check_in is not null and v_att.check_out is not null
+     and (extract(epoch from (v_att.check_out - v_att.check_in)) / 3600.0) > 16 then
+    v_needs_review := true;
+    v_exception_reason := trim(both '; ' from coalesce(v_exception_reason || '; ', '') || 'Unusually long shift duration - please verify punches');
+  end if;
+
+  update public.attendance set
+    required_hours = v_day_required_hours,
+    worked_hours = v_class.worked_hours,
+    actual_hours = v_class.worked_hours,
+    short_hours = round(greatest(v_day_required_hours - v_class.worked_hours, 0)::numeric, 2),
+    late_minutes = v_class.late_minutes,
+    early_out_minutes = v_class.early_out_minutes,
+    overtime_hours = v_class.overtime_hours,
+    attendance_status = v_class.attendance_status,
+    needs_review = v_needs_review,
+    exception_reason = v_exception_reason,
+    shift_code = v_shift_code,
+    calculated_at = now()
+  where id = p_attendance_id
+  returning * into v_att;
+
+  return v_att;
+end;
+$function$;
 -- =============================================================
