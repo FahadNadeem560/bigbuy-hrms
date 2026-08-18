@@ -32,26 +32,31 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
   const weeks = {};
   (rows || []).forEach((row) => {
     const status = row[statusKey];
-    if (status !== "Absent") return;
     const dateStr = row[dateKey];
     if (!dateStr) return;
     const d = new Date(`${dateStr}T00:00:00`);
     const dow = d.getDay(); // 0=Sun..6=Sat
-    if (dow === 0 || dow === 6) return;
+    // Real "Weekly Off" rows (roster-driven) count toward every day of the
+    // week, not just Mon-Fri, so a genuine off day on any day still blocks
+    // the override below -- without this, a week that already has its real
+    // off day (e.g. a roster Thursday) could still get a *second* Mon-Fri
+    // Absent day relabeled Weekly Off too, hiding a real absence.
+    const isoDow = dow === 0 ? 7 : dow; // 1=Mon..7=Sun
     const monday = new Date(d);
-    monday.setDate(d.getDate() - (dow - 1));
+    monday.setDate(d.getDate() - (isoDow - 1));
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(monday)}`;
-    (weeks[weekKey] ||= []).push(row);
+    const week = (weeks[weekKey] ||= { absentRows: [], hasRealWeeklyOff: false });
+    if (status === "Weekly Off") week.hasRealWeeklyOff = true;
+    else if (status === "Absent" && dow !== 0 && dow !== 6) week.absentRows.push(row);
   });
 
   const overrideKeys = new Set();
-  Object.values(weeks).forEach((group) => {
-    if (group.length === 1) {
-      const row = group[0];
-      const empPart = employeeKey ? `${row[employeeKey]}|` : "";
-      overrideKeys.add(`${empPart}${row[dateKey]}`);
-    }
+  Object.values(weeks).forEach((week) => {
+    if (week.hasRealWeeklyOff || week.absentRows.length !== 1) return;
+    const row = week.absentRows[0];
+    const empPart = employeeKey ? `${row[employeeKey]}|` : "";
+    overrideKeys.add(`${empPart}${row[dateKey]}`);
   });
   return overrideKeys;
 }
