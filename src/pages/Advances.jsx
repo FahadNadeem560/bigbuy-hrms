@@ -273,7 +273,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
         <Button variant="outline" onClick={exportExcel} className="rounded-xl">Export to Excel</Button>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Advance Ledger</h2><p className="text-xs text-slate-400">{filtered.length} records</p></div>
         <table className="w-full min-w-[1100px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
@@ -314,7 +314,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
 function PendingApprovalTab({ advances, actorName, role, reload, setMsg, setErr }) {
   const pending = useMemo(() => advances.filter(a => a.status === "Pending"), [advances]);
   return (
-    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
       <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Pending Approval</h2><p className="text-xs text-slate-400">{pending.length} awaiting Finance decision</p></div>
       <table className="w-full min-w-[900px] text-sm">
         <thead className="bg-slate-50 text-slate-500">
@@ -441,7 +441,7 @@ function ImportHistoricalTab({ employees, reload, setMsg, setErr }) {
       )}
 
       {preview && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
           <div className="px-5 pt-4 pb-2 flex items-center justify-between">
             <div>
               <h2 className="font-bold text-slate-800">Preview — {preview.length} rows</h2>
@@ -523,7 +523,7 @@ function SummaryPanel({ advances }) {
         {tile("Deducted This Month", money(totals.deductedThisMonth), "text-slate-600")}
       </div>
       {totals.branchRows.length > 0 && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
           <div className="px-5 pt-3 pb-2"><h2 className="font-bold text-slate-800 text-sm">Branch-wise Breakdown</h2></div>
           <table className="w-full min-w-[600px] text-sm">
             <thead className="bg-slate-50 text-slate-500">

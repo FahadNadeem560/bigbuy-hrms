@@ -117,7 +117,7 @@ export default function DocumentManagement() {
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
       {/* Document Status Table */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2">
           <h2 className="font-bold text-slate-800">Document Status — All Employees</h2>
           <p className="text-xs text-slate-400 mt-0.5">{filtered.length} employees</p>

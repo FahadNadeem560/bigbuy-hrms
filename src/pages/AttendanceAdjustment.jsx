@@ -346,7 +346,7 @@ export default function AttendanceAdjustment({ role }) {
 
       {/* Field Employee Entries */}
       {tab === "field" && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
           <div className="px-5 pt-4 pb-2">
             <h2 className="font-bold text-slate-800">Field Employee Manual Time Entries</h2>
             <p className="text-xs text-slate-400 mt-0.5">Submitted by field employees via self-service portal. {pendingFieldEntries.length} pending approval.</p>
@@ -412,7 +412,7 @@ export default function AttendanceAdjustment({ role }) {
               <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
             </div>
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <div className="px-5 pt-4 pb-2">
               <h2 className="font-bold text-slate-800">Adjustment Register</h2>
               <p className="text-xs text-slate-400 mt-0.5">{filtered.length} records</p>

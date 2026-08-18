@@ -196,7 +196,7 @@ export default function Permissions({ employees, role }) {
         </div>
       )}
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mb-4">
         <div className="px-4 py-3 border-b border-slate-100">
           <h3 className="font-semibold text-slate-800 text-sm">Eligibility Group Defaults</h3>
           <p className="text-xs text-slate-400 mt-0.5">
@@ -282,7 +282,7 @@ export default function Permissions({ employees, role }) {
         </div>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <p className="px-4 pt-3 text-xs text-slate-400">{rows.length} employee{rows.length !== 1 ? "s" : ""}</p>
         <table className="w-full min-w-[2000px] text-sm">
           <thead className="bg-slate-50 text-slate-500">

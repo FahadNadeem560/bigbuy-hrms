@@ -178,7 +178,7 @@ export default function SalaryComparison() {
       </div>
 
       {selectedMonths.length > 0 && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mb-4">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Employee-wise Comparison</h2><p className="text-xs text-slate-400">{filteredEmps.length} employees · Green = increase, Red = decrease vs previous month</p></div>
           <table className="text-xs min-w-max w-full">
             <thead className="bg-slate-50 text-slate-500">
@@ -236,7 +236,7 @@ export default function SalaryComparison() {
       )}
 
       {selectedMonths.length > 0 && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mb-4">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Department-wise Net Pay Summary</h2></div>
           <table className="text-sm w-full">
             <thead className="bg-slate-50 text-slate-500">

@@ -233,7 +233,7 @@ export default function RosterManagement() {
               <div className="mt-3 flex gap-2"><Button onClick={saveShift} className="rounded-2xl">Save</Button><Button variant="outline" onClick={() => { setShowShiftForm(false); setEditShift(null); }} className="rounded-2xl">Cancel</Button></div>
             </div>
           )}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500"><tr>{["Shift Name", "Start", "End", "Grace", "Days", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
@@ -273,7 +273,7 @@ export default function RosterManagement() {
               <div className="mt-3 flex gap-2"><Button onClick={saveAssignment} className="rounded-2xl">Assign</Button><Button variant="outline" onClick={() => setShowAssignForm(false)} className="rounded-2xl">Cancel</Button></div>
             </div>
           )}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <table className="w-full min-w-[700px] text-sm">
               <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Shift", "Effective From", "Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
@@ -294,7 +294,7 @@ export default function RosterManagement() {
             <div><p className="text-xs text-slate-500 mb-1">Week Starting (Monday)</p><input type="date" value={weekStart} onChange={e => setWeekStart(getMondayOf(e.target.value))} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             <div className="mt-4 text-sm text-slate-500">{weekStart} — {addDays(weekStart, 6)}</div>
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <table className="w-full min-w-[900px] text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>

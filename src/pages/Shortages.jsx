@@ -168,7 +168,7 @@ export default function Shortages({ role }) {
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Records</p><p className="text-2xl font-bold">{shortages.length}</p></div>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Shortage Ledger</h2><p className="text-xs text-slate-400">{filtered.length} records</p></div>
         <table className="w-full min-w-[800px] text-sm">
           <thead className="bg-slate-50 text-slate-500">

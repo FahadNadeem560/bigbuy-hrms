@@ -166,7 +166,7 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
         </div>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Branch-wise Breakdown</h2></div>
         <table className="w-full min-w-[1280px] text-sm">
           <thead className="bg-slate-50 text-slate-500">

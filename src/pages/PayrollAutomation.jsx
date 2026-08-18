@@ -244,7 +244,7 @@ function SummaryPanel({ month, displayRows }) {
   );
   return (
     <div className="mb-4">
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payroll Summary — {month}</h2></div>
         <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-slate-50 text-slate-500">
@@ -1486,7 +1486,7 @@ export default function PayrollAutomation({ role, actorName }) {
       )}
 
       {/* Payroll Register Table */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2 flex items-center justify-between">
           <div>
             <h2 className="font-bold text-slate-800">Payroll Register — {month}</h2>

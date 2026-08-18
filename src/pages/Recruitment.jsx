@@ -178,7 +178,7 @@ export default function Recruitment() {
             </div>
           )}
 
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <table className="w-full min-w-[750px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>{["Name", "Position", "Applied", "Interview", "Status", "Notes", "Update Status"].map(h => (

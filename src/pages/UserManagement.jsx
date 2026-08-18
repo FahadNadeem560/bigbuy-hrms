@@ -211,7 +211,7 @@ export default function UserManagement({ role }) {
     <div>
       <PageTitle title="User Management" subtitle="Create logins and control exactly which pages each account can see." />
       <CreateUserForm onCreated={load} />
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">All Users</h2></div>
         {err && <div className="mx-5 mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
         <table className="w-full min-w-[900px] text-sm">

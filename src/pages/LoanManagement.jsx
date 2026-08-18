@@ -381,7 +381,7 @@ export default function LoanManagement({ role }) {
                   <Button variant="outline" onClick={() => setImportPreview(null)} className="rounded-xl text-xs py-1.5 px-3">Cancel</Button>
                 </div>
               </div>
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <div className="overflow-x-auto overflow-y-clip rounded-xl border border-slate-200">
                 <table className="w-full text-xs min-w-[900px]">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
@@ -465,7 +465,7 @@ export default function LoanManagement({ role }) {
         </div>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Ledger</h2><p className="text-xs text-slate-400 mt-0.5">{filtered.length} records</p></div>
         <table className="w-full min-w-[1050px] text-sm">
           <thead className="bg-slate-50 text-slate-500">

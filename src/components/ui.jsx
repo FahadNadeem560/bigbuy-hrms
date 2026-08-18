@@ -31,7 +31,7 @@ export function Badge({ children, tone = "default" }) {
 }
 
 export function Table({ headers, rows, renderRow }) {
-  return <div className="overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm"><table className="w-full min-w-[760px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{headers.map((h) => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row, i) => renderRow(row, i))}</tbody></table></div>;
+  return <div className="overflow-x-auto overflow-y-clip rounded-2xl border border-slate-100 bg-white shadow-sm"><table className="w-full min-w-[760px] text-sm"><thead className="bg-slate-50 text-slate-500"><tr>{headers.map((h) => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{rows.map((row, i) => renderRow(row, i))}</tbody></table></div>;
 }
 
 export function PageTitle({ title, subtitle, action }) {

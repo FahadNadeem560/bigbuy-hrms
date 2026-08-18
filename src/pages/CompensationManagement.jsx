@@ -138,7 +138,7 @@ export default function CompensationManagement() {
       </div>
 
       {tab === "structure" && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Current Salary Structures</h2><p className="text-xs text-slate-400">{employees.length} active employees</p></div>
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
@@ -172,7 +172,7 @@ export default function CompensationManagement() {
       {tab === "history" && (
         <div>
           <p className="text-sm text-slate-500 mb-3">Click "History" on any employee in Structures tab to view their compensation timeline.</p>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">All Salary Structure Changes</h2></div>
             <table className="w-full min-w-[800px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
@@ -211,7 +211,7 @@ export default function CompensationManagement() {
             <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Monthly Payroll</p><p className="text-2xl font-bold">{money(employees.filter(e => filterDept === "All" || e.department === filterDept).reduce((s, e) => s + Number(e.salary || 0), 0))}</p></div>
             <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Average Salary</p><p className="text-2xl font-bold">{money(employees.filter(e => filterDept === "All" || e.department === filterDept).reduce((s, e, _, arr) => s + Number(e.salary || 0) / arr.length, 0))}</p></div>
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Department-wise Cost Analysis</h2></div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500"><tr>{["Department", "Headcount", "Total Salary", "Avg Salary"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>

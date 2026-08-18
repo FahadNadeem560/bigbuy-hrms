@@ -154,7 +154,7 @@ export default function OneTimeAdjustments({ role }) {
       )}
 
       {tab === "mine" && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">All Adjustments</h2><p className="text-xs text-slate-400">{adjustments.length} total</p></div>
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
@@ -181,7 +181,7 @@ export default function OneTimeAdjustments({ role }) {
       )}
 
       {tab === "queue" && canApprove && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Approval Queue</h2><p className="text-xs text-slate-400">{pending.length} pending</p></div>
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">

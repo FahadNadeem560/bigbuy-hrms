@@ -136,7 +136,7 @@ function LevelsTab({ levels, reload, setMsg, setErr }) {
           <Button onClick={addLevel} className="rounded-2xl">Save</Button>
         </div>
       )}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Hierarchy Levels</h2><p className="text-xs text-slate-400">Drag rows to reorder. Changes save immediately.</p></div>
         <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
@@ -448,7 +448,7 @@ function OrgChartTab({ hierarchy, employees }) {
       {roots.length === 0 ? (
         <div className="text-center py-16 text-slate-400 text-sm">No hierarchy matches these filters yet. Use the Assign Employees tab.</div>
       ) : (
-        <div className="overflow-x-auto pb-8 print:overflow-visible">
+        <div className="overflow-x-auto overflow-y-clip pb-8 print:overflow-visible">
           <div className="flex gap-12 items-start min-w-max px-4 pt-4">
             {roots.map(r => <OrgChartNode key={r.id} row={r} all={active} empMap={empMap} depth={0} onSelect={setSelected} />)}
           </div>

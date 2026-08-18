@@ -883,7 +883,7 @@ export default function Timesheet({ branchFilter, role }) {
             </div>
 
             {/* Attendance Ledger */}
-            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm mb-4 overflow-x-auto print:rounded-none print:border-0 print:shadow-none print:mb-1">
+            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm mb-4 overflow-x-auto overflow-y-clip print:rounded-none print:border-0 print:shadow-none print:mb-1">
               <div className="px-5 pt-4 pb-2 print:px-0 print:pt-0 print:pb-1">
                 <h2 className="font-bold text-slate-800 print:text-sm">Attendance Ledger</h2>
                 <p className="text-xs text-slate-400 mt-0.5 print:hidden">

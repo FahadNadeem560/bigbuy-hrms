@@ -246,7 +246,7 @@ function ImportPanel({ employees, onDone }) {
           {summary.preview.length > 0 && (
             <div>
               <p className="text-xs text-slate-500 mb-1 font-medium">Preview (first {summary.preview.length} imported)</p>
-              <div className="overflow-x-auto rounded-xl border border-slate-100">
+              <div className="overflow-x-auto overflow-y-clip rounded-xl border border-slate-100">
                 <table className="w-full text-xs min-w-[600px]">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>{["Code","Name","Old Salary","New Salary","Effective","Amount","Type"].map(h => (
@@ -788,7 +788,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
       </div>
 
       {/* Table */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
         <div className="px-5 pt-4 pb-2 flex items-center justify-between">
           <div>
             <h2 className="font-bold text-slate-800">Increment History</h2>
@@ -886,7 +886,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
             </div>
           </div>
 
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Yearly Increment Grid — {yearFilter}</h2></div>
             <table className="w-full min-w-[1400px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
@@ -951,7 +951,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
           </div>
 
           {showDismissed && dismissedDueList.length > 0 && (
-            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto mb-4">
+            <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mb-4">
               <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Dismissed</h2><p className="text-xs text-slate-400">{dismissedDueList.length} employees hidden from the Due list until their next due date</p></div>
               <table className="w-full min-w-[800px] text-sm">
                 <thead className="bg-slate-50 text-slate-500">
@@ -978,7 +978,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
             </div>
           )}
 
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Due for Increment</h2><p className="text-xs text-slate-400">{activeDueList.length} employees</p></div>
             <table className="w-full min-w-[1100px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
