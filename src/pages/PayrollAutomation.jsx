@@ -1102,7 +1102,7 @@ export default function PayrollAutomation({ role, actorName }) {
       "Commission": r.commissionAddOn, "Fuel Allowance": r.fuelAllowance, "Other Earnings": r.otherEarnings,
       "Extra WD Amount": r.extraWorkingDaysAmount, "Total Earnings": r.totalEarnings,
       "Late Deduction": r.lateDeduction, "Short Hour Deduction": r.shortHourDeduction,
-      "Absent Deduction": r.absentDeduction, "Fine": r.fineDeduction, "Shortage": r.shortageDeduction,
+      "Absent Deduction": r.absentDeduction, "Half Day Deduction": r.halfDayDeduction, "Fine": r.fineDeduction, "Shortage": r.shortageDeduction,
       "Advance": r.advanceDeduction, "Loan Deduction": r.loanDeduction,
       "Tax": r.taxDeduction, "EOBI": r.eobiDeduction, "Other Deductions": r.otherDeductions,
       "Total Deductions": r.totalDeductions, "Net Pay": r.finalSalary, "Last Pay": r.lastPay,
@@ -1518,6 +1518,8 @@ export default function PayrollAutomation({ role, actorName }) {
                 <>
                   <TH className="text-red-500" sortField="lateDeduction">Late Ded</TH>
                   <TH className="text-red-500" sortField="shortHourDeduction">ShortHr</TH>
+                  <TH className="text-red-500" sortField="absentDeduction">Absent Ded</TH>
+                  <TH className="text-red-500" sortField="halfDayDeduction">Half Day Ded</TH>
                   <TH className="text-red-500" sortField="fineDeduction">Fine</TH>
                   <TH className="text-red-500" sortField="shortageDeduction">Shortage</TH>
                   <TH className="text-red-500" sortField="advanceDeduction">Advance</TH>
@@ -1535,7 +1537,7 @@ export default function PayrollAutomation({ role, actorName }) {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {pagedRows.length === 0 ? (
-              <tr><td colSpan={20 + (showDetailColumns ? 14 : 0)} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={20 + (showDetailColumns ? 16 : 0)} className="px-4 py-8 text-center text-slate-400">
                 {displayRows.length === 0
                   ? (role === "Finance" ? "No published payroll for this month." : 'No payroll data. Click "Generate Payroll" to calculate.')
                   : "No employees match the current filters."}
@@ -1582,6 +1584,8 @@ export default function PayrollAutomation({ role, actorName }) {
                     <>
                       <TD className="text-red-500">{money(r.lateDeduction)}</TD>
                       <TD className="text-red-500">{money(r.shortHourDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.absentDeduction)}</TD>
+                      <TD className="text-red-500">{money(r.halfDayDeduction)}</TD>
                       <TD className="text-red-500">{money(r.fineDeduction)}</TD>
                       <TD className="text-red-500">{money(r.shortageDeduction)}</TD>
                       <TD className="text-red-500">{money(r.advanceDeduction)}</TD>
@@ -1637,6 +1641,8 @@ export default function PayrollAutomation({ role, actorName }) {
                   <>
                     <TD>{money(sumRows(filteredRows, "lateDeduction"))}</TD>
                     <TD>{money(sumRows(filteredRows, "shortHourDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "absentDeduction"))}</TD>
+                    <TD>{money(sumRows(filteredRows, "halfDayDeduction"))}</TD>
                     <TD>{money(sumRows(filteredRows, "fineDeduction"))}</TD>
                     <TD>{money(sumRows(filteredRows, "shortageDeduction"))}</TD>
                     <TD>{money(sumRows(filteredRows, "advanceDeduction"))}</TD>
