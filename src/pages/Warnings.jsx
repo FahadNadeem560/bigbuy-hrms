@@ -192,7 +192,7 @@ export default function Warnings() {
       </div>
 
       {/* Warning History */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
         <div className="px-5 pt-4 pb-2">
           <h2 className="font-bold text-slate-800">Warning History</h2>
           <p className="text-xs text-slate-400 mt-0.5">{filtered.length} records</p>

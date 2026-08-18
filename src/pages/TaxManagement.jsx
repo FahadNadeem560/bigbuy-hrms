@@ -145,7 +145,7 @@ export default function TaxManagement({ role }) {
               <Button onClick={seedSlabs} variant="outline" className="rounded-2xl">Seed Default Slabs</Button>
             )}
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2">
               <h2 className="font-bold text-slate-800">FBR Salaried Tax Slabs — {selectedFY}</h2>
               <p className="text-xs text-slate-400 mt-0.5">Annual income tax for salaried individuals. Deducted monthly (annual ÷ 12).</p>
@@ -177,7 +177,7 @@ export default function TaxManagement({ role }) {
           <div className="bg-blue-50 rounded-2xl p-4 mb-4 text-sm text-blue-700">
             <strong>Tax Modes:</strong> Auto = FBR slab calculation · Manual = fixed monthly amount · Exempt = no tax deduction (reason required)
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2">
               <h2 className="font-bold text-slate-800">Employee Tax Settings</h2>
               <p className="text-xs text-slate-400">{employees.length} active employees</p>
@@ -258,7 +258,7 @@ export default function TaxManagement({ role }) {
             <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Exempt</p><p className="text-2xl font-bold text-green-600">{empTaxData.filter(e => e.taxMode === "exempt").length}</p></div>
             <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Monthly Tax Total</p><p className="text-2xl font-bold text-red-500">{money(totalMonthlyTax)}</p></div>
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Tax Report — {reportMonth}</h2></div>
             <table className="w-full min-w-[700px] text-sm">
               <thead className="bg-slate-50 text-slate-500">

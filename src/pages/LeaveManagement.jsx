@@ -406,7 +406,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
 
       {/* ── Queue Tab ── */}
       {tab === "queue" && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2 flex items-center justify-between">
             <div><h2 className="font-bold text-slate-800">Leave Approval Queue</h2><p className="text-xs text-slate-400 mt-0.5">{pending.length} pending · {requests.length} total</p></div>
           </div>
@@ -522,7 +522,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
                     <Button variant="outline" onClick={() => setImportPreview(null)} className="rounded-xl text-xs py-1.5 px-3">Cancel</Button>
                   </div>
                 </div>
-                <div className="overflow-x-auto overflow-y-clip rounded-xl border border-slate-200">
+                <div className="overflow-x-auto overflow-y-auto max-h-[70vh] rounded-xl border border-slate-200">
                   <table className="w-full text-xs min-w-[700px]">
                     <thead className="bg-slate-50 text-slate-500">
                       <tr>
@@ -566,7 +566,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
           </div>
 
           {/* Balances table */}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2">
               <h2 className="font-bold text-slate-800">Annual Leave Balances</h2>
               <p className="text-xs text-slate-400">
@@ -635,7 +635,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
               <div><p className="text-xs text-slate-500 mb-1">To</p><input type="date" value={historyFilter.to} onChange={e => setHistoryFilter(v => ({ ...v, to: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             </div>
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Leave History</h2><p className="text-xs text-slate-400">{filteredHistory.length} records</p></div>
             <table className="w-full min-w-[800px] text-sm">
               <thead className="bg-slate-50 text-slate-500">

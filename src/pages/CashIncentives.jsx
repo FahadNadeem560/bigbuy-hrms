@@ -137,7 +137,7 @@ function OneOffTab({ role, actorName, month, setMonth }) {
       )}
 
       {["Master", "GM"].includes(role) ? (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">One-Off Bonuses — {month}</h2><p className="text-xs text-slate-400">{rows.length} entries · Total {money(total)}</p></div>
           <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
@@ -161,7 +161,7 @@ function OneOffTab({ role, actorName, month, setMonth }) {
           </table>
         </div>
       ) : (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">One-Off Bonuses — Branch Summary — {month}</h2></div>
           <table className="w-full min-w-[400px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
@@ -271,7 +271,7 @@ function ActiveTab({ role, actorName, refreshKey, bump }) {
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-40" />
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
         <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>{["Employee Code", "Employee Name", "Branch", "Department", "Monthly Amount", "Effective From", "Added By", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
@@ -335,7 +335,7 @@ function ActiveTab({ role, actorName, refreshKey, bump }) {
       </div>
 
       {branchTotals.length > 0 && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mt-4">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh] mt-4">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Branch-wise Total</h2></div>
           <table className="w-full min-w-[400px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
@@ -470,7 +470,7 @@ function HistoryTab({ role, refreshKey }) {
         {role === "Master" && <Button variant="outline" onClick={exportExcel} className="rounded-xl">Export to Excel</Button>}
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
         <table className="w-full min-w-[1000px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>{["Date", "Employee", "Action", "Old Amount", "New Amount", "Effective From", "Reason", "Done By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>

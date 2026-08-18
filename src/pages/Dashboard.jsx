@@ -80,7 +80,7 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
             )}
           </div>
 
-          <div className="mt-5 bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="mt-5 bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center gap-1.5">
                 Active Staff & Payroll by Branch

@@ -164,7 +164,7 @@ export default function FuelAllowance({ role }) {
               <div className="mt-3 flex gap-2"><Button onClick={saveRate} className="rounded-2xl">Save</Button><Button variant="outline" onClick={() => setShowRateForm(false)} className="rounded-2xl">Cancel</Button></div>
             </div>
           )}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Rate History</h2></div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500"><tr>{["Rate/km", "Effective From", "Set By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
@@ -191,7 +191,7 @@ export default function FuelAllowance({ role }) {
               <div className="mt-3 flex gap-2"><Button onClick={saveVehicle} className="rounded-2xl">Save</Button><Button variant="outline" onClick={() => setShowVehicleForm(false)} className="rounded-2xl">Cancel</Button></div>
             </div>
           )}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Vehicle Type", "Registration", "Eligible"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
@@ -224,7 +224,7 @@ export default function FuelAllowance({ role }) {
               <div className="mt-3 flex gap-2"><Button onClick={submitClaim} className="rounded-2xl">Submit Claim</Button><Button variant="outline" onClick={() => setShowClaimForm(false)} className="rounded-2xl">Cancel</Button></div>
             </div>
           )}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full min-w-[800px] text-sm">
               <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Month", "KM", "Route", "Purpose", "Amount", "Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
@@ -237,7 +237,7 @@ export default function FuelAllowance({ role }) {
       )}
 
       {tab === "approval" && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Fuel Claim Approval</h2><p className="text-xs text-slate-400">{pending.length} pending</p></div>
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Month", "KM", "Amount", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
@@ -256,7 +256,7 @@ export default function FuelAllowance({ role }) {
             <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Approved Total</p><p className="text-2xl font-bold text-emerald-600">{money(claims.filter(c => c.status === "Approved").reduce((s, c) => s + Number(c.calculated_amount || 0), 0))}</p></div>
             <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Pending Amount</p><p className="text-2xl font-bold text-yellow-600">{money(pending.reduce((s, c) => s + Number(c.calculated_amount || 0), 0))}</p></div>
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Department-wise Fuel Expense</h2></div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500"><tr>{["Department", "Claims", "Total KM", "Total Amount"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>

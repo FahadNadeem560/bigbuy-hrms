@@ -87,7 +87,7 @@ export default function Attendance({ rows, role, branchFilter, employees }) {
             HD Exempt / Late Exempt / Gazetted Holiday / Adjustment Status are now managed per-employee from the Timesheet tab.
           </p>
 
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full min-w-[1100px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>

@@ -73,7 +73,7 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
       {/* Section 1: Hold */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mb-6">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh] mb-6">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Hold Employees</h2><p className="text-xs text-slate-400">{holdRows.length} employees</p></div>
         <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
@@ -106,7 +106,7 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
       </div>
 
       {/* Section 2: No F&F */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">No F&F Employees</h2><p className="text-xs text-slate-400">{noFnfRows.length} employees · Read-only unless Master overrides</p></div>
         <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
@@ -139,7 +139,7 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
       </div>
 
       {/* Section 3: F&F */}
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mt-6">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh] mt-6">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">F&F Employees</h2><p className="text-xs text-slate-400">{fnfRows.length} employees settled with amount payable</p></div>
         <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-slate-50 text-slate-500">

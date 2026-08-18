@@ -203,7 +203,7 @@ export default function ExecutiveDashboard() {
           )}
 
           {/* Branch Summary Table */}
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2"><h3 className="font-bold text-slate-800">Branch Snapshot — {date}</h3></div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
@@ -259,7 +259,7 @@ export default function ExecutiveDashboard() {
       {drillLevel === "department" && drillBranch && (
         <div>
           <h2 className="font-bold text-slate-800 mb-4 text-lg">Department Breakdown — {drillBranch}</h2>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>{["Department", "Total", "Present", "Absent", "Late", "Attendance %"].map(h => (
@@ -292,7 +292,7 @@ export default function ExecutiveDashboard() {
       {drillLevel === "employees" && drillDept && (
         <div>
           <h2 className="font-bold text-slate-800 mb-4 text-lg">Employees — {drillBranch} / {drillDept}</h2>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>{["Employee", "Code", "Status Today", "Late Mins"].map(h => (

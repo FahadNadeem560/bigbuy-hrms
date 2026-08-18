@@ -562,7 +562,7 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                   </div>
                 </div>
 
-                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
                   <div className="px-5 pt-4 pb-2">
                     <h2 className="font-bold text-slate-800">Attendance Ledger — Last 30 Days</h2>
                     <p className="text-xs text-slate-400 mt-0.5">{attendance.length} records</p>
@@ -667,7 +667,7 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                 </div>
 
                 {/* History */}
-                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
                   <div className="px-5 pt-4 pb-2">
                     <h2 className="font-bold text-slate-800">Leave Request History</h2>
                     <p className="text-xs text-slate-400 mt-0.5">{leaveRequests.length} requests</p>
@@ -778,7 +778,7 @@ export default function EmployeeSelfService({ profile: authProfile }) {
 
             {/* ───── TAB: My Warnings ───── */}
             {tab === "warnings" && (
-              <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+              <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
                 <div className="px-5 pt-4 pb-2">
                   <h2 className="font-bold text-slate-800">My Warnings & Notices</h2>
                   <p className="text-xs text-slate-400 mt-0.5">{warnings.length} records · Read-only</p>
@@ -858,7 +858,7 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                 )}
 
                 {/* Loan history table */}
-                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
                   <div className="px-5 pt-4 pb-2">
                     <h2 className="font-bold text-slate-800">Loan History</h2>
                     <p className="text-xs text-slate-400 mt-0.5">{loans.length} loans</p>
@@ -943,7 +943,7 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                   </form>
                 </div>
 
-                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
                   <div className="px-5 pt-4 pb-2">
                     <h2 className="font-bold text-slate-800">My Submitted Entries</h2>
                     <p className="text-xs text-slate-400 mt-0.5">{myTimeEntries.length} entries</p>
@@ -1085,7 +1085,7 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                   </div>
                 )}
 
-                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+                <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
                   <div className="px-5 pt-4 pb-2 flex items-center justify-between">
                     <div>
                       <h2 className="font-bold text-slate-800">Team Payroll — {activeVerification?.payroll_month}</h2>

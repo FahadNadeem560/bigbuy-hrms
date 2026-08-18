@@ -127,7 +127,7 @@ export default function BranchDashboard({ restrictToBranch }) {
             </div>
             <div className={`text-3xl font-bold ml-auto ${pctColor(drillData?.pct || 0)}`}>{drillData?.pct || 0}%</div>
           </div>
-          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <div className="px-5 pt-4 pb-2"><h3 className="font-bold text-slate-800">Department Breakdown</h3></div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">

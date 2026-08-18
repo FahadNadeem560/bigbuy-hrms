@@ -492,7 +492,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       {tab === "leave" && !loading && (() => {
         const actionableIds = pendingLeave.filter(r => canActOnStage(role, r, actorEmployeeCode)).map(r => r.id);
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Leave Approval Queue</h2><p className="text-xs text-slate-400">{pendingLeave.length} pending</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveLeave)}
@@ -538,7 +538,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
 
       {/* ── TIMESHEET ── */}
       {tab === "timesheet" && !loading && (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Timesheet Sign-offs</h2><p className="text-xs text-slate-400">{signoffs.length} records</p></div>
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
@@ -574,7 +574,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         const canActAttendance = ["Master","GM"].includes(role);
         const actionableIds = canActAttendance ? pendingCorr.map(a => a.id) : [];
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Attendance Corrections</h2><p className="text-xs text-slate-400">{pendingCorr.length} pending</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveAttCorr)}
@@ -619,7 +619,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       {tab === "adjustments" && !loading && (() => {
         const actionableIds = adjustments.map(a => a.id);
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">One-Time Adjustments</h2><p className="text-xs text-slate-400">{adjustments.length} pending</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveAdj)}
@@ -661,7 +661,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       {tab === "settlements" && !loading && (() => {
         const actionableIds = settlements.map(s => s.id);
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Final Settlements</h2><p className="text-xs text-slate-400">{settlements.length} pending</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveSettlement)}
@@ -705,7 +705,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         const canActIncrement = ["Master", "GM"].includes(role);
         const actionableIds = canActIncrement ? increments.map(inc => inc.id) : [];
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Salary Increments</h2><p className="text-xs text-slate-400">{increments.length} pending</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveIncrement)}
@@ -753,7 +753,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         const canActLoan = ["Master", "GM"].includes(role);
         const actionableIds = canActLoan ? loanRequests.map(l => l.id) : [];
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Requests</h2><p className="text-xs text-slate-400">{loanRequests.length} pending</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveLoan)}
@@ -804,7 +804,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         const canActLoanChange = ["Master", "GM"].includes(role);
         const actionableIds = canActLoanChange ? loanChangeRequests.map(c => c.id) : [];
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip mt-4">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh] mt-4">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Change Requests</h2><p className="text-xs text-slate-400">{loanChangeRequests.length} pending — reschedule or skip-month requests on existing loans</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveLoanChangeReq)}
@@ -853,7 +853,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           .filter(r => ["Master", "GM"].includes(role) && !(requiresMasterOnly(r.current_status, r.requested_status) && role !== "Master"))
           .map(r => r.id);
         return (
-        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-clip">
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payment Status Change Requests</h2><p className="text-xs text-slate-400">{paymentRequests.length} pending</p></div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approvePaymentReq)}
