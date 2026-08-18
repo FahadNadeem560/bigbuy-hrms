@@ -152,7 +152,7 @@ export default function TaxManagement({ role }) {
             </div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Income Range (Annual)","Base Tax","Rate on Excess","Example: 1.5M/yr"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Income Range (Annual)","Base Tax","Rate on Excess","Example: 1.5M/yr"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {(activeSlabs.length > 0 ? activeSlabs : DEFAULT_SLABS).map((s, i) => {
@@ -184,7 +184,7 @@ export default function TaxManagement({ role }) {
             </div>
             <table className="w-full min-w-[900px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Employee","Dept","Monthly Salary","Auto Tax/Mo","Mode","Monthly Tax","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Employee","Dept","Monthly Salary","Auto Tax/Mo","Mode","Monthly Tax","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {empTaxData.map(emp => {
@@ -262,7 +262,7 @@ export default function TaxManagement({ role }) {
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Tax Report — {reportMonth}</h2></div>
             <table className="w-full min-w-[700px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Employee","Dept","Salary/Mo","Annual Salary","Mode","Tax Slab","Monthly Tax"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Employee","Dept","Salary/Mo","Annual Salary","Mode","Tax Slab","Monthly Tax"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {empTaxData.length === 0

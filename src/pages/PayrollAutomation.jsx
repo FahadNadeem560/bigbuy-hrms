@@ -163,7 +163,7 @@ function PayslipModal({ row, month, onClose }) {
                 ["Worked Hrs", row.workedHours], ["Required Hrs", row.requiredHours]
               ].map(([l, v]) => (
                 <div key={l} className="text-center bg-white rounded-lg py-1.5 px-2">
-                  <div className="font-semibold text-slate-700">{v ?? 0}</div>
+                  <div className="font-semibold text-slate-700">{Math.round(Number(v) || 0)}</div>
                   <div className="text-slate-400 leading-tight">{l}</div>
                 </div>
               ))}
@@ -188,6 +188,8 @@ function PayslipModal({ row, month, onClose }) {
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Deductions</h3>
             <DRow label="Late Deduction" value={row.lateDeduction} />
             <DRow label="Short Hour Deduction" value={row.shortHourDeduction} />
+            <DRow label="Absent Deduction" value={row.absentDeduction} />
+            <DRow label="Half Day Deduction" value={row.halfDayDeduction} />
             <DRow label="Fine" value={row.fineDeduction} />
             <DRow label="Shortage" value={row.shortageDeduction} />
             <DRow label="Advance (Same Month)" value={row.advanceDeduction} />
@@ -246,7 +248,11 @@ function SummaryPanel({ month, displayRows }) {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payroll Summary — {month}</h2></div>
         <table className="w-full text-sm min-w-[480px]">
           <thead className="bg-slate-50 text-slate-500">
-            <tr><th className="text-left px-4 py-2 font-medium">Category</th><th className="text-right px-4 py-2 font-medium">Employees</th><th className="text-right px-4 py-2 font-medium">Amount</th></tr>
+            <tr>
+              <th className="text-left px-4 py-2 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Category</th>
+              <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Employees</th>
+              <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Amount</th>
+            </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             <Row label="Total Generated" count={buckets.totalGenerated} amt={buckets.totalGeneratedAmt} bold />
@@ -366,10 +372,10 @@ function ComparisonTable({ cur, prev, month, prevMonth, showDiff }) {
     <table className="w-full text-sm">
       <thead className="text-slate-400 text-xs">
         <tr>
-          <th className="text-left px-4 py-2 font-medium"> </th>
-          <th className="text-right px-4 py-2 font-medium">{month}</th>
-          <th className="text-right px-4 py-2 font-medium">{prevMonth}</th>
-          {showDiff && <th className="text-right px-4 py-2 font-medium">Difference</th>}
+          <th className="text-left px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]"> </th>
+          <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{month}</th>
+          <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{prevMonth}</th>
+          {showDiff && <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Difference</th>}
         </tr>
       </thead>
       <tbody className="divide-y divide-slate-50">

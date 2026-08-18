@@ -126,10 +126,10 @@ export default function DocumentManagement() {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="text-left px-4 py-3 font-medium">Employee</th>
-                <th className="text-left px-4 py-3 font-medium">Department</th>
-                {DOCS.map(d => <th key={d} className="text-left px-4 py-3 font-medium">{d}</th>)}
-                <th className="text-left px-4 py-3 font-medium">Completion</th>
+                <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Employee</th>
+                <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Department</th>
+                {DOCS.map(d => <th key={d} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{d}</th>)}
+                <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Completion</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

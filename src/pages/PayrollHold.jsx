@@ -77,7 +77,7 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Hold Employees</h2><p className="text-xs text-slate-400">{holdRows.length} employees</p></div>
         <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee", "Branch", "Department", "Month", "Amount", "Months on Hold", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["Employee", "Branch", "Department", "Month", "Amount", "Months on Hold", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {holdRows.length === 0
@@ -110,7 +110,7 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">No F&F Employees</h2><p className="text-xs text-slate-400">{noFnfRows.length} employees · Read-only unless Master overrides</p></div>
         <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee", "Branch", "Department", "Resign Date", "Last Working Day", "Month", "Amount", "Reason", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["Employee", "Branch", "Department", "Resign Date", "Last Working Day", "Month", "Amount", "Reason", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {noFnfRows.length === 0
@@ -143,7 +143,7 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">F&F Employees</h2><p className="text-xs text-slate-400">{fnfRows.length} employees settled with amount payable</p></div>
         <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee", "Branch", "Department", "Resign Date", "Last Working Day", "Month", "Amount", "Reason"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["Employee", "Branch", "Department", "Resign Date", "Last Working Day", "Month", "Amount", "Reason"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {fnfRows.length === 0

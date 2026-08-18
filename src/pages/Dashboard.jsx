@@ -96,11 +96,11 @@ export default function Dashboard({ activeEmployees, attendanceRows, payrollRows
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
-                  <th className="text-left px-4 py-3 font-medium">Branch</th>
-                  <th className="text-right px-4 py-3 font-medium">Active Staff</th>
-                  <th className="text-right px-4 py-3 font-medium">Gross Base Salary</th>
-                  <th className="text-right px-4 py-3 font-medium">Payroll</th>
-                  {canSeeIncentives && <th className="text-right px-4 py-3 font-medium">Incentive</th>}
+                  <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Branch</th>
+                  <th className="text-right px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Active Staff</th>
+                  <th className="text-right px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Gross Base Salary</th>
+                  <th className="text-right px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Payroll</th>
+                  {canSeeIncentives && <th className="text-right px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Incentive</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">

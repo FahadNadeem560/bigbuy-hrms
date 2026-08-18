@@ -168,7 +168,7 @@ export default function LeaveLiability() {
           <table className="w-full min-w-[700px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>{["Employee", "Department", "Branch", "Monthly Salary", "Daily Rate", "Leave Days", "Liability"].map(h => (
-                <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
               ))}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

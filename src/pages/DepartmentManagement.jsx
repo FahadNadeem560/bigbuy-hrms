@@ -113,7 +113,7 @@ export default function DepartmentManagement({ role }) {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Department", "Description", "Department Head", "Employees", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Department", "Description", "Department Head", "Employees", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {departments.length === 0
@@ -183,7 +183,7 @@ export default function DepartmentManagement({ role }) {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Designation", "Department", "Description", "Employees", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Designation", "Department", "Description", "Employees", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {designations.length === 0

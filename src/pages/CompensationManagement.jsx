@@ -142,7 +142,7 @@ export default function CompensationManagement() {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Current Salary Structures</h2><p className="text-xs text-slate-400">{employees.length} active employees</p></div>
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Basic", "HRA", "Medical", "Conveyance", "Other", "Total CTC", "Effective", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Basic", "HRA", "Medical", "Conveyance", "Other", "Total CTC", "Effective", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {empStructures.map(emp => {
@@ -176,7 +176,7 @@ export default function CompensationManagement() {
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">All Salary Structure Changes</h2></div>
             <table className="w-full min-w-[800px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Date", "Employee", "Basic", "HRA", "Medical", "Conveyance", "Other", "Total CTC"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Date", "Employee", "Basic", "HRA", "Medical", "Conveyance", "Other", "Total CTC"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {structures.length === 0
@@ -214,7 +214,7 @@ export default function CompensationManagement() {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Department-wise Cost Analysis</h2></div>
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500"><tr>{["Department", "Headcount", "Total Salary", "Avg Salary"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-50 text-slate-500"><tr>{["Department", "Headcount", "Total Salary", "Avg Salary"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {deptReport.map((d, i) => (
                   <tr key={i}><td className="px-4 py-3 font-medium">{d.dept}</td><td className="px-4 py-3">{d.count}</td><td className="px-4 py-3 font-semibold">{money(d.totalSalary)}</td><td className="px-4 py-3">{money(d.avgSalary)}</td></tr>

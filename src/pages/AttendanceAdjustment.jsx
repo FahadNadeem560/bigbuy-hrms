@@ -355,7 +355,7 @@ export default function AttendanceAdjustment({ role }) {
             <table className="w-full min-w-[900px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>{["Employee","Date","Check In","Check Out","Hours","Submitted By","Status","Action"].map(h => (
-                  <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                  <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                 ))}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -421,7 +421,7 @@ export default function AttendanceAdjustment({ role }) {
               <table className="w-full min-w-[980px] text-sm">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>{["Date","Employee","Orig In","Orig Out","Adj In","Adj Out","Reason","By","Status","Timestamp"].map(h => (
-                    <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                    <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">

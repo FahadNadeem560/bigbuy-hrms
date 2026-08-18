@@ -167,7 +167,7 @@ export default function FuelAllowance({ role }) {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Rate History</h2></div>
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500"><tr>{["Rate/km", "Effective From", "Set By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-50 text-slate-500"><tr>{["Rate/km", "Effective From", "Set By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {fuelRates.length === 0 ? <tr><td colSpan={3} className="px-4 py-8 text-center text-slate-400">No rates configured.</td></tr>
                   : fuelRates.map(r => <tr key={r.id}><td className="px-4 py-3 font-semibold">Rs. {r.rate_per_km}/km</td><td className="px-4 py-3">{r.effective_from}</td><td className="px-4 py-3">{r.created_by || "—"}</td></tr>)}
@@ -193,7 +193,7 @@ export default function FuelAllowance({ role }) {
           )}
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Vehicle Type", "Registration", "Eligible"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Vehicle Type", "Registration", "Eligible"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {vehicles.length === 0 ? <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No vehicles assigned.</td></tr>
                   : vehicles.map(v => <tr key={v.id}><td className="px-4 py-3 font-medium">{v.employee_name || v.employee_code}</td><td className="px-4 py-3">{v.vehicle_type}</td><td className="px-4 py-3">{v.registration || "—"}</td><td className="px-4 py-3"><Badge tone={v.is_eligible ? "green" : "slate"}>{v.is_eligible ? "Yes" : "No"}</Badge></td></tr>)}
@@ -226,7 +226,7 @@ export default function FuelAllowance({ role }) {
           )}
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full min-w-[800px] text-sm">
-              <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Month", "KM", "Route", "Purpose", "Amount", "Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Month", "KM", "Route", "Purpose", "Amount", "Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {claims.length === 0 ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No claims.</td></tr>
                   : claims.map(c => <tr key={c.id}><td className="px-4 py-3 font-medium">{c.employee_name || c.employee_code}</td><td className="px-4 py-3">{c.claim_month}</td><td className="px-4 py-3">{c.km_traveled} km</td><td className="px-4 py-3 text-slate-500">{c.route || "—"}</td><td className="px-4 py-3 text-slate-500">{c.purpose || "—"}</td><td className="px-4 py-3 font-semibold">{money(c.calculated_amount)}</td><td className="px-4 py-3"><Badge tone={statusTone(c.status)}>{c.status}</Badge></td></tr>)}
@@ -240,7 +240,7 @@ export default function FuelAllowance({ role }) {
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Fuel Claim Approval</h2><p className="text-xs text-slate-400">{pending.length} pending</p></div>
           <table className="w-full min-w-[800px] text-sm">
-            <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Month", "KM", "Amount", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+            <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Month", "KM", "Amount", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-100">
               {claims.length === 0 ? <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No claims.</td></tr>
                 : claims.map(c => <tr key={c.id}><td className="px-4 py-3 font-medium">{c.employee_name || c.employee_code}</td><td className="px-4 py-3">{c.claim_month}</td><td className="px-4 py-3">{c.km_traveled} km</td><td className="px-4 py-3 font-semibold">{money(c.calculated_amount)}</td><td className="px-4 py-3"><Badge tone={statusTone(c.status)}>{c.status}</Badge></td><td className="px-4 py-3">{c.status === "Pending" && role === "Master" && <div className="flex gap-1"><Button onClick={() => approveClaim(c.id)} className="rounded-xl text-xs py-1 px-2">Approve</Button><Button variant="outline" onClick={() => rejectClaim(c.id)} className="rounded-xl text-xs py-1 px-2">Reject</Button></div>}</td></tr>)}
@@ -259,7 +259,7 @@ export default function FuelAllowance({ role }) {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Department-wise Fuel Expense</h2></div>
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500"><tr>{["Department", "Claims", "Total KM", "Total Amount"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-50 text-slate-500"><tr>{["Department", "Claims", "Total KM", "Total Amount"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {deptReport.length === 0 ? <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No approved claims.</td></tr>
                   : deptReport.map((d, i) => <tr key={i}><td className="px-4 py-3 font-medium">{d.dept}</td><td className="px-4 py-3">{d.count}</td><td className="px-4 py-3">{d.totalKm} km</td><td className="px-4 py-3 font-semibold">{money(d.totalAmt)}</td></tr>)}

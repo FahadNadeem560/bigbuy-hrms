@@ -500,8 +500,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Awaiting","Type","From","To","Days","Stage","Submitted","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Awaiting","Type","From","To","Days","Stage","Submitted","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -542,7 +542,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Timesheet Sign-offs</h2><p className="text-xs text-slate-400">{signoffs.length} records</p></div>
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee","Month","Supervisor","HR Review","Payroll Ready","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee","Month","Supervisor","HR Review","Payroll Ready","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {signoffs.length === 0
@@ -582,8 +582,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Date","Orig In","Orig Out","Adj In","Adj Out","Reason","Stage","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Date","Orig In","Orig Out","Adj In","Adj Out","Reason","Stage","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -627,8 +627,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Type","Amount","Month","Submitted By","Reason","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Type","Amount","Month","Submitted By","Reason","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -669,8 +669,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Branch","Resign Date","Last Working Day","Net Settlement","Supervisor","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Branch","Resign Date","Last Working Day","Net Settlement","Supervisor","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -713,8 +713,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Branch","Old Salary","New Salary","Increment","Effective From","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Branch","Old Salary","New Salary","Increment","Effective From","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -761,8 +761,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[1000px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Loan Amount","Monthly Ded.","Months","Start Date","Guarantors","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Loan Amount","Monthly Ded.","Months","Start Date","Guarantors","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -812,8 +812,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Type","Details","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Type","Details","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -861,8 +861,8 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
-                <th className="px-4 py-3"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Month","From","To","Reason","Requested By","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}
+                <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
+                {["Employee","Month","From","To","Reason","Requested By","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

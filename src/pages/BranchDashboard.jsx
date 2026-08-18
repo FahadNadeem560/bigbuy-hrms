@@ -132,7 +132,7 @@ export default function BranchDashboard({ restrictToBranch }) {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>{["Department", "Present", "Absent", "Total", "Attendance %"].map(h => (
-                  <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                  <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                 ))}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">

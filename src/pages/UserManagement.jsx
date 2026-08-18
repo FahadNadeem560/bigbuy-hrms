@@ -216,7 +216,7 @@ export default function UserManagement({ role }) {
         {err && <div className="mx-5 mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
         <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["User", "Role", "Menu Access", "Status", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["User", "Role", "Menu Access", "Status", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (

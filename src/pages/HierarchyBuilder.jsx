@@ -141,11 +141,11 @@ function LevelsTab({ levels, reload, setMsg, setErr }) {
         <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
-              <th className="text-left px-4 py-3 font-medium w-10"></th>
-              <th className="text-left px-4 py-3 font-medium">#</th>
-              <th className="text-left px-4 py-3 font-medium">Level Name</th>
-              <th className="text-center px-3 py-3 font-medium">Cross-Branch</th>
-              {PERM_FIELDS.map(([k, l]) => <th key={k} className="text-center px-3 py-3 font-medium">{l}</th>)}
+              <th className="text-left px-4 py-3 font-medium w-10 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"></th>
+              <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">#</th>
+              <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Level Name</th>
+              <th className="text-center px-3 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Cross-Branch</th>
+              {PERM_FIELDS.map(([k, l]) => <th key={k} className="text-center px-3 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{l}</th>)}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">

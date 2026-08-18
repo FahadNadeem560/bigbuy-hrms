@@ -170,7 +170,7 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Branch-wise Breakdown</h2></div>
         <table className="w-full min-w-[1280px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Branch", "Payable", "Hold", "No F&F", "Loan", "Advance", "EOBI", "Tax", "OT", "Additional Payments", "Total", "Incentive Cash Distributed"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["Branch", "Payable", "Hold", "No F&F", "Loan", "Advance", "EOBI", "Tax", "OT", "Additional Payments", "Total", "Incentive Cash Distributed"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {visibleBranches.length === 0

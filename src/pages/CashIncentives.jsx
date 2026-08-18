@@ -141,7 +141,7 @@ function OneOffTab({ role, actorName, month, setMonth }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">One-Off Bonuses — {month}</h2><p className="text-xs text-slate-400">{rows.length} entries · Total {money(total)}</p></div>
           <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Branch", "Department", "Amount", "Given By", "Notes", "Date"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Branch", "Department", "Amount", "Given By", "Notes", "Date"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {rows.length === 0
@@ -165,7 +165,7 @@ function OneOffTab({ role, actorName, month, setMonth }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">One-Off Bonuses — Branch Summary — {month}</h2></div>
           <table className="w-full min-w-[400px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr><th className="text-left px-4 py-3 font-medium">Branch</th><th className="text-right px-4 py-3 font-medium">Total</th></tr>
+              <tr><th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Branch</th><th className="text-right px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Total</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {branchSummary.length === 0
@@ -274,7 +274,7 @@ function ActiveTab({ role, actorName, refreshKey, bump }) {
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
         <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee Code", "Employee Name", "Branch", "Department", "Monthly Amount", "Effective From", "Added By", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["Employee Code", "Employee Name", "Branch", "Department", "Monthly Amount", "Effective From", "Added By", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
@@ -339,7 +339,7 @@ function ActiveTab({ role, actorName, refreshKey, bump }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Branch-wise Total</h2></div>
           <table className="w-full min-w-[400px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr><th className="text-left px-4 py-3 font-medium">Branch</th><th className="text-right px-4 py-3 font-medium">Total</th></tr>
+              <tr><th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Branch</th><th className="text-right px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Total</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {branchTotals.map(b => (
@@ -473,7 +473,7 @@ function HistoryTab({ role, refreshKey }) {
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
         <table className="w-full min-w-[1000px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Date", "Employee", "Action", "Old Amount", "New Amount", "Effective From", "Reason", "Done By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["Date", "Employee", "Action", "Old Amount", "New Amount", "Effective From", "Reason", "Done By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (

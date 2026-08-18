@@ -277,7 +277,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Advance Ledger</h2><p className="text-xs text-slate-400">{filtered.length} records</p></div>
         <table className="w-full min-w-[1100px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["S.No", "Branch", "Employee Code", "Name", "Department", "Requested", "Approved", "Issued", "Excess", "Status", "Month", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+            <tr>{["S.No", "Branch", "Employee Code", "Name", "Department", "Requested", "Approved", "Issued", "Excess", "Status", "Month", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0
@@ -318,7 +318,7 @@ function PendingApprovalTab({ advances, actorName, role, reload, setMsg, setErr 
       <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Pending Approval</h2><p className="text-xs text-slate-400">{pending.length} awaiting Finance decision</p></div>
       <table className="w-full min-w-[900px] text-sm">
         <thead className="bg-slate-50 text-slate-500">
-          <tr>{["Branch", "Employee Code", "Name", "Department", "Requested", "Month", "Requested By", "Notes", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+          <tr>{["Branch", "Employee Code", "Name", "Department", "Requested", "Month", "Requested By", "Notes", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {pending.length === 0
@@ -455,7 +455,7 @@ function ImportHistoricalTab({ employees, reload, setMsg, setErr }) {
           </div>
           <table className="w-full min-w-[1000px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Branch", "Code", "Name", "Department", "Requested", "Approved", "Issued", "Month", "Row Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Branch", "Code", "Name", "Department", "Requested", "Approved", "Issued", "Month", "Row Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {preview.map((r, i) => (
@@ -527,7 +527,7 @@ function SummaryPanel({ advances }) {
           <div className="px-5 pt-3 pb-2"><h2 className="font-bold text-slate-800 text-sm">Branch-wise Breakdown</h2></div>
           <table className="w-full min-w-[600px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Branch", "Requested", "Approved", "Issued"].map(h => <th key={h} className="text-left px-4 py-2 font-medium">{h}</th>)}</tr>
+              <tr>{["Branch", "Requested", "Approved", "Issued"].map(h => <th key={h} className="text-left px-4 py-2 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {totals.branchRows.map(b => (

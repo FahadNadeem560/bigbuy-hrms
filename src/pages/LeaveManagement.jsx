@@ -412,7 +412,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
           </div>
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Type", "From", "To", "Days", "Reason", "Stage", "Applied", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Type", "From", "To", "Days", "Reason", "Stage", "Applied", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {pending.length === 0
@@ -527,7 +527,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
                     <thead className="bg-slate-50 text-slate-500">
                       <tr>
                         {["Code", "Name", "Opening", "Used", "Half Leaves", "Remaining", "Effective From", "Status"].map(h => (
-                          <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
+                          <th key={h} className="text-left px-3 py-2 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -578,7 +578,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
                   {["Code", "Name", "Branch", "Department", "Opening Balance", "Earned to Date", "Used", "Half Leaves", "Remaining", "Last Updated"].map(h => (
-                    <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                    <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -639,7 +639,7 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
             <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Leave History</h2><p className="text-xs text-slate-400">{filteredHistory.length} records</p></div>
             <table className="w-full min-w-[800px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Employee", "Type", "From", "To", "Days", "Reason", "Status", "Approved By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+                <tr>{["Employee", "Type", "From", "To", "Days", "Reason", "Status", "Approved By"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredHistory.length === 0

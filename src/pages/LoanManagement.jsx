@@ -386,7 +386,7 @@ export default function LoanManagement({ role }) {
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>
                       {["Code", "Employee", "Loan Amount", "Outstanding", "Monthly Ded.", "Months", "Start Date", "Guarantor 1", "Guarantor 2", "Loan Status", "Status"].map(h => (
-                        <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
+                        <th key={h} className="text-left px-3 py-2 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -470,7 +470,7 @@ export default function LoanManagement({ role }) {
         <table className="w-full min-w-[1050px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>{["Employee", "Guarantors", "Loan Amount", "Monthly Ded.", "Outstanding", "Start Date", "Months", "Status", ...(canManage ? ["Actions"] : [])].map(h => (
-              <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+              <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
             ))}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">

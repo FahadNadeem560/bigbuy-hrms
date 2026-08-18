@@ -235,7 +235,7 @@ export default function RosterManagement() {
           )}
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500"><tr>{["Shift Name", "Start", "End", "Grace", "Days", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-50 text-slate-500"><tr>{["Shift Name", "Start", "End", "Grace", "Days", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {shifts.length === 0 ? <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No shifts defined.</td></tr>
                   : shifts.map(s => <tr key={s.id}><td className="px-4 py-3 font-semibold">{s.name}</td><td className="px-4 py-3">{s.start_time}</td><td className="px-4 py-3">{s.end_time}</td><td className="px-4 py-3">{s.grace_minutes} min</td><td className="px-4 py-3 text-slate-500">{s.days_applicable}</td><td className="px-4 py-3"><Button variant="outline" onClick={() => { setEditShift(s); setShowShiftForm(true); }} className="rounded-xl text-xs py-1 px-2">Edit</Button></td></tr>)}
@@ -275,7 +275,7 @@ export default function RosterManagement() {
           )}
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
             <table className="w-full min-w-[700px] text-sm">
-              <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Shift", "Effective From", "Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+              <thead className="bg-slate-50 text-slate-500"><tr>{["Employee", "Shift", "Effective From", "Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {assignments.length === 0 ? <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No assignments.</td></tr>
                   : assignments.map(a => {
@@ -298,8 +298,8 @@ export default function RosterManagement() {
             <table className="w-full min-w-[900px] text-xs">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
-                  <th className="text-left px-3 py-3 font-medium">Employee</th>
-                  {weekDates.map((d, i) => <th key={d} className="text-center px-2 py-3 font-medium">{DAYS[i]}<div className="text-slate-400 font-normal">{d.slice(5)}</div></th>)}
+                  <th className="text-left px-3 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Employee</th>
+                  {weekDates.map((d, i) => <th key={d} className="text-center px-2 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{DAYS[i]}<div className="text-slate-400 font-normal">{d.slice(5)}</div></th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">

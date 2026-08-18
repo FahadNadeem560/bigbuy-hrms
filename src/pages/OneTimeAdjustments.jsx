@@ -158,7 +158,7 @@ export default function OneTimeAdjustments({ role }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">All Adjustments</h2><p className="text-xs text-slate-400">{adjustments.length} total</p></div>
           <table className="w-full min-w-[800px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Type", "Amount", "Mode", "Month", "Reason", "Status", "Rejection Reason"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Type", "Amount", "Mode", "Month", "Reason", "Status", "Rejection Reason"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {adjustments.length === 0
@@ -185,7 +185,7 @@ export default function OneTimeAdjustments({ role }) {
           <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Approval Queue</h2><p className="text-xs text-slate-400">{pending.length} pending</p></div>
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Type", "Amount", "Mode", "Month", "Reason", "Submitted", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>)}</tr>
+              <tr>{["Employee", "Type", "Amount", "Mode", "Month", "Reason", "Submitted", "Status", "Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {adjustments.length === 0

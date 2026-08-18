@@ -250,7 +250,7 @@ function ImportPanel({ employees, onDone }) {
                 <table className="w-full text-xs min-w-[600px]">
                   <thead className="bg-slate-50 text-slate-500">
                     <tr>{["Code","Name","Old Salary","New Salary","Effective","Amount","Type"].map(h => (
-                      <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
+                      <th key={h} className="px-3 py-2 text-left font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                     ))}</tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -803,7 +803,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               <tr>
                 {["Emp Code", "Employee Name", "Effective Month", "Previous Salary", "New Salary", "Increment Amount", "Increment %", "Type", "Status",
                   ...(isMasterGm ? ["Monthly Incentive", "Incentive Since", "Total Effective Comp."] : [])].map(h => (
-                  <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                  <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -892,7 +892,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
                   {["Employee", "Branch", "Department", ...MONTH_LABELS, "Total Increments", "Total Amount"].map(h => (
-                    <th key={h} className="text-left px-3 py-3 font-medium whitespace-nowrap">{h}</th>
+                    <th key={h} className="text-left px-3 py-3 font-medium whitespace-nowrap sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -956,7 +956,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               <table className="w-full min-w-[800px] text-sm">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>{["Emp Code", "Name", "Next Due Date", "Reason", "Dismissed By", "Dismissed At", "Action"].map(h => (
-                    <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                    <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -985,7 +985,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                 <tr>{["Emp Code", "Name", "Branch", "Department", "Joining Date", "Last Increment Date", "Last Increment Amount", "Next Due Date", "Days Overdue/Remaining", "Current Salary",
                   ...(isMasterGm ? ["Monthly Incentive", "Incentive Since", "Total Effective Comp."] : []),
                   ...(role !== "GM" ? ["Action"] : [])].map(h => (
-                  <th key={h} className="text-left px-4 py-3 font-medium">{h}</th>
+                  <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
                 ))}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">

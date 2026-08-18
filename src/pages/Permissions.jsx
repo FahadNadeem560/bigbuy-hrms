@@ -207,7 +207,7 @@ export default function Permissions({ employees, role }) {
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               {["Staff Level", "Required Hours", "OT Eligible (default)", "Extra Day Eligible", "Gazetted Holiday Eligible"].map(h => (
-                <th key={h} className="text-left px-3 py-3 font-medium">{h}</th>
+                <th key={h} className="text-left px-3 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
               ))}
             </tr>
           </thead>
@@ -288,7 +288,7 @@ export default function Permissions({ employees, role }) {
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               {["Employee", "Branch", "Department", "Staff Level", "Eligibility Group", "OT Eligible", "Extra Day Eligible", "Gazetted Holiday Eligible", "Leave Eligible", "Attendance Exempt", "Field Employee", "Single Punch OK", "Monthly Hours Based", "Supervisor", "Manager", "WhatsApp Verified", "Enrollment Completed", "Temporary"].map(h => (
-                <th key={h} className="text-left px-3 py-3 font-medium">{h}</th>
+                <th key={h} className="text-left px-3 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
               ))}
             </tr>
           </thead>
