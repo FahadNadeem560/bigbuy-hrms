@@ -714,7 +714,7 @@ export default function PayrollAutomation({ role, actorName }) {
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("advances").select("*").eq("advance_month", month).in("status", ["Issued", "Deducted"]),
       supabase.from("one_time_adjustments").select("*").eq("payroll_month", month).eq("status", "Approved"),
-      supabase.from("staff_eligibility_groups").select("code, extra_days_eligible"),
+      supabase.from("staff_eligibility_groups").select("code, extra_days_eligible, late_penalty_after_count, late_penalty_days"),
       // Approved Skip Month requests for this month -- exclude these loans'
       // deduction below (LoanManagement.jsx's Skip Month / Approval Queue).
       supabase.from("loan_changes").select("loan_id").eq("change_type", "relief").eq("status", "Approved").eq("effective_month", month),
@@ -841,6 +841,13 @@ export default function PayrollAutomation({ role, actorName }) {
         salary: emp.salary || 0, status: emp.status, joiningDate: emp.joining_date,
         isAttendanceExempt: !!emp.is_attendance_exempt,
         extraDaysEligible,
+        // Live late-deduction rule from the employee's real eligibility
+        // group (Policy Settings page) — overrides the static per-level
+        // default in payrollRules.js when present.
+        latePolicyOverride: group ? {
+          latePenaltyCount: group.late_penalty_after_count,
+          latePenaltyDays: group.late_penalty_days,
+        } : undefined,
       };
       const oneTimeAdj = oneTimeAdjByEmp[emp.employee_code] || {};
       const adj = {

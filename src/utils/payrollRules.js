@@ -36,7 +36,10 @@ export function getWorkingDaysInMonth(year, month) {
 }
 
 export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows = [], taxSlabs = [], month = null, taxSetting = null) {
-  const policy = getPolicyForLevel(employee.level);
+  // latePolicyOverride (from the employee's real staff_eligibility_groups row,
+  // editable live on the Policy Settings page) wins over the static
+  // per-level defaults below when present.
+  const policy = { ...getPolicyForLevel(employee.level), ...(employee.latePolicyOverride || {}) };
   const monthlySalary = Number(employee.salary || 0);
   const isExempt = !!employee.isAttendanceExempt;
   // Effective eligibility (individual override wins, else group default). Management/Admin
@@ -87,10 +90,13 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   // ── Deductions ────────────────────────────────────────────
   const absentDeduction = Math.round(dailyRate * Number(adjustments.absentDays || 0));
 
-  // Timing deductions skipped for exempt employees
-  const latePenaltyDays = (!isExempt && Number(adjustments.lateCount || 0) >= Number(policy.latePenaltyCount || 3))
-    ? Number(policy.latePenaltyDays || 0)
-    : 0;
+  // Timing deductions skipped for exempt employees. Deduction scales with
+  // lateness: every latePenaltyCount late days deducts another
+  // latePenaltyDays day(s) of salary (e.g. 3/1 -> 9 late days = 3 days
+  // deducted), not a single flat penalty once the threshold is crossed.
+  const latePenaltyCount = Number(policy.latePenaltyCount) > 0 ? Number(policy.latePenaltyCount) : 3;
+  const latePenaltyUnits = isExempt ? 0 : Math.floor(Number(adjustments.lateCount || 0) / latePenaltyCount);
+  const latePenaltyDays  = latePenaltyUnits * Number(policy.latePenaltyDays || 0);
   const lateDeduction     = isExempt ? 0 : Math.round(dailyRate * latePenaltyDays);
   const shortHourDeduction = isExempt ? 0 : Number(adjustments.shortHourDeduction || 0);
   const halfDayDeduction  = isExempt ? 0 : (adjustments.halfDays !== undefined
