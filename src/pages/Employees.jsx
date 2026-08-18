@@ -52,6 +52,42 @@ function Field({ label, children }) {
   return <div><p className="text-xs text-slate-500 mb-1">{label}</p>{children}</div>;
 }
 
+// Department/Designation are free-text on the employees table, but should
+// still draw from the master lists (DepartmentManagement.jsx) so everyone
+// picks from what already exists instead of retyping near-duplicates --
+// while still allowing a genuinely new one to be typed and saved.
+function useDeptDesigOptions() {
+  const [departments, setDepartments] = useState([]);
+  const [designations, setDesignations] = useState([]);
+  useEffect(() => {
+    supabase.from("departments").select("name").eq("is_active", true).order("name")
+      .then(({ data }) => setDepartments((data || []).map(d => d.name)));
+    supabase.from("designations").select("name").eq("is_active", true).order("name")
+      .then(({ data }) => setDesignations((data || []).map(d => d.name)));
+  }, []);
+  async function ensure(table, list, setList, value) {
+    const v = String(value || "").trim();
+    if (!v || list.some(x => x.toLowerCase() === v.toLowerCase())) return;
+    const { error } = await supabase.from(table).insert({ name: v, is_active: true });
+    if (!error) setList(l => [...l, v]);
+  }
+  return {
+    departments, designations,
+    ensureDepartment: v => ensure("departments", departments, setDepartments, v),
+    ensureDesignation: v => ensure("designations", designations, setDesignations, v),
+  };
+}
+
+function ComboField({ label, value, onChange, options, listId, placeholder }) {
+  return (
+    <Field label={label}>
+      <input list={listId} value={value || ""} onChange={e => onChange(e.target.value)}
+        placeholder={placeholder} className="px-4 py-2 border rounded-xl w-full text-sm" />
+      <datalist id={listId}>{options.map(o => <option key={o} value={o} />)}</datalist>
+    </Field>
+  );
+}
+
 function HierarchyReadout({ employeeCode }) {
   const [row, setRow] = useState(undefined); // undefined = loading, null = none found
 
@@ -92,6 +128,7 @@ function HierarchyReadout({ employeeCode }) {
 
 export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }) {
   const [uploading, setUploading] = useState(false);
+  const { departments, designations, ensureDepartment, ensureDesignation } = useDeptDesigOptions();
 
   async function handleUpload(field, file) {
     if (!file) return;
@@ -101,6 +138,11 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
       setEmployee(e => ({ ...e, [field]: url }));
     } catch { /* storage bucket may not exist yet */ }
     finally { setUploading(false); }
+  }
+
+  async function handleSave() {
+    await Promise.all([ensureDepartment(employee.department), ensureDesignation(employee.designation)]);
+    save();
   }
 
   const inp = (field, placeholder, type = "text") => (
@@ -124,8 +166,10 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
 
       <Section title="Basic Information">
         <Field label="Full Name *">{inp("fullName", "Full Name")}</Field>
-        <Field label="Designation">{inp("designation", "Designation")}</Field>
-        <Field label="Department">{inp("department", "Department")}</Field>
+        <ComboField label="Designation" value={employee.designation} listId="designation-options" options={designations}
+          placeholder="Select or type a new designation" onChange={v => setEmployee(e => ({ ...e, designation: v }))} />
+        <ComboField label="Department" value={employee.department} listId="department-options" options={departments}
+          placeholder="Select or type a new department" onChange={v => setEmployee(e => ({ ...e, department: v }))} />
         <Field label="Branch">
           <select value={employee.branch} onChange={e => setEmployee(v => ({ ...v, branch: e.target.value }))} className="px-4 py-2 border rounded-xl w-full text-sm">
             {Object.keys(BRANCH_CODE_MAP).map(x => <option key={x}>{x}</option>)}
@@ -227,17 +271,22 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
         </Field>
       </Section>
 
-      <div className="mt-4"><Button onClick={save}>Save Employee</Button></div>
+      <div className="mt-4"><Button onClick={handleSave}>Save Employee</Button></div>
     </div>
   );
 }
 
 export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
+  const { departments, ensureDepartment } = useDeptDesigOptions();
   const inp = (field, placeholder, type = "text") => (
     <input type={type} placeholder={placeholder} value={employee[field] || ""}
       onChange={e => setEmployee(v => ({ ...v, [field]: e.target.value }))}
       className="px-4 py-2 border rounded-xl w-full text-sm" />
   );
+  async function handleSave() {
+    await ensureDepartment(employee.dept);
+    save();
+  }
   const [otpMsg, setOtpMsg] = useState("");
   const [otpBusy, setOtpBusy] = useState(false);
   async function resendVerification() {
@@ -255,7 +304,8 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
 
       <Section title="Basic Information">
         <Field label="Full Name">{inp("name", "Full Name")}</Field>
-        <Field label="Department">{inp("dept", "Department")}</Field>
+        <ComboField label="Department" value={employee.dept} listId="edit-department-options" options={departments}
+          placeholder="Select or type a new department" onChange={v => setEmployee(e => ({ ...e, dept: v }))} />
         <Field label="Staff Level">
           <select value={employee.level} onChange={e => setEmployee(v => ({ ...v, level: e.target.value }))} className="px-4 py-2 border rounded-xl w-full text-sm">
             {Object.keys(STAFF_LEVEL_POLICIES).map(x => <option key={x}>{x}</option>)}
@@ -321,7 +371,7 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
         <Field label="IBAN">{inp("iban", "IBAN")}</Field>
       </Section>
 
-      <div className="mt-4 flex gap-2"><Button onClick={save}>Save Changes</Button><Button variant="outline" onClick={close}>Cancel</Button></div>
+      <div className="mt-4 flex gap-2"><Button onClick={handleSave}>Save Changes</Button><Button variant="outline" onClick={close}>Cancel</Button></div>
     </div>
   );
 }
