@@ -274,6 +274,7 @@ export default function BigBuyHRMS({ profile }) {
     try {
       await updateEmployeeByCode(editingEmployee.id, {
         full_name: editingEmployee.name, department: editingEmployee.dept,
+        designation: editingEmployee.designation === "-" ? null : editingEmployee.designation,
         branch: editingEmployee.branch, staff_level: editingEmployee.level,
         salary: Number(editingEmployee.salary || 0), status: editingEmployee.status,
         cnic: editingEmployee.cnic, fathers_name: editingEmployee.fathersName, fathers_cnic: editingEmployee.fathersCnic,

@@ -277,14 +277,14 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
 }
 
 export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
-  const { departments, ensureDepartment } = useDeptDesigOptions();
+  const { departments, designations, ensureDepartment, ensureDesignation } = useDeptDesigOptions();
   const inp = (field, placeholder, type = "text") => (
     <input type={type} placeholder={placeholder} value={employee[field] || ""}
       onChange={e => setEmployee(v => ({ ...v, [field]: e.target.value }))}
       className="px-4 py-2 border rounded-xl w-full text-sm" />
   );
   async function handleSave() {
-    await ensureDepartment(employee.dept);
+    await Promise.all([ensureDepartment(employee.dept), ensureDesignation(employee.designation)]);
     save();
   }
   const [otpMsg, setOtpMsg] = useState("");
@@ -304,6 +304,8 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
 
       <Section title="Basic Information">
         <Field label="Full Name">{inp("name", "Full Name")}</Field>
+        <ComboField label="Designation" value={employee.designation === "-" ? "" : employee.designation} listId="edit-designation-options" options={designations}
+          placeholder="Select or type a new designation" onChange={v => setEmployee(e => ({ ...e, designation: v }))} />
         <ComboField label="Department" value={employee.dept} listId="edit-department-options" options={departments}
           placeholder="Select or type a new department" onChange={v => setEmployee(e => ({ ...e, dept: v }))} />
         <Field label="Staff Level">
