@@ -38,6 +38,29 @@ export function PageTitle({ title, subtitle, action }) {
   return <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6"><div><h1 className="text-2xl md:text-3xl font-bold text-slate-950">{title}</h1><p className="text-slate-500 mt-1">{subtitle}</p></div>{action}</div>;
 }
 
+export function PasswordInput({ value, onChange, className = "", ...props }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative">
+      <input
+        type={visible ? "text" : "password"}
+        value={value}
+        onChange={onChange}
+        className={`w-full px-4 py-3 pr-11 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 ${className}`}
+        {...props}
+      />
+      <button
+        type="button"
+        onClick={() => setVisible(v => !v)}
+        tabIndex={-1}
+        title={visible ? "Hide password" : "Show password"}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition leading-none">
+        {visible ? "🙈" : "👁️"}
+      </button>
+    </div>
+  );
+}
+
 export function StatCard({ title, value, sub, icon, maskable = false }) {
   const [revealed, setRevealed] = useState(!maskable);
   return (

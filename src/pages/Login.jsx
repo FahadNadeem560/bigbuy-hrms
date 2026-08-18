@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { signInWithEmailPassword, usernameToEmail } from "../services/authService.js";
+import { PasswordInput } from "../components/ui.jsx";
 
 export default function Login({ deactivated }) {
   const [username, setUsername] = useState("");
@@ -57,12 +58,10 @@ export default function Login({ deactivated }) {
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Password</label>
-            <input
-              type="password"
+            <PasswordInput
               value={password}
               onChange={e => setPassword(e.target.value)}
               autoComplete="current-password"
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
             />
           </div>
           <button

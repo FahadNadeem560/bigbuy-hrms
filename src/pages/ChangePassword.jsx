@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { updatePassword, clearMustChangePassword, signOut } from "../services/authService.js";
+import { PasswordInput } from "../components/ui.jsx";
 
 export default function ChangePassword({ authUserId, onDone }) {
   const [pw, setPw] = useState("");
@@ -39,22 +40,18 @@ export default function ChangePassword({ authUserId, onDone }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">New Password</label>
-            <input
-              type="password"
+            <PasswordInput
               value={pw}
               onChange={e => setPw(e.target.value)}
               autoComplete="new-password"
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
             />
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Confirm Password</label>
-            <input
-              type="password"
+            <PasswordInput
               value={confirm}
               onChange={e => setConfirm(e.target.value)}
               autoComplete="new-password"
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
             />
           </div>
           <button

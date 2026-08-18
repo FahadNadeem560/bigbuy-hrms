@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { signInWithEmailPassword, usernameToEmail, signOut, updatePassword, clearMustChangePassword } from "../services/authService.js";
 import { sendOnboardingOtp, verifyOnboardingOtp } from "../services/whatsappService.js";
 import EmployeeSelfService from "./EmployeeSelfService.jsx";
+import { PasswordInput } from "../components/ui.jsx";
 
 // Self-contained employee auth gate: credentials -> forced password change
 // (first login, mirrors ChangePassword.jsx for the HR-staff side) -> WhatsApp
@@ -176,13 +177,11 @@ export default function EmployeeLogin() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Password</label>
-                <input
-                  type="password"
+                <PasswordInput
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="Enter your password"
                   autoComplete="current-password"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
                 />
               </div>
               <button
@@ -213,22 +212,18 @@ export default function EmployeeLogin() {
             <form onSubmit={handleChangePassword} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">New Password</label>
-                <input
-                  type="password"
+                <PasswordInput
                   value={newPw}
                   onChange={e => setNewPw(e.target.value)}
                   autoComplete="new-password"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
                 />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">Confirm Password</label>
-                <input
-                  type="password"
+                <PasswordInput
                   value={confirmPw}
                   onChange={e => setConfirmPw(e.target.value)}
                   autoComplete="new-password"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
                 />
               </div>
               <button
