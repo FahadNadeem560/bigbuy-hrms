@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { notifyLoanProposed, notifyLoanCreatedByMaster, proposeLoanChange, applyLoanChangeAsMaster, clearLoanAsMaster, earlySettleLoanAsMaster, submitLoanGuaranteeDocuments, fetchLoanGuaranteeDocuments, markLoanDisbursed } from "../services/loanService.js";
+import { notifyLoanProposed, notifyLoanCreatedByMaster, proposeLoanChange, applyLoanChangeAsMaster, clearLoanAsMaster, earlySettleLoanAsMaster, submitLoanGuaranteeDocuments, fetchLoanGuaranteeDocuments, attachSignedReceiptUrls, markLoanDisbursed } from "../services/loanService.js";
 
 function nextMonthStr() {
   const d = new Date();
@@ -108,6 +108,9 @@ export default function LoanManagement({ role, actorName }) {
     setLoans(lns || []);
     setEmployees(emps || []);
     setLoanChanges(changes || []);
+    try {
+      setLoans(await attachSignedReceiptUrls(lns || []));
+    } catch { /* receipt thumbnails are a supplement to the ledger, not required to view it */ }
     try {
       const docs = await fetchLoanGuaranteeDocuments((lns || []).map(l => l.id));
       const map = {};

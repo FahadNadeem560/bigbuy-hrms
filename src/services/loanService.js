@@ -181,13 +181,27 @@ export async function earlySettleLoanAsMaster(loanId, actorName) {
 // slip, and marks the loan disbursed — only then does it become "Active"
 // and start deducting from payroll.
 
+// Bucket is private (CNIC/property-paper photos), so nothing is ever stored
+// or handed to callers as a public URL — only the storage path, resolved to
+// a short-lived signed URL on read via signLoanDocumentPaths below.
+const SIGNED_URL_TTL_SECONDS = 60 * 15;
+
 async function uploadLoanDocumentImage(file, folder) {
   const ext = file.name.split(".").pop();
   const path = `${folder}/${Date.now()}.${ext}`;
   const { error } = await supabase.storage.from("loan-documents").upload(path, file);
   if (error) throw error;
-  const { data } = supabase.storage.from("loan-documents").getPublicUrl(path);
-  return data.publicUrl;
+  return path;
+}
+
+async function signLoanDocumentPaths(paths) {
+  const unique = [...new Set(paths.filter(Boolean))];
+  if (unique.length === 0) return {};
+  const { data, error } = await supabase.storage.from("loan-documents").createSignedUrls(unique, SIGNED_URL_TTL_SECONDS);
+  if (error) throw error;
+  const map = {};
+  (data || []).forEach(d => { if (d.signedUrl && !d.error) map[d.path] = d.signedUrl; });
+  return map;
 }
 
 // Uploaded after the loan row already exists (its id is the folder key), so
@@ -196,9 +210,9 @@ async function uploadLoanDocumentImage(file, folder) {
 // the documents rather than assuming nothing happened.
 export async function submitLoanGuaranteeDocuments(loanId, items, uploadedBy) {
   for (const item of items) {
-    const imageUrl = await uploadLoanDocumentImage(item.file, `guarantee/${loanId}`);
+    const imagePath = await uploadLoanDocumentImage(item.file, `guarantee/${loanId}`);
     const { error } = await supabase.from("loan_guarantee_documents").insert({
-      loan_id: loanId, image_url: imageUrl, remarks: item.remarks, uploaded_by: uploadedBy,
+      loan_id: loanId, image_url: imagePath, remarks: item.remarks, uploaded_by: uploadedBy,
     });
     if (error) throw error;
   }
@@ -208,14 +222,26 @@ export async function fetchLoanGuaranteeDocuments(loanIds) {
   if (!loanIds || loanIds.length === 0) return [];
   const { data, error } = await supabase.from("loan_guarantee_documents").select("*").in("loan_id", loanIds);
   if (error) throw error;
-  return data || [];
+  const rows = data || [];
+  const urlMap = await signLoanDocumentPaths(rows.map(r => r.image_url));
+  return rows.map(r => ({ ...r, image_url: urlMap[r.image_url] || null }));
+}
+
+// loans.disbursement_receipt_url stores a storage path, not a public URL —
+// callers that render it (Loan Ledger, loan history) must resign it here
+// after loading loans, same as guarantee documents above.
+export async function attachSignedReceiptUrls(loans) {
+  const urlMap = await signLoanDocumentPaths((loans || []).map(l => l.disbursement_receipt_url));
+  return (loans || []).map(l => (
+    l.disbursement_receipt_url ? { ...l, disbursement_receipt_url: urlMap[l.disbursement_receipt_url] || null } : l
+  ));
 }
 
 export async function markLoanDisbursed({ loanId, actorName, receiptFile, employeeName }) {
   if (!receiptFile) throw new Error("Upload a picture of the employee's signed receiving slip before marking this loan as paid.");
-  const receiptUrl = await uploadLoanDocumentImage(receiptFile, `disbursement/${loanId}`);
+  const receiptPath = await uploadLoanDocumentImage(receiptFile, `disbursement/${loanId}`);
   const { data: row, error } = await supabase.rpc("mark_loan_disbursed", {
-    p_loan_id: loanId, p_actor_name: actorName, p_receipt_url: receiptUrl,
+    p_loan_id: loanId, p_actor_name: actorName, p_receipt_url: receiptPath,
   });
   if (error) throw error;
   const message = `${actorName} disbursed and marked the loan for ${row?.employee_name || employeeName} as paid — now Active.`;
