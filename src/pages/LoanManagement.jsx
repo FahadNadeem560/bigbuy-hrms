@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { notifyLoanProposed, notifyLoanCreatedByMaster, proposeLoanChange, applyLoanChangeAsMaster, clearLoanAsMaster, earlySettleLoanAsMaster } from "../services/loanService.js";
+import { notifyLoanProposed, notifyLoanCreatedByMaster, proposeLoanChange, applyLoanChangeAsMaster, clearLoanAsMaster, earlySettleLoanAsMaster, submitLoanGuaranteeDocuments, fetchLoanGuaranteeDocuments, markLoanDisbursed } from "../services/loanService.js";
 
 function nextMonthStr() {
   const d = new Date();
@@ -56,8 +56,18 @@ function EmpPicker({ employees, value, onChange }) {
 
 const BLANK = { employee: null, loan_amount: "", monthly_deduction: "", start_date: "", reason: "", guarantor1: null, guarantor2: null };
 
-export default function LoanManagement({ role }) {
+function loanStatusTone(status) {
+  if (status === "Active") return "yellow";
+  if (status === "Pending Approval") return "blue";
+  if (status === "Pending Disbursement") return "purple";
+  if (status === "Rejected") return "red";
+  return "green";
+}
+
+export default function LoanManagement({ role, actorName }) {
+  const actor = actorName || role;
   const canManage = ["Master", "HR"].includes(role);
+  const canDisburse = ["Master", "Finance"].includes(role);
   const [loans, setLoans] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [showForm, setShowForm] = useState(false);
@@ -72,6 +82,11 @@ export default function LoanManagement({ role }) {
   const [reliefReason, setReliefReason] = useState("");
   const [reliefMonth, setReliefMonth] = useState(nextMonthStr());
   const [loanChanges, setLoanChanges] = useState([]);
+  const [guaranteeItems, setGuaranteeItems] = useState([]);
+  const [loanDocs, setLoanDocs] = useState({});
+  const [disburseTarget, setDisburseTarget] = useState(null);
+  const [disburseFile, setDisburseFile] = useState(null);
+  const [disbursing, setDisbursing] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
@@ -93,32 +108,65 @@ export default function LoanManagement({ role }) {
     setLoans(lns || []);
     setEmployees(emps || []);
     setLoanChanges(changes || []);
+    try {
+      const docs = await fetchLoanGuaranteeDocuments((lns || []).map(l => l.id));
+      const map = {};
+      docs.forEach(d => { if (!map[d.loan_id]) map[d.loan_id] = []; map[d.loan_id].push(d); });
+      setLoanDocs(map);
+    } catch { /* documents are a supplement to the ledger, not required to view it */ }
   }
 
   // HR proposes (Pending Approval, no payroll effect until Master/GM
   // approves in the Approval Queue); Master applies instantly since Master
   // is itself an approver — same split as Salary Increments.
+  function addGuaranteeItem() {
+    setGuaranteeItems(items => [...items, { file: null, remarks: "", previewUrl: "" }]);
+  }
+  function updateGuaranteeItem(idx, patch) {
+    setGuaranteeItems(items => items.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+  }
+  function removeGuaranteeItem(idx) {
+    setGuaranteeItems(items => items.filter((_, i) => i !== idx));
+  }
+
   async function submitLoan() {
     if (!form.employee || !form.loan_amount || !form.monthly_deduction || !form.start_date)
       return setErr("Employee, loan amount, monthly deduction and start date are required.");
+    const validItems = guaranteeItems.filter(it => it.file && it.remarks.trim());
+    if (validItems.length === 0)
+      return setErr("Add at least one guarantee document — a photo of the item taken as security plus a remark describing it — before submitting.");
+    if (validItems.length !== guaranteeItems.length)
+      return setErr("Every guarantee item needs both an image and a remark — remove any incomplete rows before submitting.");
     setErr(""); setMsg("");
     const months = Math.ceil(Number(form.loan_amount) / Number(form.monthly_deduction));
     const needsApproval = role === "HR";
-    const { error } = await supabase.from("loans").insert({
+    const { data: inserted, error } = await supabase.from("loans").insert({
       employee_code: form.employee.employee_code,
       employee_name: form.employee.full_name, loan_amount: Number(form.loan_amount),
       monthly_deduction: Number(form.monthly_deduction), outstanding_balance: Number(form.loan_amount),
-      start_date: form.start_date, reason: form.reason, status: needsApproval ? "Pending Approval" : "Active",
+      start_date: form.start_date, reason: form.reason, status: needsApproval ? "Pending Approval" : "Pending Disbursement",
       repayment_months: months, auto_deduct: true, created_at: new Date().toISOString(),
       submitted_by: role,
       guarantor_1_code: form.guarantor1?.employee_code || null, guarantor_1_name: form.guarantor1?.full_name || null,
       guarantor_2_code: form.guarantor2?.employee_code || null, guarantor_2_name: form.guarantor2?.full_name || null,
-    });
+    }).select().single();
     if (error) { setErr(error.message); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
-    // The loan row is already committed at this point — everything below is
-    // just notifications, so a failure there must never look like the
-    // submission itself silently did nothing (previously an uncaught
-    // rejection here would skip setMsg entirely, leaving HR with no
+
+    // The loan row is already committed at this point, so a documents
+    // failure must say so distinctly rather than looking like nothing
+    // happened — the loan exists but still needs its guarantee photos.
+    try {
+      await submitLoanGuaranteeDocuments(inserted.id, validItems, actor);
+    } catch (e) {
+      setErr(`Loan saved, but the guarantee documents failed to upload (${e.message}). Reopen the loan and retry, or contact admin.`);
+      setForm(BLANK); setGuaranteeItems([]); setShowForm(false); loadAll();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    // Everything below is just notifications, so a failure there must never
+    // look like the submission itself silently did nothing (previously an
+    // uncaught rejection here would skip setMsg entirely, leaving HR with no
     // confirmation either way even though the loan had actually gone through).
     try {
       if (needsApproval) {
@@ -132,13 +180,25 @@ export default function LoanManagement({ role }) {
           employeeName: form.employee.full_name, loanAmount: Number(form.loan_amount),
           monthlyDeduction: Number(form.monthly_deduction),
         });
-        setMsg("Loan application created successfully.");
+        setMsg("Loan application created — awaiting Finance disbursement.");
       }
     } catch {
       setMsg("Loan submitted and saved (a notification failed to send, but the loan itself was recorded).");
     }
-    setForm(BLANK); setShowForm(false); loadAll();
+    setForm(BLANK); setGuaranteeItems([]); setShowForm(false); loadAll();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function disburseLoan(id) {
+    if (!disburseFile) return setErr("Upload a picture of the employee's signed receiving slip first.");
+    setDisbursing(true); setErr("");
+    try {
+      const loan = loans.find(l => l.id === id);
+      await markLoanDisbursed({ loanId: id, actorName: actor, receiptFile: disburseFile, employeeName: loan?.employee_name });
+      setMsg("Loan marked as paid — now Active.");
+      setDisburseTarget(null); setDisburseFile(null); loadAll();
+    } catch (e) { setErr(e.message); }
+    setDisbursing(false);
   }
 
   // ─── Bulk Import ───────────────────────────────────────────────────────
@@ -444,13 +504,34 @@ export default function LoanManagement({ role }) {
             <div><p className="text-xs text-slate-500 mb-1">Guarantor 2</p><EmpPicker employees={employees.filter(e => e.employee_code !== form.employee?.employee_code)} value={form.guarantor2} onChange={v => setForm(f => ({ ...f, guarantor2: v }))} /></div>
             <div className="md:col-span-2"><p className="text-xs text-slate-500 mb-1">Reason</p><input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason for loan..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
           </div>
-          <div className="mt-4 flex gap-2"><Button onClick={submitLoan} className="rounded-2xl">Submit Loan</Button><Button variant="outline" onClick={() => setShowForm(false)} className="rounded-2xl">Cancel</Button></div>
+
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-slate-700">Guarantee Documents <span className="text-red-500">*</span></p>
+              <Button variant="outline" onClick={addGuaranteeItem} className="rounded-xl text-xs py-1 px-2">+ Add Item</Button>
+            </div>
+            <p className="text-xs text-slate-400 mb-2">Photo of each item taken as security (CNIC, cheque, property papers, etc.) with a remark describing it. At least one is required to submit.</p>
+            {guaranteeItems.length === 0 && <p className="text-xs text-slate-400 italic">No items added yet.</p>}
+            <div className="space-y-2">
+              {guaranteeItems.map((item, idx) => (
+                <div key={idx} className="flex flex-wrap items-center gap-2 p-2 bg-slate-50 rounded-xl">
+                  <input type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0] || null; updateGuaranteeItem(idx, { file: f, previewUrl: f ? URL.createObjectURL(f) : "" }); }} className="text-xs" />
+                  {item.previewUrl && <img src={item.previewUrl} alt="" className="w-10 h-10 object-cover rounded-lg border border-slate-200" />}
+                  <input value={item.remarks} onChange={e => updateGuaranteeItem(idx, { remarks: e.target.value })} placeholder="Remarks (e.g. Original CNIC, Cheque #1234...)" className="flex-1 min-w-[160px] px-3 py-1.5 rounded-xl border border-slate-200 text-xs" />
+                  <button onClick={() => removeGuaranteeItem(idx)} className="text-xs text-red-500 hover:text-red-700">Remove</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4 flex gap-2"><Button onClick={submitLoan} className="rounded-2xl">Submit Loan</Button><Button variant="outline" onClick={() => { setShowForm(false); setGuaranteeItems([]); }} className="rounded-2xl">Cancel</Button></div>
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Active Loans</p><p className="text-2xl font-bold">{loans.filter(l => l.status === "Active").length}</p></div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Pending Approval</p><p className="text-2xl font-bold text-amber-600">{loans.filter(l => l.status === "Pending Approval").length}</p></div>
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Pending Disbursement</p><p className="text-2xl font-bold text-purple-600">{loans.filter(l => l.status === "Pending Disbursement").length}</p></div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Outstanding</p><p className="text-2xl font-bold text-red-500">{money(totalOutstanding)}</p></div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Cleared Loans</p><p className="text-2xl font-bold text-emerald-600">{loans.filter(l => l.status === "Cleared").length}</p></div>
         <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><p className="text-xs text-slate-500">Total Loans</p><p className="text-2xl font-bold">{loans.length}</p></div>
@@ -460,7 +541,7 @@ export default function LoanManagement({ role }) {
         <div className="flex flex-wrap gap-3">
           <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search employee..." className="flex-1 min-w-[160px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-            <option value="All">All Status</option><option>Active</option><option>Pending Approval</option><option>Cleared</option><option>Rejected</option>
+            <option value="All">All Status</option><option>Active</option><option>Pending Approval</option><option>Pending Disbursement</option><option>Cleared</option><option>Rejected</option>
           </select>
         </div>
       </div>
@@ -469,13 +550,13 @@ export default function LoanManagement({ role }) {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Loan Ledger</h2><p className="text-xs text-slate-400 mt-0.5">{filtered.length} records</p></div>
         <table className="w-full min-w-[1050px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee", "Guarantors", "Loan Amount", "Monthly Ded.", "Outstanding", "Start Date", "Months", "Status", ...(canManage ? ["Actions"] : [])].map(h => (
+            <tr>{["Employee", "Guarantors", "Loan Amount", "Monthly Ded.", "Outstanding", "Start Date", "Months", "Status", "Documents", ...((canManage || canDisburse) ? ["Actions"] : [])].map(h => (
               <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
             ))}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0
-              ? <tr><td colSpan={canManage ? 9 : 8} className="px-4 py-8 text-center text-slate-400">No loans found.</td></tr>
+              ? <tr><td colSpan={(canManage || canDisburse) ? 10 : 9} className="px-4 py-8 text-center text-slate-400">No loans found.</td></tr>
               : filtered.map(l => (
                 <tr key={l.id}>
                   <td className="px-4 py-3">
@@ -504,18 +585,44 @@ export default function LoanManagement({ role }) {
                   <td className="px-4 py-3">{l.start_date}</td>
                   <td className="px-4 py-3">{l.repayment_months || "—"}</td>
                   <td className="px-4 py-3">
-                    <Badge tone={l.status === "Active" ? "yellow" : l.status === "Pending Approval" ? "blue" : l.status === "Rejected" ? "red" : "green"}>{l.status}</Badge>
+                    <Badge tone={loanStatusTone(l.status)}>{l.status}</Badge>
                     {l.status === "Rejected" && l.rejection_reason && <div className="text-[11px] text-slate-400 mt-1">{l.rejection_reason}</div>}
                   </td>
-                  {canManage && (
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap gap-1">
+                      {(loanDocs[l.id] || []).map((d, di) => (
+                        <a key={di} href={d.image_url} target="_blank" rel="noreferrer" title={d.remarks}>
+                          <img src={d.image_url} alt="" className="w-8 h-8 object-cover rounded-lg border border-slate-200" />
+                        </a>
+                      ))}
+                      {l.disbursement_receipt_url && (
+                        <a href={l.disbursement_receipt_url} target="_blank" rel="noreferrer" title={`Receiving slip — disbursed by ${l.disbursed_by || "Finance"}`}>
+                          <img src={l.disbursement_receipt_url} alt="" className="w-8 h-8 object-cover rounded-lg border border-purple-200" />
+                        </a>
+                      )}
+                      {!(loanDocs[l.id] || []).length && !l.disbursement_receipt_url && "—"}
+                    </div>
+                  </td>
+                  {(canManage || canDisburse) && (
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1 items-center">
-                      {l.status === "Active" && pendingChangeByLoan[l.id] && (
+                      {canDisburse && l.status === "Pending Disbursement" && (
+                        disburseTarget === l.id
+                          ? <div className="flex flex-col gap-1 min-w-[180px]">
+                              <input type="file" accept="image/*" onChange={e => setDisburseFile(e.target.files?.[0] || null)} className="text-xs" />
+                              <div className="flex gap-1">
+                                <Button onClick={() => disburseLoan(l.id)} disabled={disbursing} className="rounded-xl text-xs py-1 px-2">{disbursing ? "Saving…" : "Mark Paid"}</Button>
+                                <Button variant="outline" onClick={() => { setDisburseTarget(null); setDisburseFile(null); }} className="rounded-xl text-xs py-1 px-2">Cancel</Button>
+                              </div>
+                            </div>
+                          : <Button variant="outline" onClick={() => setDisburseTarget(l.id)} className="rounded-xl text-xs py-1 px-2 text-purple-600">Upload Receipt &amp; Mark Paid</Button>
+                      )}
+                      {canManage && l.status === "Active" && pendingChangeByLoan[l.id] && (
                         <Badge tone="blue">
                           Pending: {pendingChangeByLoan[l.id].change_type === "reschedule" ? "Reschedule" : "Skip Month"}
                         </Badge>
                       )}
-                      {l.status === "Active" && !pendingChangeByLoan[l.id] && (
+                      {canManage && l.status === "Active" && !pendingChangeByLoan[l.id] && (
                         <>
                           {rescheduleTarget === l.id
                             ? <>
@@ -560,12 +667,31 @@ export default function LoanManagement({ role }) {
             <div className="space-y-3 max-h-96 overflow-y-auto">
               {historyLoan.map((l, i) => (
                 <div key={i} className="border border-slate-100 rounded-xl p-3 text-sm">
-                  <div className="flex justify-between mb-1"><span className="font-semibold">{money(l.loan_amount)}</span><Badge tone={l.status === "Active" ? "yellow" : l.status === "Pending Approval" ? "blue" : l.status === "Rejected" ? "red" : "green"}>{l.status}</Badge></div>
+                  <div className="flex justify-between mb-1"><span className="font-semibold">{money(l.loan_amount)}</span><Badge tone={loanStatusTone(l.status)}>{l.status}</Badge></div>
                   <div className="text-slate-500">Monthly: {money(l.monthly_deduction)} · Start: {l.start_date}</div>
                   <div className="text-slate-500">Outstanding: {money(l.outstanding_balance)} · Reason: {l.reason || "—"}</div>
                   {(l.guarantor_1_name || l.guarantor_2_name) && (
                     <div className="text-slate-500">
                       Guarantors: {[l.guarantor_1_name && `${l.guarantor_1_code} — ${l.guarantor_1_name}`, l.guarantor_2_name && `${l.guarantor_2_code} — ${l.guarantor_2_name}`].filter(Boolean).join(", ")}
+                    </div>
+                  )}
+                  {(loanDocs[l.id] || []).length > 0 && (
+                    <div className="mt-2 border-t border-slate-50 pt-2">
+                      <p className="text-xs font-semibold text-slate-400 mb-1">Guarantee Documents:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {loanDocs[l.id].map((d, di) => (
+                          <a key={di} href={d.image_url} target="_blank" rel="noreferrer" className="block">
+                            <img src={d.image_url} alt="" className="w-14 h-14 object-cover rounded-lg border border-slate-200" title={d.remarks} />
+                            <div className="text-[10px] text-slate-400 max-w-[56px] truncate">{d.remarks}</div>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {l.disbursement_receipt_url && (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Disbursed by {l.disbursed_by || "Finance"} on {l.disbursed_at?.slice(0, 10)} —{" "}
+                      <a href={l.disbursement_receipt_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">view receiving slip</a>
                     </div>
                   )}
                   {historyChanges.filter(c => c.loan_id === l.id).length > 0 && (

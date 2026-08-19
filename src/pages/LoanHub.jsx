@@ -22,7 +22,7 @@ export default function LoanHub({ role, actorName, initialTab }) {
           </button>
         ))}
       </div>
-      {tab === "loans"      && <LoanManagement role={role} />}
+      {tab === "loans"      && <LoanManagement role={role} actorName={actorName} />}
       {tab === "advances"   && <Advances role={role} actorName={actorName} />}
       {tab === "settlement" && <FinalSettlement role={role} />}
     </div>

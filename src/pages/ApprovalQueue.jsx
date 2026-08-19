@@ -5,7 +5,7 @@ import { money } from "../utils/format.js";
 import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } from "../services/leaveApprovalService.js";
 import { approvePaymentStatusRequest, rejectPaymentStatusRequest, PAYMENT_STATUS_LABELS, requiresMasterOnly } from "../services/payrollControlService.js";
 import { approveIncrement as approveIncrementSvc, rejectIncrement as rejectIncrementSvc } from "../services/incrementService.js";
-import { approveLoanRequest, rejectLoanRequest, approveLoanChange, rejectLoanChange } from "../services/loanService.js";
+import { approveLoanRequest, rejectLoanRequest, approveLoanChange, rejectLoanChange, fetchLoanGuaranteeDocuments } from "../services/loanService.js";
 
 // Hierarchy-routed requests carry dynamic stage names ("Pending Floor
 // Manager Approval", "Pending Owner Approval", ...) so this can't be a fixed
@@ -137,6 +137,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
 
   // Loan requests
   const [loanRequests, setLoanRequests] = useState([]);
+  const [loanDocs, setLoanDocs] = useState({});
   const [processingLoanId, setProcessingLoanId] = useState(null);
 
   // Loan change requests (reschedule / skip month)
@@ -240,6 +241,12 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       setLoanRequests(loanReqs || []);
       setLoanChangeRequests(loanChangeReqs || []);
       setPaymentRequests(payReqs || []);
+      try {
+        const docs = await fetchLoanGuaranteeDocuments((loanReqs || []).map(l => l.id));
+        const map = {};
+        docs.forEach(d => { if (!map[d.loan_id]) map[d.loan_id] = []; map[d.loan_id].push(d); });
+        setLoanDocs(map);
+      } catch { /* documents are a supplement to the review, not required to load the queue */ }
     } catch (e) {
       setErr(`Load error: ${e.message}`);
     } finally {
@@ -762,12 +769,12 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Loan Amount","Monthly Ded.","Months","Start Date","Guarantors","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
+                {["Employee","Loan Amount","Monthly Ded.","Months","Start Date","Guarantors","Documents","Reason","Submitted By","Submitted Date","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loanRequests.length === 0
-                ? <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No pending loan requests.</td></tr>
+                ? <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">No pending loan requests.</td></tr>
                 : loanRequests.map(l => (
                   <tr key={l.id}>
                     <td className="px-4 py-3"><RowCheckbox id={l.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canActLoan} /></td>
@@ -780,6 +787,16 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
                       {l.guarantor_1_name ? <div>{l.guarantor_1_code} — {l.guarantor_1_name}</div> : null}
                       {l.guarantor_2_name ? <div>{l.guarantor_2_code} — {l.guarantor_2_name}</div> : null}
                       {!l.guarantor_1_name && !l.guarantor_2_name && "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {(loanDocs[l.id] || []).map((d, di) => (
+                          <a key={di} href={d.image_url} target="_blank" rel="noreferrer" title={d.remarks}>
+                            <img src={d.image_url} alt="" className="w-8 h-8 object-cover rounded-lg border border-slate-200" />
+                          </a>
+                        ))}
+                        {!(loanDocs[l.id] || []).length && <span className="text-xs text-red-500">None</span>}
+                      </div>
                     </td>
                     <td className="px-4 py-3 max-w-[160px] truncate">{l.reason || "—"}</td>
                     <td className="px-4 py-3 text-slate-500">{l.submitted_by || "HR"}</td>

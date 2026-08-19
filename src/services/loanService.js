@@ -30,12 +30,13 @@ export async function notifyLoanProposed({ employeeName, loanAmount, monthlyDedu
   if (submittedByRole !== "Finance") await notifyFinance("Loan Request Submitted", message, "loan_proposed");
 }
 
-// Master's own loan creation applies instantly (no approval needed), but
-// Finance still needs to know a new deduction just started.
+// Master's own loan creation skips the approval step (Master is itself an
+// approver), but still lands on Pending Disbursement — Finance still needs
+// to hand over the cash and upload the receiving picture before it's Active.
 export async function notifyLoanCreatedByMaster({ employeeName, loanAmount, monthlyDeduction }) {
   await notifyFinance(
-    "Loan Created",
-    `Master created a loan for ${employeeName} — Rs.${Number(loanAmount).toLocaleString()} (Rs.${Number(monthlyDeduction).toLocaleString()}/month), active immediately.`,
+    "Loan Created — Pending Disbursement",
+    `Master created a loan for ${employeeName} — Rs.${Number(loanAmount).toLocaleString()} (Rs.${Number(monthlyDeduction).toLocaleString()}/month). Ready for Finance to disburse and upload the receiving picture.`,
     "loan_proposed",
   );
 }
@@ -45,13 +46,13 @@ export async function approveLoanRequest(loanId, approverName) {
     p_loan_id: loanId, p_approver_name: approverName,
   });
   if (error) throw error;
-  const message = `Loan for ${row?.employee_name} approved: Rs.${Number(row?.loan_amount || 0).toLocaleString()}.`;
+  const message = `Loan for ${row?.employee_name} approved: Rs.${Number(row?.loan_amount || 0).toLocaleString()}. Ready for Finance to disburse and upload the receiving picture.`;
   if (row?.submitted_by) {
     await supabase.from("notifications").insert({
       recipient_role: row.submitted_by, type: "loan_decision", title: "Loan Request Approved", message, is_read: false,
     }).then(() => {}, () => {});
   }
-  await notifyFinance("Loan Approved", message);
+  await notifyFinance("Loan Approved — Pending Disbursement", message);
   return row;
 }
 
@@ -169,4 +170,57 @@ export async function earlySettleLoanAsMaster(loanId, actorName) {
   if (error) throw error;
   await notifyFinance("Loan Early-Settled", `Master early-settled the loan for ${data?.employee_code}.`);
   return data;
+}
+
+// ══════════════════════ Guarantee Documents & Finance Disbursement ══════════════════════
+// HR photographs whatever collateral it took against a loan (CNIC, cheque,
+// property papers, etc.) and writes a remark per item — required before the
+// loan can be submitted. Once Master/GM approves (see approveLoanRequest
+// above, which now lands on "Pending Disbursement" instead of "Active"),
+// Finance hands over the cash, photographs the employee's signed receiving
+// slip, and marks the loan disbursed — only then does it become "Active"
+// and start deducting from payroll.
+
+async function uploadLoanDocumentImage(file, folder) {
+  const ext = file.name.split(".").pop();
+  const path = `${folder}/${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from("loan-documents").upload(path, file);
+  if (error) throw error;
+  const { data } = supabase.storage.from("loan-documents").getPublicUrl(path);
+  return data.publicUrl;
+}
+
+// Uploaded after the loan row already exists (its id is the folder key), so
+// a mid-batch failure here never blocks the loan itself from being saved —
+// the caller surfaces a distinct error so the submitter knows to retry just
+// the documents rather than assuming nothing happened.
+export async function submitLoanGuaranteeDocuments(loanId, items, uploadedBy) {
+  for (const item of items) {
+    const imageUrl = await uploadLoanDocumentImage(item.file, `guarantee/${loanId}`);
+    const { error } = await supabase.from("loan_guarantee_documents").insert({
+      loan_id: loanId, image_url: imageUrl, remarks: item.remarks, uploaded_by: uploadedBy,
+    });
+    if (error) throw error;
+  }
+}
+
+export async function fetchLoanGuaranteeDocuments(loanIds) {
+  if (!loanIds || loanIds.length === 0) return [];
+  const { data, error } = await supabase.from("loan_guarantee_documents").select("*").in("loan_id", loanIds);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function markLoanDisbursed({ loanId, actorName, receiptFile, employeeName }) {
+  if (!receiptFile) throw new Error("Upload a picture of the employee's signed receiving slip before marking this loan as paid.");
+  const receiptUrl = await uploadLoanDocumentImage(receiptFile, `disbursement/${loanId}`);
+  const { data: row, error } = await supabase.rpc("mark_loan_disbursed", {
+    p_loan_id: loanId, p_actor_name: actorName, p_receipt_url: receiptUrl,
+  });
+  if (error) throw error;
+  const message = `${actorName} disbursed and marked the loan for ${row?.employee_name || employeeName} as paid — now Active.`;
+  await Promise.all(["Master", "HR"].map(r => supabase.from("notifications").insert({
+    recipient_role: r, type: "loan_decision", title: "Loan Disbursed", message, is_read: false,
+  }))).then(() => {}, () => {});
+  return row;
 }
