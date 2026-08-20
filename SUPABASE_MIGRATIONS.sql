@@ -4514,3 +4514,175 @@ $function$;
 --     and eligibility_group in ('SALES_SUPPORT','FLOOR_MANAGEMENT')
 --   -- then reclassify_attendance_row(id) per row, ~18.5k rows total
 -- =============================================================
+
+-- =============================================================
+-- Migration: friday_half_day_same_formula
+-- Applied: 2026-08-21
+-- Extends the above migration's rule to Friday, on explicit user decision
+-- ("same formula as weekdays"): Friday required hours drop to 9h for
+-- SALES_SUPPORT/FLOOR_MANAGEMENT (Jummah, SHIFT_FRIDAY 14:30-23:30), so its
+-- Half Day band/threshold are scaled the same way (required_hours - 2h
+-- ceiling) rather than reusing the non-Friday 8.5h band verbatim:
+--   - half_day_threshold_minutes_friday: 90 -> 120 (matches non-Friday)
+--   - half_day_max_hours_friday (new column): 7 (= 9h required - 2h, vs
+--     non-Friday's 8.5h = 10.5h required - 2h)
+-- Only classify_attendance_day's half-day-max-hours lookup changed (now
+-- reads half_day_max_hours_friday instead of always nulling out the hours
+-- band on Fridays) -- the threshold-minutes lookup already branched on
+-- p_is_friday from the prior migration, so no logic changed there, only
+-- the column value.
+-- =============================================================
+ALTER TABLE public.staff_eligibility_groups
+  ADD COLUMN IF NOT EXISTS half_day_max_hours_friday numeric;
+
+UPDATE public.staff_eligibility_groups
+   SET half_day_threshold_minutes_friday = 120,
+       half_day_max_hours_friday = 7
+ WHERE code IN ('SALES_SUPPORT','FLOOR_MANAGEMENT');
+
+CREATE OR REPLACE FUNCTION public.classify_attendance_day(p_eligibility_group text, p_required_hours numeric, p_shift_start timestamp without time zone, p_shift_end timestamp without time zone, p_first_in timestamp without time zone, p_last_out timestamp without time zone, p_is_weekly_off boolean DEFAULT false, p_is_gazetted_holiday boolean DEFAULT false, p_half_day_exempt boolean DEFAULT false, p_late_exempt boolean DEFAULT false, p_is_friday boolean DEFAULT false)
+ RETURNS TABLE(attendance_status text, worked_hours numeric, late_minutes integer, early_out_minutes integer, overtime_hours numeric, needs_review boolean, exception_reason text, extra_day_eligible boolean, gh_eligible boolean, half_day_exempt_applied boolean, late_exempt_applied boolean)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+declare
+  r public.staff_eligibility_groups%rowtype;
+  v_worked numeric := 0;
+  v_late integer := 0;
+  v_early integer := 0;
+  v_ot numeric := 0;
+  v_status text := 'Present';
+  v_review boolean := false;
+  v_reason text := null;
+  v_half_day_exempt_applied boolean := false;
+  v_late_exempt_applied boolean := false;
+  v_half_day_threshold integer;
+  v_half_day_max_hours numeric;
+begin
+  select * into r from public.staff_eligibility_groups where code = p_eligibility_group and is_active = true;
+  if not found then
+    raise exception 'Attendance eligibility group not configured: %', p_eligibility_group;
+  end if;
+
+  if p_first_in is null and p_last_out is null then
+    v_status := case when p_is_weekly_off then 'Weekly Off' else r.no_punch_status end;
+    return query select v_status, 0::numeric, 0, 0, 0::numeric, false, null::text,
+      false,
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if p_first_in is null or p_last_out is null then
+    v_status := r.missing_single_punch_status;
+    v_review := true;
+    v_reason := case when p_first_in is null then 'Missing check-in punch' else 'Missing check-out punch' end;
+    return query select v_status, 0::numeric, 0, 0, 0::numeric, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  v_worked := round((extract(epoch from (p_last_out - p_first_in)) / 3600.0)::numeric, 2);
+  if v_worked < 0 then
+    v_status := 'Review';
+    v_review := true;
+    v_reason := 'Check-out is earlier than check-in';
+    return query select v_status, v_worked, 0, 0, 0::numeric, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if r.min_present_hours is not null and v_worked < r.min_present_hours then
+    v_status := case when p_is_weekly_off then 'Weekly Off' else 'Absent' end;
+    v_reason := format('Worked hours (%sh) below minimum required presence (%sh)', v_worked, r.min_present_hours);
+    return query select v_status, v_worked, 0, 0, 0::numeric, false, v_reason,
+      false,
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if r.overtime_eligible and v_worked > p_required_hours then
+    v_ot := round(v_worked - p_required_hours, 2);
+  end if;
+
+  if not r.apply_late_rules and not r.apply_early_out_rules and not r.apply_half_day_variance_rules then
+    v_status := case when v_worked >= p_required_hours then 'Present' else 'Short Hours' end;
+    v_review := v_worked < p_required_hours;
+    v_reason := case when v_review then 'Required hours not completed' else null end;
+    return query select v_status, v_worked, 0, 0, v_ot, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if p_shift_start is not null then
+    v_late := greatest(0, floor(extract(epoch from (p_first_in - p_shift_start)) / 60)::integer - r.grace_minutes);
+  end if;
+  if p_shift_end is not null then
+    v_early := greatest(0, floor(extract(epoch from (p_shift_end - p_last_out)) / 60)::integer);
+  end if;
+
+  if p_late_exempt and v_late > 0 then
+    v_late_exempt_applied := true;
+    v_reason := format('Late Exempt applied (was %s min late)', v_late);
+    v_late := 0;
+  end if;
+
+  -- Half Day trigger: late-in/early-out beyond the group's threshold, OR
+  -- worked hours falling in the group's Half Day band (>= min_present_hours
+  -- floor, < half_day_max_hours). Friday uses its own threshold/band
+  -- (shorter required hours for Jummah) via the *_friday columns; both
+  -- follow the same formula (required_hours - 2h ceiling), just scaled.
+  v_half_day_threshold := coalesce(
+    case when p_is_friday then r.half_day_threshold_minutes_friday else r.half_day_threshold_minutes end,
+    r.half_day_threshold_minutes
+  );
+  v_half_day_max_hours := case when p_is_friday then r.half_day_max_hours_friday else r.half_day_max_hours end;
+
+  if r.apply_half_day_variance_rules and (
+       v_late > v_half_day_threshold or v_early > v_half_day_threshold
+       or (v_half_day_max_hours is not null and v_worked < v_half_day_max_hours)
+     ) then
+    if p_half_day_exempt then
+      v_half_day_exempt_applied := true;
+      v_reason := trim(both '; ' from coalesce(v_reason || '; ', '') || format('Half Day Exempt applied (late %s min, early-out %s min)', v_late, v_early));
+      if r.apply_late_rules and v_late > 0 then
+        v_status := 'Late';
+      elsif r.apply_early_out_rules and v_early > 0 then
+        v_status := 'Early Out';
+      else
+        v_status := 'Present';
+      end if;
+    else
+      v_status := 'Half Day';
+    end if;
+  elsif r.apply_late_rules and v_late > 0 then
+    v_status := 'Late';
+  elsif r.apply_early_out_rules and v_early > 0 then
+    v_status := 'Early Out';
+  else
+    v_status := 'Present';
+  end if;
+
+  return query select v_status, v_worked, v_late, v_early, v_ot, false, v_reason,
+    (p_is_weekly_off and r.extra_days_eligible),
+    (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+    v_half_day_exempt_applied, v_late_exempt_applied;
+end;
+$function$;
+
+-- Reprocessing run after the above (not part of the function itself) --
+-- reclassified Friday-only rows for SALES_SUPPORT/FLOOR_MANAGEMENT from
+-- 2026-07-01 onward (the rest of the week's rows were already correct
+-- under the prior migration's non-Friday rule):
+--   select id from attendance where work_date >= '2026-07-01'
+--     and eligibility_group in ('SALES_SUPPORT','FLOOR_MANAGEMENT')
+--     and extract(dow from work_date) = 5
+--   -- then reclassify_attendance_row(id) per row
+-- =============================================================
