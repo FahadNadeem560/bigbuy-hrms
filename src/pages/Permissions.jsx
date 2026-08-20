@@ -21,6 +21,7 @@ export default function Permissions({ employees, role }) {
   const [filterBranch, setFilterBranch] = useState("All");
   const [filterDept, setFilterDept] = useState("");
   const [filterLevel, setFilterLevel] = useState("All");
+  const [filterStatus, setFilterStatus] = useState("Active");
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
   const [pending, setPending] = useState({}); // employee_code -> true while a write is in flight
@@ -67,8 +68,9 @@ export default function Permissions({ employees, role }) {
       .filter(e => filterBranch === "All" || e.branch === filterBranch)
       .filter(e => !dq || e.dept?.toLowerCase().includes(dq))
       .filter(e => filterLevel === "All" || e.level === filterLevel)
+      .filter(e => filterStatus === "All" || e.status === filterStatus)
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-  }, [employees, search, overrides, filterBranch, filterDept, filterLevel]);
+  }, [employees, search, overrides, filterBranch, filterDept, filterLevel, filterStatus]);
 
   // dbPatch: snake_case columns written to Supabase. localPatch: the same
   // change in the camelCase shape mapEmployeeRecord() produces, merged into
@@ -234,7 +236,7 @@ export default function Permissions({ employees, role }) {
       </div>
 
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -254,6 +256,11 @@ export default function Permissions({ employees, role }) {
           <select value={filterLevel} onChange={e => setFilterLevel(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
             <option value="All">All Staff Levels</option>
             {STAFF_LEVELS.map(l => <option key={l}>{l}</option>)}
+          </select>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+            <option value="All">All</option>
           </select>
         </div>
       </div>
