@@ -4322,3 +4322,195 @@ $function$;
 -- bodies are long and otherwise unchanged in control flow, see live DB
 -- (pg_get_functiondef) or git history for the complete text.
 -- =============================================================
+
+-- =============================================================
+-- Migration: half_day_120min_threshold_and_hours_band
+-- Applied: 2026-08-21
+-- Policy decision: someone who clocks in >90min late but stays to complete
+-- their full required hours was getting marked "Half Day" purely off the
+-- late-in minutes, even though they worked a full day -- the late/early-out
+-- minutes check ran with no awareness of total hours worked. Finalized:
+--   - Absent floor stays: worked < 5.5h (min_present_hours, unchanged)
+--   - Half Day (non-Friday): worked hours in [5.5h, 8.5h) triggers Half Day
+--     outright, regardless of late/early minutes -- OR late-in/early-out
+--     minutes exceed 120 (raised from 90) -- whichever fires first
+--   - Friday keeps the OLD rule untouched: 90min threshold only, no hours
+--     band (Friday's required hours are already reduced for Jummah, so an
+--     8.5h-style band doesn't apply)
+--   - half_day_exempt (employee/day waiver) covers BOTH triggers the same
+--     way it already covered the old minutes-only trigger
+-- Only applies where apply_half_day_variance_rules is true, i.e.
+-- SALES_SUPPORT and FLOOR_MANAGEMENT (both 10.5h required). MANAGEMENT_ADMIN
+-- untouched (half-day variance rules already off for that group).
+--
+-- staff_eligibility_groups.half_day_threshold_minutes is repurposed to mean
+-- "non-Friday threshold" going forward (90 -> 120 for the two groups); new
+-- half_day_threshold_minutes_friday preserves the old 90 for Fridays; new
+-- half_day_max_hours (8.5 for the two groups, null elsewhere/Friday) is the
+-- new hours-band ceiling.
+-- =============================================================
+ALTER TABLE public.staff_eligibility_groups
+  ADD COLUMN IF NOT EXISTS half_day_threshold_minutes_friday numeric,
+  ADD COLUMN IF NOT EXISTS half_day_max_hours numeric;
+
+UPDATE public.staff_eligibility_groups
+   SET half_day_threshold_minutes_friday = half_day_threshold_minutes
+ WHERE half_day_threshold_minutes_friday IS NULL;
+
+UPDATE public.staff_eligibility_groups
+   SET half_day_threshold_minutes = 120,
+       half_day_max_hours = 8.5
+ WHERE code IN ('SALES_SUPPORT','FLOOR_MANAGEMENT');
+
+CREATE OR REPLACE FUNCTION public.classify_attendance_day(p_eligibility_group text, p_required_hours numeric, p_shift_start timestamp without time zone, p_shift_end timestamp without time zone, p_first_in timestamp without time zone, p_last_out timestamp without time zone, p_is_weekly_off boolean DEFAULT false, p_is_gazetted_holiday boolean DEFAULT false, p_half_day_exempt boolean DEFAULT false, p_late_exempt boolean DEFAULT false, p_is_friday boolean DEFAULT false)
+ RETURNS TABLE(attendance_status text, worked_hours numeric, late_minutes integer, early_out_minutes integer, overtime_hours numeric, needs_review boolean, exception_reason text, extra_day_eligible boolean, gh_eligible boolean, half_day_exempt_applied boolean, late_exempt_applied boolean)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+declare
+  r public.staff_eligibility_groups%rowtype;
+  v_worked numeric := 0;
+  v_late integer := 0;
+  v_early integer := 0;
+  v_ot numeric := 0;
+  v_status text := 'Present';
+  v_review boolean := false;
+  v_reason text := null;
+  v_half_day_exempt_applied boolean := false;
+  v_late_exempt_applied boolean := false;
+  v_half_day_threshold integer;
+  v_half_day_max_hours numeric;
+begin
+  select * into r from public.staff_eligibility_groups where code = p_eligibility_group and is_active = true;
+  if not found then
+    raise exception 'Attendance eligibility group not configured: %', p_eligibility_group;
+  end if;
+
+  if p_first_in is null and p_last_out is null then
+    v_status := case when p_is_weekly_off then 'Weekly Off' else r.no_punch_status end;
+    return query select v_status, 0::numeric, 0, 0, 0::numeric, false, null::text,
+      false,
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if p_first_in is null or p_last_out is null then
+    v_status := r.missing_single_punch_status;
+    v_review := true;
+    v_reason := case when p_first_in is null then 'Missing check-in punch' else 'Missing check-out punch' end;
+    return query select v_status, 0::numeric, 0, 0, 0::numeric, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  v_worked := round((extract(epoch from (p_last_out - p_first_in)) / 3600.0)::numeric, 2);
+  if v_worked < 0 then
+    v_status := 'Review';
+    v_review := true;
+    v_reason := 'Check-out is earlier than check-in';
+    return query select v_status, v_worked, 0, 0, 0::numeric, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if r.min_present_hours is not null and v_worked < r.min_present_hours then
+    v_status := case when p_is_weekly_off then 'Weekly Off' else 'Absent' end;
+    v_reason := format('Worked hours (%sh) below minimum required presence (%sh)', v_worked, r.min_present_hours);
+    return query select v_status, v_worked, 0, 0, 0::numeric, false, v_reason,
+      false,
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if r.overtime_eligible and v_worked > p_required_hours then
+    v_ot := round(v_worked - p_required_hours, 2);
+  end if;
+
+  if not r.apply_late_rules and not r.apply_early_out_rules and not r.apply_half_day_variance_rules then
+    v_status := case when v_worked >= p_required_hours then 'Present' else 'Short Hours' end;
+    v_review := v_worked < p_required_hours;
+    v_reason := case when v_review then 'Required hours not completed' else null end;
+    return query select v_status, v_worked, 0, 0, v_ot, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if p_shift_start is not null then
+    v_late := greatest(0, floor(extract(epoch from (p_first_in - p_shift_start)) / 60)::integer - r.grace_minutes);
+  end if;
+  if p_shift_end is not null then
+    v_early := greatest(0, floor(extract(epoch from (p_shift_end - p_last_out)) / 60)::integer);
+  end if;
+
+  if p_late_exempt and v_late > 0 then
+    v_late_exempt_applied := true;
+    v_reason := format('Late Exempt applied (was %s min late)', v_late);
+    v_late := 0;
+  end if;
+
+  -- Half Day trigger: late-in/early-out beyond the group's threshold, OR
+  -- (non-Friday only) worked hours falling in the group's Half Day band
+  -- (>= min_present_hours floor, < half_day_max_hours). Friday keeps the
+  -- old minutes-only rule at its own threshold and never applies the hours
+  -- band, since Friday required hours are already reduced for Jummah.
+  v_half_day_threshold := coalesce(
+    case when p_is_friday then r.half_day_threshold_minutes_friday else r.half_day_threshold_minutes end,
+    r.half_day_threshold_minutes
+  );
+  v_half_day_max_hours := case when p_is_friday then null else r.half_day_max_hours end;
+
+  if r.apply_half_day_variance_rules and (
+       v_late > v_half_day_threshold or v_early > v_half_day_threshold
+       or (v_half_day_max_hours is not null and v_worked < v_half_day_max_hours)
+     ) then
+    if p_half_day_exempt then
+      v_half_day_exempt_applied := true;
+      v_reason := trim(both '; ' from coalesce(v_reason || '; ', '') || format('Half Day Exempt applied (late %s min, early-out %s min)', v_late, v_early));
+      if r.apply_late_rules and v_late > 0 then
+        v_status := 'Late';
+      elsif r.apply_early_out_rules and v_early > 0 then
+        v_status := 'Early Out';
+      else
+        v_status := 'Present';
+      end if;
+    else
+      v_status := 'Half Day';
+    end if;
+  elsif r.apply_late_rules and v_late > 0 then
+    v_status := 'Late';
+  elsif r.apply_early_out_rules and v_early > 0 then
+    v_status := 'Early Out';
+  else
+    v_status := 'Present';
+  end if;
+
+  return query select v_status, v_worked, v_late, v_early, v_ot, false, v_reason,
+    (p_is_weekly_off and r.extra_days_eligible),
+    (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+    v_half_day_exempt_applied, v_late_exempt_applied;
+end;
+$function$;
+
+-- process_daily_attendance and reclassify_attendance_row: both gained an
+-- 11th positional arg on their classify_attendance_day call --
+-- `extract(dow from v_day) = 5` / `extract(dow from v_att.work_date) = 5`
+-- respectively (both functions already computed this exact expression
+-- inline for the existing Friday-hours-override logic, just not passed
+-- through before). No other change to either function body.
+--
+-- Reprocessing run after the above (not part of the function itself) --
+-- reclassified every SALES_SUPPORT/FLOOR_MANAGEMENT attendance row from
+-- 2026-07-01 onward (earliest month payroll is tracking; no Published
+-- months existed yet, so nothing was skipped):
+--   select id from attendance where work_date >= '2026-07-01'
+--     and eligibility_group in ('SALES_SUPPORT','FLOOR_MANAGEMENT')
+--   -- then reclassify_attendance_row(id) per row, ~18.5k rows total
+-- =============================================================
