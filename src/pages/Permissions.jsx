@@ -111,12 +111,6 @@ export default function Permissions({ employees, role }) {
     saveField(e.id, { gazetted_holiday_eligible: next }, { ghEligible: next });
   }
 
-  async function toggleFieldEmployee(e) {
-    const next = !e.isFieldEmployee;
-    if (!(await saveField(e.id, { is_field_employee: next }, { isFieldEmployee: next }))) return;
-    logAudit(next ? "field_employee_enabled" : "field_employee_disabled", e.id, `Field employee ${next ? "enabled" : "disabled"}.`);
-  }
-
   async function toggleLeaveEligible(e) {
     const next = !e.leaveEligible;
     if (!(await saveField(e.id, { leave_eligible: next }, { leaveEligible: next }))) return;
@@ -129,34 +123,16 @@ export default function Permissions({ employees, role }) {
     logAudit(next ? "single_punch_ok_enabled" : "single_punch_ok_disabled", e.id, `Single-punch-OK ${next ? "enabled" : "disabled"}.`);
   }
 
-  async function toggleMonthlyHoursBased(e) {
-    const next = !e.monthlyHoursBased;
-    if (!(await saveField(e.id, { monthly_hours_based: next }, { monthlyHoursBased: next }))) return;
-    logAudit(next ? "monthly_hours_based_enabled" : "monthly_hours_based_disabled", e.id, `Monthly-hours-based ${next ? "enabled" : "disabled"}.`);
+  async function toggleHalfDayExempt(e) {
+    const next = !e.halfDayExempt;
+    if (!(await saveField(e.id, { half_day_exempt: next }, { halfDayExempt: next }))) return;
+    logAudit(next ? "half_day_exempt_enabled" : "half_day_exempt_disabled", e.id, `Half Day Exempt ${next ? "enabled" : "disabled"}.`);
   }
 
-  async function toggleSupervisor(e) {
-    const next = !e.isSupervisor;
-    if (!(await saveField(e.id, { is_supervisor: next }, { isSupervisor: next }))) return;
-    logAudit(next ? "supervisor_flag_enabled" : "supervisor_flag_disabled", e.id, `Supervisor flag ${next ? "enabled" : "disabled"}.`);
-  }
-
-  async function toggleManager(e) {
-    const next = !e.isManager;
-    if (!(await saveField(e.id, { is_manager: next }, { isManager: next }))) return;
-    logAudit(next ? "manager_flag_enabled" : "manager_flag_disabled", e.id, `Manager flag ${next ? "enabled" : "disabled"}.`);
-  }
-
-  async function toggleWhatsappVerified(e) {
-    const next = !e.whatsappVerified;
-    if (!(await saveField(e.id, { whatsapp_verified: next }, { whatsappVerified: next }))) return;
-    logAudit(next ? "whatsapp_verified_enabled" : "whatsapp_verified_disabled", e.id, `WhatsApp verified flag ${next ? "enabled" : "disabled"}.`);
-  }
-
-  async function toggleEnrollmentCompleted(e) {
-    const next = !e.enrollmentCompleted;
-    if (!(await saveField(e.id, { enrollment_completed: next }, { enrollmentCompleted: next }))) return;
-    logAudit(next ? "enrollment_completed_enabled" : "enrollment_completed_disabled", e.id, `Enrollment completed flag ${next ? "enabled" : "disabled"}.`);
+  async function toggleLateExempt(e) {
+    const next = !e.lateExempt;
+    if (!(await saveField(e.id, { late_exempt: next }, { lateExempt: next }))) return;
+    logAudit(next ? "late_exempt_enabled" : "late_exempt_disabled", e.id, `Late Exempt ${next ? "enabled" : "disabled"}.`);
   }
 
   async function toggleAttendanceExempt(e) {
@@ -287,14 +263,14 @@ export default function Permissions({ employees, role }) {
         <table className="w-full min-w-[2000px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
-              {["Employee", "Branch", "Department", "Staff Level", "Eligibility Group", "OT Eligible", "Extra Day Eligible", "Gazetted Holiday Eligible", "Leave Eligible", "Attendance Exempt", "Field Employee", "Single Punch OK", "Monthly Hours Based", "Supervisor", "Manager", "WhatsApp Verified", "Enrollment Completed", "Temporary"].map(h => (
+              {["Employee", "Branch", "Department", "Staff Level", "Eligibility Group", "OT Eligible", "Extra Day Eligible", "Gazetted Holiday Eligible", "Leave Eligible", "Attendance Exempt", "Single Punch OK", "Half Day Exempt", "Late Exempt"].map(h => (
                 <th key={h} className="text-left px-3 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 ? (
-              <tr><td colSpan={18} className="px-4 py-8 text-center text-slate-400">No employees match.</td></tr>
+              <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-400">No employees match.</td></tr>
             ) : rows.map(e => {
               const group = e.eligibilityGroup ? groupByCode[e.eligibilityGroup] : null;
               const otEffective = e.otEligible != null ? !!e.otEligible : !!group?.overtime_eligible;
@@ -364,48 +340,22 @@ export default function Permissions({ employees, role }) {
                     </button>
                   </td>
                   <td className="px-3 py-2.5">
-                    <button
-                      disabled={!canEdit || busy}
-                      onClick={() => toggleFieldEmployee(e)}
-                      className="disabled:cursor-default"
-                    >
-                      <YesNoBadge value={e.isFieldEmployee} />
-                    </button>
-                  </td>
-                  <td className="px-3 py-2.5">
                     <button disabled={!canEdit || busy} onClick={() => toggleSinglePunchOk(e)} className="disabled:cursor-default"
                       title="A single punch (in or out only) is treated as a full required-hours day instead of a review exception.">
                       <YesNoBadge value={e.singlePunchOk} />
                     </button>
                   </td>
                   <td className="px-3 py-2.5">
-                    <button disabled={!canEdit || busy} onClick={() => toggleMonthlyHoursBased(e)} className="disabled:cursor-default">
-                      <YesNoBadge value={e.monthlyHoursBased} />
+                    <button disabled={!canEdit || busy} onClick={() => toggleHalfDayExempt(e)} className="disabled:cursor-default"
+                      title="Never classified Half Day (falls through to Late/Early Out/Present instead) and never docked for one in payroll.">
+                      <YesNoBadge value={e.halfDayExempt} />
                     </button>
                   </td>
                   <td className="px-3 py-2.5">
-                    <button disabled={!canEdit || busy} onClick={() => toggleSupervisor(e)} className="disabled:cursor-default">
-                      <YesNoBadge value={e.isSupervisor} />
+                    <button disabled={!canEdit || busy} onClick={() => toggleLateExempt(e)} className="disabled:cursor-default"
+                      title="Late arrivals never become 'Late' status and never trigger a late penalty deduction.">
+                      <YesNoBadge value={e.lateExempt} />
                     </button>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <button disabled={!canEdit || busy} onClick={() => toggleManager(e)} className="disabled:cursor-default">
-                      <YesNoBadge value={e.isManager} />
-                    </button>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <button disabled={!canEdit || busy} onClick={() => toggleWhatsappVerified(e)} className="disabled:cursor-default"
-                      title="Normally set automatically once the employee completes WhatsApp OTP verification — override only for support cases.">
-                      <YesNoBadge value={e.whatsappVerified} />
-                    </button>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <button disabled={!canEdit || busy} onClick={() => toggleEnrollmentCompleted(e)} className="disabled:cursor-default">
-                      <YesNoBadge value={e.enrollmentCompleted} />
-                    </button>
-                  </td>
-                  <td className="px-3 py-2.5" title="Change via the temp-to-permanent conversion flow on the Directory tab, not here.">
-                    <YesNoBadge value={e.isTemporary} />
                   </td>
                 </tr>
               );
@@ -416,7 +366,7 @@ export default function Permissions({ employees, role }) {
 
       {canEdit && (
         <p className="text-xs text-slate-400 mt-2">
-          OT Eligible, Extra Day Eligible and Gazetted Holiday Eligible all cycle through: group default → Yes → No → group default. Set the staff-level default in the "Eligibility Group Defaults" table above, then override an individual employee here only when they're an exception to their group. All other columns are a direct Yes/No toggle per employee — click a badge to flip it. "Temporary" is read-only here; change it via the temp-to-permanent conversion flow on the Directory tab.
+          OT Eligible, Extra Day Eligible and Gazetted Holiday Eligible all cycle through: group default → Yes → No → group default. Set the staff-level default in the "Eligibility Group Defaults" table above, then override an individual employee here only when they're an exception to their group. All other columns are a direct Yes/No toggle per employee — click a badge to flip it. Half Day Exempt / Late Exempt apply from the next attendance sync onward; use Timesheet's per-day toggle for a one-off exception instead of a standing policy.
         </p>
       )}
     </div>

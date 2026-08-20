@@ -386,6 +386,18 @@ export default function Timesheet({ branchFilter, role }) {
       ? { ...r, [dbField]: newValue, adjustment_status: adjStatus, ...(role === "Master" ? { adjustment_approved_by: "Master" } : {}) }
       : r
     ));
+
+    // Half Day Exempt / Late Exempt aren't just a label like the other
+    // toggles here -- they change what status this day should actually
+    // carry (see classify_attendance_day), so recompute it immediately
+    // instead of leaving a stale Half Day/Late status sitting next to a
+    // now-exempt flag until the next bulk sync reprocesses it.
+    if (flag === "halfDayExempt" || flag === "lateExempt") {
+      const { data: reclassified, error: reErr } = await supabase.rpc("reclassify_attendance_row", { p_attendance_id: row.id });
+      if (reErr) { setNotice(`Flag saved, but reclassification failed: ${reErr.message}`); return; }
+      setAttendance(prev => prev.map(r => r.id === row.id ? { ...r, ...reclassified } : r));
+    }
+
     setNotice(`${flag.replace(/([A-Z])/g, " $1").trim()} updated.`);
     setTimeout(() => setNotice(""), 3000);
   }
@@ -951,6 +963,12 @@ export default function Timesheet({ branchFilter, role }) {
                           </td>
                           <td className="px-4 py-3 print:px-1.5 print:py-0.5">
                             <StatusBadge status={status} />
+                            {row.half_day_exempt_applied && (
+                              <span className="block mt-0.5 text-[10px] text-purple-600" title="Half Day Exempt kept this day off the Half Day status.">Half Day Exempt</span>
+                            )}
+                            {row.late_exempt_applied && (
+                              <span className="block mt-0.5 text-[10px] text-blue-600" title="Late Exempt kept this day off the Late status.">Late Exempt</span>
+                            )}
                             {canToggle && status === "Absent" && (
                               <>
                                 <button onClick={() => markDayAsLeave(row)} className="block mt-1 text-[10px] text-blue-600 underline print:hidden">

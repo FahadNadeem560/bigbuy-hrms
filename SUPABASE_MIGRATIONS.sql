@@ -4066,3 +4066,259 @@ begin
 end;
 $function$;
 -- =============================================================
+
+-- =============================================================
+-- Migration: cap_weekly_off_at_4_per_month_exempt_mgmt_warehouse
+-- Applied: 2026-08-20
+-- generate_employee_work_rosters previously marked every occurrence of an
+-- employee's weekly_off_day as Weekly Off with no limit -- in a 5-Sunday
+-- (or 5-Wednesday etc.) calendar month that handed out a free 5th day off.
+-- Company policy: every employee gets at most 4 unpaid weekly-off days per
+-- calendar month; a 5th+ occurrence is a real absence. Management and
+-- Warehouse-department staff are exempt (their fixed day off, almost
+-- always Sunday, always counts). Occurrence counting is computed against
+-- the whole calendar month even when called with a sub-month range (see
+-- ZKTSync.jsx's manual date picker), so a partial-range call can't
+-- undercount earlier occurrences that already used up the cap.
+-- Reprocessed for July/August 2026 immediately after (see below).
+-- =============================================================
+CREATE OR REPLACE FUNCTION public.generate_employee_work_rosters(p_from_date date, p_to_date date)
+ RETURNS TABLE(processed_days integer, weekly_off_rows integer)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'private', 'pg_temp'
+ SET statement_timeout TO '5min'
+AS $function$
+declare
+  v_days integer := 0;
+  v_rows integer := 0;
+  v_month_from date;
+  v_month_to date;
+begin
+  if p_from_date is null or p_to_date is null or p_to_date < p_from_date then
+    raise exception 'Invalid roster generation date range';
+  end if;
+
+  v_month_from := date_trunc('month', p_from_date)::date;
+  v_month_to := (date_trunc('month', p_to_date) + interval '1 month' - interval '1 day')::date;
+
+  with day_series as (
+    select generate_series(v_month_from, v_month_to, interval '1 day')::date as roster_date
+  ), matches as (
+    select e.employee_code, d.roster_date,
+      (e.staff_level = 'Management' or e.department ilike '%warehouse%') as is_exempt,
+      row_number() over (
+        partition by e.employee_code, date_trunc('month', d.roster_date)
+        order by d.roster_date
+      ) as occurrence_in_month
+    from public.employees e
+    cross join day_series d
+    where coalesce(e.status, 'Active') = 'Active'
+      and e.weekly_off_day is not null
+      and e.weekly_off_day <> ''
+      and extract(dow from d.roster_date)::int = e.weekly_off_day::int
+  ), capped as (
+    select employee_code, roster_date
+    from matches
+    where is_exempt or occurrence_in_month <= 4
+  ), upserted as (
+    insert into public.employee_work_rosters (employee_code, roster_date, is_weekly_off, created_by)
+    select employee_code, roster_date, true, 'weekly_off_generator'
+    from capped
+    where roster_date between p_from_date and p_to_date
+    on conflict (employee_code, roster_date) do update set is_weekly_off = true
+    returning 1
+  ), decapped as (
+    update public.employee_work_rosters r
+    set is_weekly_off = false
+    from matches m
+    where r.employee_code = m.employee_code
+      and r.roster_date = m.roster_date
+      and r.roster_date between p_from_date and p_to_date
+      and not m.is_exempt
+      and m.occurrence_in_month > 4
+      and r.is_weekly_off = true
+    returning 1
+  )
+  select count(*) into v_rows from upserted;
+
+  select count(distinct roster_date) into v_days
+  from (select generate_series(p_from_date, p_to_date, interval '1 day')::date) as ds(roster_date);
+
+  return query select v_days, v_rows;
+end;
+$function$;
+
+-- Reprocessing run after the above (not part of the function itself):
+--   select * from generate_employee_work_rosters('2026-07-01','2026-07-31');
+--   select * from generate_employee_work_rosters('2026-08-01','2026-08-20');
+--   select * from process_daily_attendance('2026-07-29','2026-07-30');
+-- (July's 5th Wednesday/Thursday -- 07-29/07-30 -- were the only days that
+-- lost the cap for non-exempt employees; August had no 5th occurrence yet.)
+-- =============================================================
+
+-- =============================================================
+-- Migration: wire_half_day_late_exempt_into_classification +
+--   pass_exempt_flags_through_process_and_reclassify
+-- Applied: 2026-08-20
+-- attendance.half_day_exempt / late_exempt already existed as a per-day
+-- Timesheet toggle but were never actually read anywhere -- pure dead
+-- flags. Adds the employee-level standing-policy version (Permissions tab)
+-- and wires BOTH into classify_attendance_day: half_day_exempt keeps a day
+-- from ever becoming "Half Day" (falls through to Late/Early Out/Present
+-- instead); late_exempt keeps a day from ever becoming "Late" and zeroes
+-- late_minutes (so payroll's late-penalty count skips it too). Added
+-- half_day_exempt_applied/late_exempt_applied on attendance so the
+-- Timesheet can show a visible badge when an exemption actually changed
+-- the outcome, instead of silently downgrading with no trace.
+--
+-- process_daily_attendance and reclassify_attendance_row fetch the
+-- employee-level half_day_exempt/late_exempt and OR them with the per-day
+-- attendance.half_day_exempt/late_exempt (a manual Timesheet toggle set
+-- directly on the row survives a bulk reprocess run, which otherwise
+-- recomputes every row from raw punches with no memory of it), pass the
+-- combined result into classify_attendance_day, and persist
+-- half_day_exempt_applied/late_exempt_applied on the row.
+--
+-- Timesheet.jsx's toggleFlag() now calls reclassify_attendance_row via RPC
+-- right after writing halfDayExempt/lateExempt, so the existing (till now
+-- inert) per-day toggle actually changes the row's status/hours instead of
+-- just flipping a flag nobody read.
+-- =============================================================
+ALTER TABLE public.employees
+  ADD COLUMN IF NOT EXISTS half_day_exempt BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS late_exempt      BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE public.attendance
+  ADD COLUMN IF NOT EXISTS half_day_exempt_applied BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS late_exempt_applied      BOOLEAN DEFAULT FALSE;
+
+CREATE OR REPLACE FUNCTION public.classify_attendance_day(p_eligibility_group text, p_required_hours numeric, p_shift_start timestamp without time zone, p_shift_end timestamp without time zone, p_first_in timestamp without time zone, p_last_out timestamp without time zone, p_is_weekly_off boolean DEFAULT false, p_is_gazetted_holiday boolean DEFAULT false, p_half_day_exempt boolean DEFAULT false, p_late_exempt boolean DEFAULT false)
+ RETURNS TABLE(attendance_status text, worked_hours numeric, late_minutes integer, early_out_minutes integer, overtime_hours numeric, needs_review boolean, exception_reason text, extra_day_eligible boolean, gh_eligible boolean, half_day_exempt_applied boolean, late_exempt_applied boolean)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+declare
+  r public.staff_eligibility_groups%rowtype;
+  v_worked numeric := 0;
+  v_late integer := 0;
+  v_early integer := 0;
+  v_ot numeric := 0;
+  v_status text := 'Present';
+  v_review boolean := false;
+  v_reason text := null;
+  v_half_day_exempt_applied boolean := false;
+  v_late_exempt_applied boolean := false;
+begin
+  select * into r from public.staff_eligibility_groups where code = p_eligibility_group and is_active = true;
+  if not found then
+    raise exception 'Attendance eligibility group not configured: %', p_eligibility_group;
+  end if;
+
+  if p_first_in is null and p_last_out is null then
+    v_status := case when p_is_weekly_off then 'Weekly Off' else r.no_punch_status end;
+    return query select v_status, 0::numeric, 0, 0, 0::numeric, false, null::text,
+      false,
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if p_first_in is null or p_last_out is null then
+    v_status := r.missing_single_punch_status;
+    v_review := true;
+    v_reason := case when p_first_in is null then 'Missing check-in punch' else 'Missing check-out punch' end;
+    return query select v_status, 0::numeric, 0, 0, 0::numeric, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  v_worked := round((extract(epoch from (p_last_out - p_first_in)) / 3600.0)::numeric, 2);
+  if v_worked < 0 then
+    v_status := 'Review';
+    v_review := true;
+    v_reason := 'Check-out is earlier than check-in';
+    return query select v_status, v_worked, 0, 0, 0::numeric, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if r.min_present_hours is not null and v_worked < r.min_present_hours then
+    v_status := case when p_is_weekly_off then 'Weekly Off' else 'Absent' end;
+    v_reason := format('Worked hours (%sh) below minimum required presence (%sh)', v_worked, r.min_present_hours);
+    return query select v_status, v_worked, 0, 0, 0::numeric, false, v_reason,
+      false,
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if r.overtime_eligible and v_worked > p_required_hours then
+    v_ot := round(v_worked - p_required_hours, 2);
+  end if;
+
+  if not r.apply_late_rules and not r.apply_early_out_rules and not r.apply_half_day_variance_rules then
+    v_status := case when v_worked >= p_required_hours then 'Present' else 'Short Hours' end;
+    v_review := v_worked < p_required_hours;
+    v_reason := case when v_review then 'Required hours not completed' else null end;
+    return query select v_status, v_worked, 0, 0, v_ot, v_review, v_reason,
+      (p_is_weekly_off and r.extra_days_eligible),
+      (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+      false, false;
+    return;
+  end if;
+
+  if p_shift_start is not null then
+    v_late := greatest(0, floor(extract(epoch from (p_first_in - p_shift_start)) / 60)::integer - r.grace_minutes);
+  end if;
+  if p_shift_end is not null then
+    v_early := greatest(0, floor(extract(epoch from (p_shift_end - p_last_out)) / 60)::integer);
+  end if;
+
+  if p_late_exempt and v_late > 0 then
+    v_late_exempt_applied := true;
+    v_reason := format('Late Exempt applied (was %s min late)', v_late);
+    v_late := 0;
+  end if;
+
+  if r.apply_half_day_variance_rules and (v_late > r.half_day_threshold_minutes or v_early > r.half_day_threshold_minutes) then
+    if p_half_day_exempt then
+      v_half_day_exempt_applied := true;
+      v_reason := trim(both '; ' from coalesce(v_reason || '; ', '') || format('Half Day Exempt applied (late %s min, early-out %s min)', v_late, v_early));
+      if r.apply_late_rules and v_late > 0 then
+        v_status := 'Late';
+      elsif r.apply_early_out_rules and v_early > 0 then
+        v_status := 'Early Out';
+      else
+        v_status := 'Present';
+      end if;
+    else
+      v_status := 'Half Day';
+    end if;
+  elsif r.apply_late_rules and v_late > 0 then
+    v_status := 'Late';
+  elsif r.apply_early_out_rules and v_early > 0 then
+    v_status := 'Early Out';
+  else
+    v_status := 'Present';
+  end if;
+
+  return query select v_status, v_worked, v_late, v_early, v_ot, false, v_reason,
+    (p_is_weekly_off and r.extra_days_eligible),
+    (p_is_gazetted_holiday and r.gazetted_holiday_eligible),
+    v_half_day_exempt_applied, v_late_exempt_applied;
+end;
+$function$;
+--
+-- process_daily_attendance and reclassify_attendance_row were also updated
+-- (v_employee/v_emp selects gained half_day_exempt, late_exempt; effective
+-- exempt flags OR the employee-level columns with the existing row's own
+-- half_day_exempt/late_exempt; passed into classify_attendance_day; insert/
+-- update gained half_day_exempt_applied, late_exempt_applied) -- full
+-- bodies are long and otherwise unchanged in control flow, see live DB
+-- (pg_get_functiondef) or git history for the complete text.
+-- =============================================================

@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-08-04-v11";
+const MIGRATION_VERSION = "2026-08-20-v12";
 let ran = false;
 
 export async function runMigrations() {
@@ -242,6 +242,14 @@ async function applyIncrementalMigrations() {
       UNIQUE (employee_code, due_date)
     )`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.increment_due_dismissals TO anon, authenticated`,
+    // v12: employee-level Half Day Exempt / Late Exempt standing policy
+    // (Permissions tab) -- distinct from the pre-existing per-day
+    // attendance.half_day_exempt/late_exempt Timesheet toggle, both are
+    // OR'd together by classify_attendance_day.
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS half_day_exempt BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS late_exempt BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS half_day_exempt_applied BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS late_exempt_applied BOOLEAN DEFAULT FALSE`,
   ];
 
   for (const sql of stmts) {

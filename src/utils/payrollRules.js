@@ -76,6 +76,14 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const absentAdjustment = Number(adjustments.absentAdjustment || 0);
   const fuelAllowance    = Number(adjustments.fuel || 0);
   const otherEarnings    = Number(adjustments.otherEarnings || adjustments.otherAmount || 0);
+  // Management: short hours/half days/absents are first offset against the
+  // employee's available leave balance (see buildPayrollRows, which decides
+  // leaveOffsetDays by checking their actual remaining balance) before any
+  // of it becomes a real salary deduction -- this earns back exactly what
+  // the leave balance covered, as a day-rate credit, rather than reducing
+  // the deduction lines themselves (which stay fully visible below).
+  const leaveOffsetDays  = Number(adjustments.leaveOffsetDays || 0);
+  const leaveAdjustment  = Math.round(dailyRate * leaveOffsetDays);
 
   const totalEarnings =
     monthlySalary +
@@ -85,7 +93,8 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     absentAdjustment +
     fuelAllowance +
     otherEarnings +
-    extraWorkingDaysAmount;
+    extraWorkingDaysAmount +
+    leaveAdjustment;
 
   // ── Deductions ────────────────────────────────────────────
   const absentDeduction = Math.round(dailyRate * Number(adjustments.absentDays || 0));
@@ -98,7 +107,13 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const latePenaltyUnits = isExempt ? 0 : Math.floor(Number(adjustments.lateCount || 0) / latePenaltyCount);
   const latePenaltyDays  = latePenaltyUnits * Number(policy.latePenaltyDays || 0);
   const lateDeduction     = isExempt ? 0 : Math.round(dailyRate * latePenaltyDays);
-  const shortHourDeduction = isExempt ? 0 : Number(adjustments.shortHourDeduction || 0);
+  // Management/Admin has no half-day/late variance rules -- days that fall
+  // short of required hours are marked "Short Hours" instead, which never
+  // used to cost anything. shortHourFractionalDays (Σ short_hours/required_
+  // hours across the month's Short Hours days, from buildPayrollRows) turns
+  // that into a proportional day-rate deduction, same leave-offset-first
+  // treatment as absents/half days.
+  const shortHourDeduction = isExempt ? 0 : Math.round(dailyRate * Number(adjustments.shortHourFractionalDays || 0));
   const halfDayDeduction  = isExempt ? 0 : (adjustments.halfDays !== undefined
     ? Math.round((dailyRate / 2) * Number(adjustments.halfDays || 0))
     : Number(adjustments.halfDayDeduction || 0));
@@ -148,6 +163,7 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     workedHours,
     requiredHours,
     leaveDaysUsed: Number(adjustments.leaveDaysUsed || 0),
+    leaveOffsetDays,
     extraWorkingDays,
     // Earnings
     overtimeAmount,
@@ -157,6 +173,7 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     fuelAllowance,
     otherEarnings,
     extraWorkingDaysAmount,
+    leaveAdjustment,
     totalEarnings,
     // Deductions
     lateDeduction,

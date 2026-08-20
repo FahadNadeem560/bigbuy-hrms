@@ -28,7 +28,7 @@ function fmtDate(d) {
 // Returns a Set of override keys: `${date}` (no employeeKey) or
 // `${employee_code}|${date}` (with employeeKey) for rows that should read
 // as "Weekly Off" instead of "Absent".
-export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null } = {}) {
+export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out" } = {}) {
   const weeks = {};
   (rows || []).forEach((row) => {
     const status = row[statusKey];
@@ -47,8 +47,15 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(monday)}`;
     const week = (weeks[weekKey] ||= { absentRows: [], hasRealWeeklyOff: false });
+    // Only a true no-show (no check-in AND no check-out at all) is eligible
+    // to be reinterpreted as the week's off day. An employee who actually
+    // punched in/out but fell short of the minimum-presence bar (marked
+    // "Absent" by classify_attendance_day for insufficient hours, not for a
+    // no-show) genuinely came to work that day and must not be relabeled
+    // Weekly Off -- that would hide a real short-attendance day as if it
+    // were their day off.
     if (status === "Weekly Off") week.hasRealWeeklyOff = true;
-    else if (status === "Absent" && dow !== 0 && dow !== 6) week.absentRows.push(row);
+    else if (status === "Absent" && dow !== 0 && dow !== 6 && !row[checkInKey] && !row[checkOutKey]) week.absentRows.push(row);
   });
 
   const overrideKeys = new Set();

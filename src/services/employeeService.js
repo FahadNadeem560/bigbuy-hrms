@@ -86,6 +86,11 @@ export function mapEmployeeRecord(emp) {
     exemptionReason: emp.exemption_reason || "",
     // Field employee
     isFieldEmployee: !!emp.is_field_employee,
+    // Attendance policy exemptions (standing, per-employee default — see
+    // Permissions.jsx; the per-day Timesheet toggle lives on the attendance
+    // row itself and is OR'd with these at classification time)
+    halfDayExempt: !!emp.half_day_exempt,
+    lateExempt: !!emp.late_exempt,
     // Temporary / Probation
     isTemporary: !!emp.is_temporary,
     tempId: emp.temp_id || "",

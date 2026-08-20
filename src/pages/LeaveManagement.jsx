@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import LeaveLiability from "./LeaveLiability.jsx";
-import { LEAVE_QUOTA } from "../config/staffPolicies.js";
+import { calcEarnedLeave } from "../utils/leaveBalance.js";
 import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage, fetchApprovalTrail, routeInitialApprover, notifyInitialApprover } from "../services/leaveApprovalService.js";
 
 const LEAVE_TYPES = ["Annual", "Half Day", "Emergency", "Maternity", "Paternity", "Unpaid"];
@@ -52,20 +52,7 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-// Opening balances entered when this system went live (Aug 2026) already
-// account for everything earned through end of 2026 -- no further accrual
-// is generated until the new leave year starts on Jan 1, 2027.
-const ACCRUAL_START = new Date(2027, 0, 1);
-
-function calcEarned(staffLevel, joiningDate) {
-  const quota = LEAVE_QUOTA[staffLevel] || LEAVE_QUOTA["Non-Management"];
-  const now = new Date();
-  if (now < ACCRUAL_START) return 0;
-  const joinDate = joiningDate ? new Date(joiningDate) : ACCRUAL_START;
-  const start = joinDate > ACCRUAL_START ? joinDate : ACCRUAL_START;
-  const months = Math.max(0, (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1);
-  return Math.round((quota / 12) * months * 10) / 10;
-}
+const calcEarned = calcEarnedLeave;
 
 function excelDateToJS(serial) {
   if (!serial) return null;

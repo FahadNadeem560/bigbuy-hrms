@@ -4,6 +4,7 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { calculatePayrollForEmployee, getWorkingDaysInMonth } from "../utils/payrollRules.js";
 import { getWeeklyOffOverrideKeys } from "../utils/attendanceRules.js";
+import { calcRemainingLeaveBalance } from "../utils/leaveBalance.js";
 import * as XLSX from "xlsx";
 import {
   PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, PAYMENT_STATUS_TONES,
@@ -178,6 +179,7 @@ function PayslipModal({ row, month, onClose }) {
             <ERow label="Commission" value={row.commissionAddOn} />
             <ERow label="Fuel Allowance" value={row.fuelAllowance} />
             <ERow label="Other Earnings" value={row.otherEarnings} />
+            {!!row.leaveAdjustment && <ERow label="Leave's Adjustment (short hours/half day/absent covered from leave)" value={row.leaveAdjustment} />}
             <div className="flex justify-between py-2 mt-1 bg-emerald-50 rounded-xl px-3">
               <span className="font-bold text-sm text-emerald-800">Total Earnings</span>
               <span className="font-bold text-sm text-emerald-800">{money(row.totalEarnings)}</span>
@@ -708,7 +710,7 @@ export default function PayrollAutomation({ role, actorName }) {
     const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
     const numberOfWorkingDays = getWorkingDaysInMonth(y, m);
 
-    const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }, { data: taxSlabsData }, { data: taxSettingsData }] = await Promise.all([
+    const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }, { data: taxSlabsData }, { data: taxSettingsData }, { data: leaveBalanceRows }, { data: approvedLeaveRequests }] = await Promise.all([
       fetchAllAttendanceForMonth(fromDate, toDate),
       supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
@@ -723,10 +725,28 @@ export default function PayrollAutomation({ role, actorName }) {
       // per-employee Manual amount or Exempt status -- this must override
       // the auto slab calculation below, not just be a display-only setting.
       supabase.from("employee_tax_settings").select("*"),
+      // Leave-first offset for Management (see the loop below) needs each
+      // employee's opening balance and every already-Approved leave request.
+      supabase.from("leaves").select("employee_code, employee_id, opening_balance"),
+      supabase.from("leave_requests").select("employee_code, leave_type, days, reason").eq("status", "Approved"),
     ]);
     const skippedLoanIds = new Set((loanReliefData || []).map(r => r.loan_id));
     const groupByCode = Object.fromEntries((groupsData || []).map(g => [g.code, g]));
     const taxSettingByEmp = Object.fromEntries((taxSettingsData || []).map(t => [t.employee_code, t]));
+    const leaveBalanceByEmp = Object.fromEntries(
+      (leaveBalanceRows || []).map(b => [b.employee_code || b.employee_id, b])
+    );
+    const AUTO_LEAVE_OFFSET_TAG = `[Auto-Adjust ${month}]`;
+    const approvedLeaveByEmp = {};
+    (approvedLeaveRequests || []).forEach(r => {
+      const c = r.employee_code;
+      if (!approvedLeaveByEmp[c]) approvedLeaveByEmp[c] = [];
+      // Excludes this exact month's own prior auto-adjustment run, if any --
+      // otherwise a second Refresh Payroll click would see its own earlier
+      // offset as "already used" and compound it smaller each time instead
+      // of recomputing fresh against the real, current balance.
+      if (!(r.reason || "").includes(AUTO_LEAVE_OFFSET_TAG)) approvedLeaveByEmp[c].push(r);
+    });
 
     // Every employee gets one unpaid Mon-Fri day off per week; a week's lone
     // Mon-Fri Absent day is that off day, not a real absence (see
@@ -757,7 +777,7 @@ export default function PayrollAutomation({ role, actorName }) {
       if (!attByEmp[c]) attByEmp[c] = {
         presentDays: 0, absentDays: 0, halfDays: 0, weeklyOffDays: 0,
         lateCount: 0, otHours: 0, extraWorkingDays: 0, leaveDaysUsed: 0, numberOfWorkingDays,
-        workedHours: 0, requiredHours: 0,
+        workedHours: 0, requiredHours: 0, shortHourFractionalDays: 0,
       };
       const isOverriddenOff = weeklyOffOverrides.has(`${c}|${a.work_date}`);
       const s = isOverriddenOff ? "Weekly Off" : (a.attendance_status || a.status || "");
@@ -765,7 +785,17 @@ export default function PayrollAutomation({ role, actorName }) {
       else if (s === "Weekly Off") { attByEmp[c].weeklyOffDays++; }
       else if (s === "Half Day" || s === "HalfDay") { attByEmp[c].presentDays++; attByEmp[c].halfDays++; }
       else if (s === "Leave") { attByEmp[c].leaveDaysUsed++; }
-      else { attByEmp[c].presentDays++; }
+      else {
+        attByEmp[c].presentDays++;
+        // Management/Admin has no half-day/late rules -- a day short of its
+        // required hours is "Short Hours" instead, tracked as a fractional
+        // day (short_hours / that day's required_hours) so payrollRules.js
+        // can turn the month's total into a proportional deduction, offset
+        // against leave first like absents/half days (see buildPayrollRows).
+        if (s === "Short Hours" && Number(a.required_hours || 0) > 0) {
+          attByEmp[c].shortHourFractionalDays += Number(a.short_hours || 0) / Number(a.required_hours);
+        }
+      }
       // extra_day_eligible is computed server-side by classify_attendance_day from the
       // employee's eligibility group (e.g. false for MANAGEMENT_ADMIN) — trust it instead
       // of re-deriving "worked on a Sunday" here.
@@ -832,7 +862,7 @@ export default function PayrollAutomation({ role, actorName }) {
       oneTimeAdjByEmp[a.employee_code][field] = (oneTimeAdjByEmp[a.employee_code][field] || 0) + amt;
     });
 
-    const rows = employees.map(emp => {
+    const rows = await Promise.all(employees.map(async emp => {
       const group = groupByCode[emp.eligibility_group];
       const extraDaysEligible = emp.extra_days_eligible != null ? !!emp.extra_days_eligible : !!group?.extra_days_eligible;
       const empMapped = {
@@ -878,6 +908,57 @@ export default function PayrollAutomation({ role, actorName }) {
         }
         adj.absentDays = Number(adj.absentDays || 0) + missingDays;
       }
+
+      // Leave-first offset: Management staff's short hours/half days/
+      // absents are covered from their available leave balance before any
+      // of it becomes a real deduction, once the balance is exhausted the
+      // rest deducts normally. Scoped to staff_level "Management" only.
+      if (emp.staff_level === "Management") {
+        const deductibleDays =
+          Number(adj.absentDays || 0) +
+          Number(adj.halfDays || 0) * 0.5 +
+          Number(adj.shortHourFractionalDays || 0);
+
+        // Always clear out a prior run's auto-adjustment row for this exact
+        // month before recomputing -- Refresh Payroll can be clicked
+        // repeatedly, and the offset must reflect the employee's real,
+        // current balance each time, not compound on top of itself.
+        await supabase.from("leave_requests")
+          .delete()
+          .eq("employee_code", emp.employee_code)
+          .eq("status", "Approved")
+          .ilike("reason", `%${AUTO_LEAVE_OFFSET_TAG}%`);
+
+        if (deductibleDays > 0.004) {
+          const { remaining } = calcRemainingLeaveBalance({
+            staffLevel: emp.staff_level,
+            joiningDate: emp.joining_date,
+            openingBalance: leaveBalanceByEmp[emp.employee_code]?.opening_balance,
+            approvedRequests: approvedLeaveByEmp[emp.employee_code] || [],
+          });
+          const offsetDays = Math.round(Math.min(deductibleDays, Math.max(0, remaining)) * 100) / 100;
+          if (offsetDays > 0.004) {
+            adj.leaveOffsetDays = offsetDays;
+            const now = new Date().toISOString();
+            const { data: leaveReq, error: leaveErr } = await supabase.from("leave_requests").insert({
+              employee_id: emp.employee_code, employee_code: emp.employee_code,
+              employee_name: emp.full_name, leave_type: "Annual",
+              from_date: fromDate, to_date: toDate, days: offsetDays,
+              reason: `Auto-adjusted: ${offsetDays} day(s) of short hours/half day/absent covered from leave balance. ${AUTO_LEAVE_OFFSET_TAG}`,
+              applied_date: fromDate, status: "Approved",
+              approved_by: "System (payroll)", approved_at: now,
+              approval_trail: [{ level: null, approver: "System (payroll)", action: "Approved (auto leave-offset)", timestamp: now }],
+            }).select().single();
+            if (!leaveErr && leaveReq) {
+              await supabase.from("leave_approvals").insert({
+                leave_request_id: leaveReq.id, stage: "Payroll Auto-Adjust",
+                actor_role: "System", actor_name: "System (payroll)", action: "Approved",
+              });
+            }
+          }
+        }
+      }
+
       const loanRows = [];
       const loanMatch = (loans || []).find(l =>
         l.employee_code === emp.employee_code || l.employee_id === emp.employee_code
@@ -885,7 +966,7 @@ export default function PayrollAutomation({ role, actorName }) {
       if (loanMatch && !skippedLoanIds.has(loanMatch.id)) loanRows.push({ employeeCode: emp.employee_code, monthly: Number(loanMatch.monthly_deduction || 0) });
       const taxSetting = taxSettingByEmp[emp.employee_code];
       return calculatePayrollForEmployee(empMapped, adj, loanRows, taxSlabsData || [], month, taxSetting);
-    });
+    }));
 
     return rows;
   }
@@ -993,6 +1074,7 @@ export default function PayrollAutomation({ role, actorName }) {
       fuel_allowance: r.fuelAllowance,
       other_amount: r.otherEarnings,
       extra_working_days_amount: r.extraWorkingDaysAmount,
+      leave_adjustment: r.leaveAdjustment,
       total_earnings: r.totalEarnings,
       late_deduction: r.lateDeduction,
       short_hour_deduction: r.shortHourDeduction,
@@ -1139,8 +1221,9 @@ export default function PayrollAutomation({ role, actorName }) {
     const fuelAllowance        = r.fuelAllowance || r.fuel_allowance || r.fuel || 0;
     const otherEarnings        = r.otherEarnings || r.other_earnings || r.otherAmount || r.other_amount || 0;
     const extraWorkingDaysAmount = r.extraWorkingDaysAmount || r.extra_working_days_amount || 0;
+    const leaveAdjustment = r.leaveAdjustment || r.leave_adjustment || 0;
     const totalEarnings = basicSalary + overtimeAmount + commissionAddOn +
-      fuelAllowance + otherEarnings + extraWorkingDaysAmount +
+      fuelAllowance + otherEarnings + extraWorkingDaysAmount + leaveAdjustment +
       (r.arrears || 0) + (r.absentAdjustment || r.absent_adjustment || 0);
 
     const lateDeduction        = r.lateDeduction || r.late_deduction || 0;
@@ -1176,7 +1259,7 @@ export default function PayrollAutomation({ role, actorName }) {
       leaveDaysUsed: r.leaveDaysUsed || r.leave_days_used || 0,
       extraWorkingDays: r.extraWorkingDays || r.extra_working_days || 0,
       basicSalary, overtimeAmount, commissionAddOn, fuelAllowance,
-      otherEarnings, extraWorkingDaysAmount, totalEarnings,
+      otherEarnings, extraWorkingDaysAmount, leaveAdjustment, totalEarnings,
       lateDeduction, shortHourDeduction, absentDeduction, halfDayDeduction,
       fineDeduction, shortageDeduction, advanceDeduction, loanDeduction,
       taxDeduction, eobiDeduction, otherDeductions, totalDeductions,
