@@ -86,6 +86,30 @@ export default function Permissions({ employees, role }) {
     return true;
   }
 
+  // Flipping half_day_exempt/late_exempt here only changes the *employee*
+  // row -- classify_attendance_day only reads it the next time a day gets
+  // (re)classified (a future ZKT sync, or an explicit reclassify call), so
+  // the toggle alone leaves every already-computed attendance row exactly
+  // as it was. Reclassify the current calendar month's rows right away so
+  // the change is visible on Timesheet/Payroll immediately instead of
+  // silently doing nothing until the next sync. Older months are left
+  // alone -- use Timesheet's per-day toggle for a one-off past correction.
+  async function reclassifyCurrentMonth(employeeCode) {
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const { data: rows, error } = await supabase.from("attendance")
+      .select("id")
+      .eq("employee_code", employeeCode)
+      .gte("work_date", monthStart);
+    if (error || !rows?.length) return;
+    let updated = 0;
+    for (const row of rows) {
+      const { error: rpcErr } = await supabase.rpc("reclassify_attendance_row", { p_attendance_id: row.id });
+      if (!rpcErr) updated++;
+    }
+    say(`Saved. Reclassified ${updated} day(s) this month.`);
+  }
+
   // audit_logs schema is (id, action_type, performed_by, details, created_at) —
   // no action/entity/entity_id columns despite several other pages in this app
   // inserting those (silently failing, since .then(()=>{}) swallows the error).
@@ -129,12 +153,14 @@ export default function Permissions({ employees, role }) {
     const next = !e.halfDayExempt;
     if (!(await saveField(e.id, { half_day_exempt: next }, { halfDayExempt: next }))) return;
     logAudit(next ? "half_day_exempt_enabled" : "half_day_exempt_disabled", e.id, `Half Day Exempt ${next ? "enabled" : "disabled"}.`);
+    reclassifyCurrentMonth(e.id);
   }
 
   async function toggleLateExempt(e) {
     const next = !e.lateExempt;
     if (!(await saveField(e.id, { late_exempt: next }, { lateExempt: next }))) return;
     logAudit(next ? "late_exempt_enabled" : "late_exempt_disabled", e.id, `Late Exempt ${next ? "enabled" : "disabled"}.`);
+    reclassifyCurrentMonth(e.id);
   }
 
   async function toggleAttendanceExempt(e) {
