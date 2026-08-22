@@ -89,6 +89,7 @@ export default function LoanManagement({ role, actorName }) {
   const [disbursing, setDisbursing] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  const [printingLoan, setPrintingLoan] = useState(null);
 
   // Bulk import state
   const [showImport, setShowImport] = useState(false);
@@ -98,6 +99,18 @@ export default function LoanManagement({ role, actorName }) {
   const [importing, setImporting] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
+
+  // Print is triggered a tick after printingLoan is set (so the print-only
+  // slip below has actually rendered), and cleared on 'afterprint' so the
+  // slip disappears again once the browser's print dialog closes -- covers
+  // both an actual print and a Cancel.
+  useEffect(() => {
+    if (!printingLoan) return;
+    const t = setTimeout(() => window.print(), 50);
+    const clear = () => setPrintingLoan(null);
+    window.addEventListener("afterprint", clear);
+    return () => { clearTimeout(t); window.removeEventListener("afterprint", clear); };
+  }, [printingLoan]);
 
   async function loadAll() {
     const [{ data: lns }, { data: emps }, { data: changes }] = await Promise.all([
@@ -395,7 +408,8 @@ export default function LoanManagement({ role, actorName }) {
   const historyChanges = selectedHistory ? loanChanges.filter(c => c.employee_code === selectedHistory) : [];
 
   return (
-    <div>
+    <>
+    <div className="print:hidden">
       <PageTitle title="Loans & Advances" subtitle="Manage employee loan applications, rescheduling, relief and settlements."
         action={canManage && (
           <div className="flex gap-2">
@@ -609,6 +623,9 @@ export default function LoanManagement({ role, actorName }) {
                   {(canManage || canDisburse) && (
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1 items-center">
+                      {l.status !== "Pending Approval" && l.status !== "Rejected" && (
+                        <Button variant="outline" onClick={() => setPrintingLoan(l)} className="rounded-xl text-xs py-1 px-2" title="Print approval slip to hand to Finance">🖨️ Print</Button>
+                      )}
                       {canDisburse && l.status === "Pending Disbursement" && (
                         disburseTarget === l.id
                           ? <div className="flex flex-col gap-1 min-w-[180px]">
@@ -718,5 +735,46 @@ export default function LoanManagement({ role, actorName }) {
         </div>
       )}
     </div>
+
+      {/* Print-only loan approval slip -- rendered as a sibling outside the
+          print:hidden wrapper above (not nested inside it) so it actually
+          shows when printing -- a print:block descendant of a print:hidden
+          ancestor stays hidden, since the ancestor's display:none wins.
+          Invisible on screen either way, only shown to the print
+          stylesheet, so HR can hand a physical copy to Finance without
+          printing the whole ledger page. */}
+      {printingLoan && (() => {
+        const l = printingLoan;
+        const emp = employees.find(e => e.employee_code === (l.employee_code || l.employee_id));
+        return (
+          <div className="hidden print:block p-8 text-sm text-black">
+            <h1 className="text-lg font-bold mb-1">Loan Approval Slip</h1>
+            <p className="text-xs text-slate-500 mb-6">Printed {new Date().toLocaleString()}</p>
+
+            <table className="w-full text-sm mb-6">
+              <tbody>
+                <tr><td className="py-1 pr-4 font-semibold w-48">Employee</td><td className="py-1">{l.employee_name || emp?.full_name} ({l.employee_code || l.employee_id})</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Department / Branch</td><td className="py-1">{emp?.department || "—"} / {emp?.branch || "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Loan Amount</td><td className="py-1">{money(l.loan_amount)}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Monthly Deduction</td><td className="py-1">{money(l.monthly_deduction)}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Repayment Months</td><td className="py-1">{l.repayment_months || "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Start Date</td><td className="py-1">{l.start_date || "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Reason</td><td className="py-1">{l.reason || "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Guarantors</td><td className="py-1">
+                  {[l.guarantor_1_name && `${l.guarantor_1_code} — ${l.guarantor_1_name}`, l.guarantor_2_name && `${l.guarantor_2_code} — ${l.guarantor_2_name}`].filter(Boolean).join(", ") || "—"}
+                </td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Status</td><td className="py-1">{l.status}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Approved By</td><td className="py-1">{l.approved_by || "—"}{l.approved_at ? ` on ${new Date(l.approved_at).toLocaleDateString()}` : ""}</td></tr>
+              </tbody>
+            </table>
+
+            <div className="grid grid-cols-2 gap-8 mt-16">
+              <div><div className="border-t border-black pt-1">HR Signature</div></div>
+              <div><div className="border-t border-black pt-1">Finance Signature</div></div>
+            </div>
+          </div>
+        );
+      })()}
+    </>
   );
 }

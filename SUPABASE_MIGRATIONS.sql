@@ -4854,3 +4854,414 @@ $function$;
 -- reclassified Friday-only rows for SALES_SUPPORT/FLOOR_MANAGEMENT from
 -- 2026-07-01 onward (same query as the prior migration's Friday rerun).
 -- =============================================================
+
+-- =============================================================
+-- Migration: fix_duplicate_punch_pairing_fallback
+-- Applied: 2026-08-22
+--
+-- Bug: when the strict punch_status label filter (c/in / c/out) found a
+-- real check-in but genuinely no check-out at all, process_daily_attendance
+-- fell back to pairing the earliest and latest raw punch in the window
+-- *regardless of label*, discarding the already-good labeled check-in.
+-- If the only other punches were the SAME physical swipe logged twice a few
+-- seconds apart by the ZKT ingestion (both still labeled "C/In", no C/Out
+-- anywhere), that fallback paired them as if they were a real in/out pair --
+-- producing a bogus "worked 0.00h" day, which then fell through the
+-- min_present_hours floor as Absent instead of the correct
+-- missing_single_punch_status ("Half Day"). Confirmed against employees
+-- 1169 and 2082, July 2026: both had only duplicate C/In punches 2-4
+-- seconds apart with zero C/Out punches that day.
+--
+-- Fix: the positional (unlabeled) fallback now only fires when NEITHER end
+-- was resolved by punch_status label -- i.e. the device gave us nothing
+-- usable at all. If one end (e.g. check-in) already matched a real label,
+-- a genuinely missing counterpart stays null and is handled correctly by
+-- the missing_single_punch_status branch, instead of being fabricated from
+-- an unrelated/duplicate same-type punch.
+--
+-- Reprocessed 2026-07-01 through 2026-08-22 after applying this fix.
+-- =============================================================
+CREATE OR REPLACE FUNCTION public.process_daily_attendance(p_from_date date, p_to_date date)
+ RETURNS TABLE(processed_days integer, inserted_or_updated integer, needs_review_count integer, absent_count integer, half_day_count integer)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'private', 'pg_temp'
+ SET statement_timeout TO '5min'
+AS $function$
+declare
+  v_employee record;
+  v_day date;
+  v_roster record;
+  v_shift public.shift_definitions%rowtype;
+  v_shift_code text;
+  v_group text;
+  v_required_hours numeric;
+  v_day_required_hours numeric;
+  v_friday_override numeric;
+  v_start timestamp without time zone;
+  v_end timestamp without time zone;
+  v_win_start timestamp without time zone;
+  v_win_end timestamp without time zone;
+  v_first_in timestamp without time zone;
+  v_last_out timestamp without time zone;
+  v_punch_count integer;
+  v_pos_first timestamp without time zone;
+  v_pos_last timestamp without time zone;
+  v_class record;
+  v_source_locations text;
+  v_rows integer := 0;
+  v_days integer := 0;
+  v_review integer := 0;
+  v_absent integer := 0;
+  v_half integer := 0;
+  v_weekly_off boolean;
+  v_gh boolean;
+  v_day_type text;
+  v_existing_locked boolean;
+  v_existing_half_exempt boolean;
+  v_existing_late_exempt boolean;
+  v_eff_half_exempt boolean;
+  v_eff_late_exempt boolean;
+  v_auto_detect boolean;
+  v_is_friday_late_open boolean;
+  -- Tracks the last punch already claimed as a checkout by a previous day
+  -- within this run, per employee. A punch just after midnight that closes
+  -- out an overnight shift (e.g. 13:00 -> 00:54) sits inside both that
+  -- day's window and the next day's window (windows intentionally overlap
+  -- to tolerate early/late punches) -- without this, the same physical
+  -- punch could be reused as the NEXT day's check-in too, producing a
+  -- bogus ~20+ hour "shift" when paired with that day's real punch.
+  v_prev_claimed_until timestamp without time zone;
+begin
+  if p_from_date is null or p_to_date is null or p_to_date < p_from_date then
+    raise exception 'Invalid attendance processing date range';
+  end if;
+
+  perform public.refresh_zkt_punch_employee_mapping();
+
+  for v_employee in
+    select e.employee_code,
+           e.zkt_employee_no,
+           e.eligibility_group,
+           e.assigned_shift_code,
+           e.status,
+           e.branch,
+           e.joining_date,
+           e.last_working_day,
+           e.single_punch_ok,
+           e.half_day_exempt,
+           e.late_exempt
+      from public.employees e
+     where e.zkt_employee_no is not null
+       and e.zkt_employee_no <> ''
+       and (coalesce(e.status, 'Active') = 'Active' or e.last_working_day is not null)
+  loop
+    v_group := coalesce(nullif(v_employee.eligibility_group, ''), 'SALES_SUPPORT');
+    select required_hours into v_required_hours
+      from public.staff_eligibility_groups
+     where code = v_group and is_active = true;
+
+    if v_required_hours is null then
+      continue;
+    end if;
+
+    v_prev_claimed_until := null;
+
+    for v_day in select generate_series(p_from_date, p_to_date, interval '1 day')::date loop
+      v_days := v_days + 1;
+
+      if v_employee.joining_date is not null and v_day < v_employee.joining_date then
+        continue;
+      end if;
+
+      if coalesce(v_employee.status, 'Active') <> 'Active'
+         and v_employee.last_working_day is not null
+         and v_day > v_employee.last_working_day then
+        continue;
+      end if;
+
+      v_day_required_hours := v_required_hours;
+      -- Every branch except BASE FAISAL opens at 14:30 on Fridays (Jummah),
+      -- not the normal 11:00/13:00 shift starts -- confirmed against actual
+      -- punch data (median first check-in ~14:30-15:00 company-wide on
+      -- Fridays, but ~11:00 at BASE FAISAL, same as any other day).
+      v_is_friday_late_open := extract(dow from v_day) = 5 and v_employee.branch is distinct from 'BASE FAISAL';
+      if extract(dow from v_day) = 5 then
+        select value::numeric into v_friday_override
+          from public.hrms_policy_settings
+         where key = case when v_group = 'MANAGEMENT_ADMIN' then 'friday_hours_management' else 'friday_hours_non_management' end
+         limit 1;
+        if v_friday_override is not null then
+          v_day_required_hours := v_friday_override;
+        end if;
+      end if;
+
+      select r.shift_code, r.is_weekly_off, r.is_gazetted_holiday, r.day_type
+        into v_roster
+        from public.employee_work_rosters r
+       where r.employee_code = v_employee.employee_code
+         and r.roster_date = v_day
+       limit 1;
+
+      v_weekly_off := coalesce(v_roster.is_weekly_off, false);
+      v_gh := coalesce(v_roster.is_gazetted_holiday, exists(select 1 from public.gazetted_holidays g where g.holiday_date = v_day and g.is_active = true));
+      v_day_type := coalesce(v_roster.day_type, case when v_weekly_off then 'Weekly Off' when v_gh then 'Gazetted Holiday' else 'Working Day' end);
+
+      v_auto_detect := v_group <> 'MANAGEMENT_ADMIN'
+        and v_roster.shift_code is null
+        and (nullif(v_employee.assigned_shift_code, '') is null or v_employee.assigned_shift_code = 'SHIFT_A');
+
+      if v_auto_detect then
+        v_win_start := v_day::timestamp + interval '7 hours';
+        v_win_end := (v_day + 1)::timestamp + interval '7 hours 30 minutes';
+      else
+        v_shift_code := private.resolve_employee_shift(v_employee.employee_code, v_day, v_employee.assigned_shift_code);
+
+        select * into v_shift from public.shift_definitions where shift_code = v_shift_code and is_active = true;
+        if not found then
+          v_shift.shift_code := v_shift_code;
+          v_shift.start_time := '00:00'::time;
+          v_shift.end_time := '00:00'::time;
+          v_shift.scheduled_hours := v_day_required_hours;
+          v_shift.crosses_midnight := false;
+        end if;
+
+        if v_group = 'MANAGEMENT_ADMIN' then
+          v_start := null;
+          v_end := null;
+        else
+          v_start := v_day::timestamp + v_shift.start_time;
+          v_end := v_day::timestamp + v_shift.end_time;
+          if v_shift.crosses_midnight or v_shift.end_time < v_shift.start_time then
+            v_end := v_end + interval '1 day';
+          end if;
+        end if;
+
+        v_win_start := case when v_start is null then v_day::timestamp else v_start - interval '4 hours' end;
+        v_win_end := case when v_end is null then (v_day + 1)::timestamp + interval '6 hours' else v_end + interval '8 hours' end;
+      end if;
+
+      select
+        min(p.punch_time) filter (where lower(coalesce(p.punch_status,'')) in ('c/in','in','check in','check-in','checkin')),
+        max(p.punch_time) filter (where lower(coalesce(p.punch_status,'')) in ('c/out','out','check out','check-out','checkout')),
+        string_agg(distinct coalesce(p.location_id,''), ',' order by coalesce(p.location_id,''))
+      into v_first_in, v_last_out, v_source_locations
+      from public.zkt_raw_punches p
+      where p.employee_code = v_employee.employee_code
+        and p.punch_time >= v_win_start and p.punch_time < v_win_end
+        and p.punch_time > coalesce(v_prev_claimed_until, '-infinity'::timestamp);
+
+      if v_first_in is null or v_last_out is null
+         or (v_first_in is not null and v_last_out is not null and v_last_out < v_first_in) then
+        select count(distinct p.punch_time), min(p.punch_time), max(p.punch_time)
+          into v_punch_count, v_pos_first, v_pos_last
+          from public.zkt_raw_punches p
+         where p.employee_code = v_employee.employee_code
+           and p.punch_time >= v_win_start and p.punch_time < v_win_end
+           and p.punch_time > coalesce(v_prev_claimed_until, '-infinity'::timestamp);
+
+        -- Only use the positional (unlabeled) fallback when NEITHER end was
+        -- resolved by punch_status label -- i.e. the device gave us nothing
+        -- usable at all. If one end (e.g. check-in) already matched a real
+        -- label but the other genuinely has no matching punch, don't
+        -- fabricate a pair from an unrelated/duplicate same-type punch
+        -- (e.g. the same physical swipe logged twice a few seconds apart
+        -- with no C/Out at all) -- that produced a bogus ~0h "shift" and
+        -- misclassified a missed checkout as Absent instead of Half Day.
+        -- Confirmed against employees 1169 and 2082, July 2026: both had
+        -- only duplicate C/In punches seconds apart and no C/Out at all.
+        if v_first_in is null and v_last_out is null then
+          if v_punch_count >= 2 then
+            v_first_in := v_pos_first;
+            v_last_out := v_pos_last;
+          elsif v_punch_count = 1 then
+            v_first_in := v_pos_first;
+          end if;
+        end if;
+      end if;
+
+      if v_last_out is not null and v_first_in is not null and v_last_out < v_first_in then
+        v_last_out := null;
+      end if;
+
+      if v_auto_detect then
+        if v_is_friday_late_open then
+          v_shift_code := 'SHIFT_FRIDAY';
+        elsif v_first_in is null then
+          v_shift_code := 'SHIFT_A';
+        elsif v_first_in::time <= time '12:30' then
+          v_shift_code := 'SHIFT_A';
+        else
+          v_shift_code := 'SHIFT_B';
+        end if;
+
+        select * into v_shift from public.shift_definitions where shift_code = v_shift_code and is_active = true;
+        v_start := v_day::timestamp + v_shift.start_time;
+        v_end := v_day::timestamp + v_shift.end_time;
+        if v_shift.crosses_midnight or v_shift.end_time < v_shift.start_time then
+          v_end := v_end + interval '1 day';
+        end if;
+      end if;
+
+      select coalesce(a.half_day_exempt, false), coalesce(a.late_exempt, false), coalesce(a.review_status,'') = 'Locked'
+        into v_existing_half_exempt, v_existing_late_exempt, v_existing_locked
+        from public.attendance a
+       where a.employee_code = v_employee.employee_code
+         and a.work_date = v_day
+       limit 1;
+      v_existing_half_exempt := coalesce(v_existing_half_exempt, false);
+      v_existing_late_exempt := coalesce(v_existing_late_exempt, false);
+      v_existing_locked := coalesce(v_existing_locked, false);
+      v_eff_half_exempt := coalesce(v_employee.half_day_exempt, false) or v_existing_half_exempt;
+      v_eff_late_exempt := coalesce(v_employee.late_exempt, false) or v_existing_late_exempt;
+
+      select * into v_class
+      from public.classify_attendance_day(
+        v_group,
+        v_day_required_hours,
+        v_start,
+        v_end,
+        v_first_in,
+        v_last_out,
+        v_weekly_off,
+        v_gh,
+        v_eff_half_exempt,
+        v_eff_late_exempt,
+        extract(dow from v_day) = 5
+      );
+
+      if v_employee.single_punch_ok
+         and (v_first_in is not null or v_last_out is not null)
+         and v_class.worked_hours < v_day_required_hours then
+        v_class.worked_hours := v_day_required_hours;
+        v_class.attendance_status := 'Present';
+        v_class.late_minutes := 0;
+        v_class.early_out_minutes := 0;
+        v_class.overtime_hours := 0;
+        v_class.needs_review := false;
+        v_class.exception_reason := null;
+      end if;
+
+      if v_first_in is not null and v_last_out is not null
+         and (extract(epoch from (v_last_out - v_first_in)) / 3600.0) > 16 then
+        v_class.needs_review := true;
+        v_class.exception_reason := trim(both '; ' from coalesce(v_class.exception_reason || '; ', '') || 'Unusually long shift duration - please verify punches');
+      end if;
+
+      if v_last_out is not null then
+        v_prev_claimed_until := v_last_out;
+      end if;
+
+      if not v_existing_locked then
+        insert into public.attendance (
+          employee_code, attendance_date, work_date, source, eligibility_group, shift_code,
+          first_check_in, last_check_out, check_in, check_out, actual_hours,
+          worked_hours, required_hours, short_hours,
+          late_minutes, early_out_minutes, overtime_hours,
+          extra_day_eligible, gh_eligible, is_weekly_off, is_gazetted_holiday,
+          attendance_status, exception_reason, needs_review, calculated_at,
+          zkt_location_id, review_status, half_day_exempt_applied, late_exempt_applied
+        ) values (
+          v_employee.employee_code, v_day, v_day, 'ZKT CSV', v_group, v_shift_code,
+          v_first_in, v_last_out, v_first_in, v_last_out, v_class.worked_hours,
+          v_class.worked_hours, v_day_required_hours,
+          round(greatest(v_day_required_hours - v_class.worked_hours, 0)::numeric, 2),
+          v_class.late_minutes, v_class.early_out_minutes, v_class.overtime_hours,
+          v_class.extra_day_eligible, v_class.gh_eligible, v_weekly_off, v_gh,
+          v_class.attendance_status, v_class.exception_reason, v_class.needs_review, now(),
+          v_source_locations, case when v_class.needs_review then 'Pending Review' else 'Calculated' end,
+          v_class.half_day_exempt_applied, v_class.late_exempt_applied
+        )
+        on conflict (employee_code, work_date) where employee_code is not null and work_date is not null
+        do update set
+          attendance_date = excluded.attendance_date,
+          source = excluded.source,
+          eligibility_group = excluded.eligibility_group,
+          shift_code = excluded.shift_code,
+          first_check_in = excluded.first_check_in,
+          last_check_out = excluded.last_check_out,
+          check_in = excluded.check_in,
+          check_out = excluded.check_out,
+          actual_hours = excluded.actual_hours,
+          worked_hours = excluded.worked_hours,
+          required_hours = excluded.required_hours,
+          short_hours = excluded.short_hours,
+          late_minutes = excluded.late_minutes,
+          early_out_minutes = excluded.early_out_minutes,
+          overtime_hours = excluded.overtime_hours,
+          extra_day_eligible = excluded.extra_day_eligible,
+          gh_eligible = excluded.gh_eligible,
+          is_weekly_off = excluded.is_weekly_off,
+          is_gazetted_holiday = excluded.is_gazetted_holiday,
+          attendance_status = excluded.attendance_status,
+          exception_reason = excluded.exception_reason,
+          needs_review = excluded.needs_review,
+          calculated_at = excluded.calculated_at,
+          zkt_location_id = excluded.zkt_location_id,
+          review_status = excluded.review_status,
+          half_day_exempt_applied = excluded.half_day_exempt_applied,
+          late_exempt_applied = excluded.late_exempt_applied;
+        v_rows := v_rows + 1;
+        if v_class.needs_review then v_review := v_review + 1; end if;
+        if v_class.attendance_status = 'Absent' then v_absent := v_absent + 1; end if;
+        if v_class.attendance_status = 'Half Day' then v_half := v_half + 1; end if;
+      end if;
+    end loop;
+  end loop;
+
+  return query select v_days, v_rows, v_review, v_absent, v_half;
+end;
+$function$;
+-- =============================================================
+
+-- =============================================================
+-- Migration: data_cleanup_2026_08_22 (not a schema change -- one-time data
+-- fixes applied alongside the punch-pairing fix above; all idempotent/safe
+-- to re-run)
+-- Applied: 2026-08-22
+--
+-- 1) 350 attendance rows (July-Aug 2026) had extra_day_eligible = true on a
+--    day with no punches at all -- classify_attendance_day's no-punch
+--    branch has always hardcoded that to false, so these were stale rows
+--    computed by an older version of the function, never reclassified.
+--    Wrongly inflated Extra Working Days / EWD pay for several employees.
+-- 2) 3,690 attendance rows across 93 resigned employees sat dated *after*
+--    their last_working_day (all within Jun-Aug 2026, none locked/paid) --
+--    left over from before process_daily_attendance's skip-past-departure
+--    check existed. Payroll counts every row in the queried month
+--    regardless of resignation date, so these stale rows were directly
+--    inflating Weekly Offs/EWD for FNF employees already off payroll.
+-- 3) Many Warehouse employees had zero employee_work_rosters coverage for
+--    their real weekly off day (Sunday) -- there is no in-app screen that
+--    writes to employee_work_rosters at all, so gaps here are never
+--    self-healing. Backfilled Sunday is_weekly_off=true rows for
+--    2026-07-01..2026-08-22 for every Active Warehouse employee missing
+--    that date's roster row.
+-- =============================================================
+UPDATE attendance
+SET extra_day_eligible = false
+WHERE extra_day_eligible = true AND check_in IS NULL AND check_out IS NULL;
+
+DELETE FROM attendance a
+USING employees e
+WHERE a.employee_code = e.employee_code
+  AND e.status <> 'Active'
+  AND e.last_working_day IS NOT NULL
+  AND a.work_date > e.last_working_day;
+
+INSERT INTO employee_work_rosters (employee_code, roster_date, day_type, is_weekly_off, remarks, created_by)
+SELECT e.employee_code, d::date, 'Weekly Off', true,
+  'Backfilled: Warehouse weekly off is Sunday, roster row was missing', 'System (backfill 2026-08-22)'
+FROM employees e
+CROSS JOIN generate_series('2026-07-01'::date, '2026-08-22'::date, interval '1 day') d
+WHERE e.branch = 'WAREHOUSE' AND e.status = 'Active'
+  AND to_char(d::date, 'Dy') = 'Sun'
+  AND (e.joining_date IS NULL OR e.joining_date <= d::date)
+  AND NOT EXISTS (
+    SELECT 1 FROM employee_work_rosters r
+    WHERE r.employee_code = e.employee_code AND r.roster_date = d::date
+  );
+
+-- Reprocessing run after the above three fixes (not part of any function
+-- itself) -- reran process_daily_attendance for 2026-07-01..2026-08-22.
+-- =============================================================

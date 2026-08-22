@@ -802,13 +802,20 @@ export default function PayrollAutomation({ role, actorName }) {
       if (a.extra_day_eligible) attByEmp[c].extraWorkingDays++;
       if (Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
       attByEmp[c].workedHours += Number(a.worked_hours || 0);
-      // A day overridden to Weekly Off owed nothing — the DB's required_hours
-      // still reflects the pre-override "Absent" classification (the roster
-      // this column is computed from isn't kept current; that's the whole
-      // reason the override exists), so counting it here would inflate the
-      // Required Hours total and any shortfall/variance derived from it for
-      // an employee's legitimate day off. Matches Timesheet's rowRequiredHours().
-      if (!isOverriddenOff) attByEmp[c].requiredHours += Number(a.required_hours || 0);
+      // A day the employee wasn't actually working owed nothing toward the
+      // OT-eligibility denominator: a Weekly Off (JS-inferred or real
+      // roster-driven) because no work was expected at all, an Absent day
+      // because that shortfall is already penalized on its own via
+      // absentDeduction below (dailyRate * absentDays) -- counting either
+      // one's required_hours here as well would inflate Required Hours and
+      // silently wipe out the month's real OT a second time (workedHours -
+      // requiredHours nets negative once a day that earned nothing gets its
+      // full required hours added on top of days actually worked). Matches
+      // Timesheet's rowRequiredHours(). Confirmed against employee 1441,
+      // July 2026: 3 real Weekly Off days + 1 Absent day's required hours
+      // were being added on top, pushing net OT to a large negative and
+      // zeroing it out instead of the ~9h actually earned on days worked.
+      if (!isOverriddenOff && s !== "Weekly Off" && s !== "Absent") attByEmp[c].requiredHours += Number(a.required_hours || 0);
     });
 
     // OT is the month's NET excess (total worked - total required), not a
