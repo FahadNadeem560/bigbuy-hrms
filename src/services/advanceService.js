@@ -148,6 +148,24 @@ export async function deductIssuedAdvancesForMonth(month) {
 
 function money(v) { return `Rs. ${Math.round(Number(v || 0)).toLocaleString()}`; }
 
+// ─── Bulk request (current month, goes to Finance for approval like a normal
+// request submitted one at a time via "+ Request Advance") ────────────────
+// Reuses requestAdvance() per row so a bulk upload behaves exactly like N
+// manual submissions — same duplicate-per-month check, same Pending status,
+// same Finance notification — rather than duplicating that logic here.
+export async function bulkRequestAdvances(rows, requestedBy) {
+  let imported = 0, failed = 0;
+  const errors = [];
+  for (const row of rows) {
+    if (row.status && row.status.startsWith("error")) { failed++; errors.push(`${row.code || "?"}: ${row.status}`); continue; }
+    try {
+      await requestAdvance({ employee: row.emp, requestedAmount: row.requested, advanceMonth: row.month, notes: row.notes, requestedBy });
+      imported++;
+    } catch (e) { failed++; errors.push(`${row.code}: ${e.message}`); }
+  }
+  return { total: rows.length, imported, failed, errors };
+}
+
 // ─── Historical import ──────────────────────────────────────────────────
 export async function importHistoricalAdvances(rows) {
   let imported = 0, failed = 0;

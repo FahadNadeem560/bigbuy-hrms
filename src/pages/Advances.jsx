@@ -6,7 +6,7 @@ import { money, formatMonthYear } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import {
   fetchAdvances, fetchActiveEmployeesForPicker, requestAdvance,
-  approveAdvance, rejectAdvance, issueAdvance, importHistoricalAdvances,
+  approveAdvance, rejectAdvance, issueAdvance, importHistoricalAdvances, bulkRequestAdvances,
 } from "../services/advanceService.js";
 
 function currentMonth() {
@@ -166,7 +166,7 @@ function RowActions({ a, canApprove, actorName, role, onChanged, setErr, setMsg 
 }
 
 // ─── Tab 1: All Advances ──────────────────────────────────────────────────
-function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canApprove, reload, setMsg, setErr }) {
+function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canApprove, reload, setMsg, setErr, onPrint, onPrintBatch }) {
   const [showForm, setShowForm] = useState(false);
   const [empPick, setEmpPick] = useState(null);
   const [reqAmount, setReqAmount] = useState("");
@@ -179,6 +179,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
   const [statusFilter, setStatusFilter] = useState("All");
   const [deptFilter, setDeptFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10));
 
   const filtered = useMemo(() => advances.filter(a => {
     if (branchFilter && a.branch !== branchFilter) return false;
@@ -273,6 +274,12 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
         <Button variant="outline" onClick={exportExcel} className="rounded-xl">Export to Excel</Button>
       </div>
 
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 flex flex-wrap items-center gap-3">
+        <p className="text-xs text-slate-500">Print every advance requested/uploaded on one date as a single combined slip — one signature block instead of one printout per employee.</p>
+        <input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+        <Button variant="outline" onClick={() => onPrintBatch(batchDate)} className="rounded-xl text-sm">🖨️ Print Combined Slip for this Date</Button>
+      </div>
+
       <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Advance Ledger</h2><p className="text-xs text-slate-400">{filtered.length} records</p></div>
         <table className="w-full min-w-[1100px] text-sm">
@@ -298,7 +305,12 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
                     <td className="px-4 py-3"><Badge tone={statusTone(a.status)}>{a.status}</Badge></td>
                     <td className="px-4 py-3 text-slate-500">{a.advance_month}</td>
                     <td className="px-4 py-3">
-                      <RowActions a={a} canApprove={canApprove} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
+                      <div className="flex flex-wrap gap-1 items-center">
+                        {a.status !== "Pending" && a.status !== "Rejected" && (
+                          <Button variant="outline" onClick={() => onPrint(a)} className="rounded-lg text-xs py-1 px-2" title="Print approval slip">🖨️</Button>
+                        )}
+                        <RowActions a={a} canApprove={canApprove} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
+                      </div>
                     </td>
                   </tr>
                 );
@@ -340,6 +352,153 @@ function PendingApprovalTab({ advances, actorName, role, reload, setMsg, setErr 
             ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ─── Tab 3: Bulk Request (current month, goes to Finance for approval — same
+// as submitting "+ Request Advance" one at a time, just for many employees
+// at once) ──────────────────────────────────────────────────────────────
+function BulkRequestTab({ employees, advances, actorName, reload, setMsg, setErr, onPrintBatch }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [importing, setImporting] = useState(false);
+
+  function downloadTemplate() {
+    const aoa = [
+      ["S.No", "Employee ID", "Employee Name", "Requested Amount", "Advance Month", "Notes"],
+      [1, "1001", "Sample Employee", 10000, "2026-07", "Sample row — delete before importing"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 6 }, { wch: 12 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 24 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Advance Requests");
+    XLSX.writeFile(wb, "advance_requests_template.xlsx");
+  }
+
+  async function handlePreview() {
+    if (!file) return setErr("Select an Excel file first.");
+    setErr(""); setSummary(null); setPreview(null);
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data);
+      const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+      const headerIdx = rawRows.findIndex(r => String(r[1] || "").trim() === "Employee ID");
+      if (headerIdx === -1) throw new Error("Header row not found. Ensure you're using the downloaded template.");
+      const headers = rawRows[headerIdx];
+      const dataRows = rawRows.slice(headerIdx + 1).filter(r => r.some(c => c !== ""));
+
+      // Existing non-Rejected advances, keyed the same way requestAdvance()
+      // itself checks server-side -- shown here too so a duplicate is caught
+      // in preview instead of only surfacing as a per-row error after Import.
+      const existingKeys = new Set(
+        advances.filter(a => a.status !== "Rejected").map(a => `${a.employee_code}|${a.advance_month}`)
+      );
+      const seenInFile = new Set();
+
+      const rows = dataRows.map(row => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[String(h)] = row[i] ?? ""; });
+        const code = String(obj["Employee ID"] || "").trim();
+        const emp = employees.find(e => e.employee_code === code);
+        const requested = Number(obj["Requested Amount"] || 0);
+        const month = excelDateToMonth(obj["Advance Month"]);
+        const name = String(obj["Employee Name"] || emp?.full_name || "").trim();
+        const notes = String(obj["Notes"] || "").trim();
+        const key = `${code}|${month}`;
+
+        let status = "ok";
+        if (!code) status = "error: missing employee ID";
+        else if (!emp) status = "error: employee not found or not Active";
+        else if (!(requested > 0)) status = "error: invalid requested amount";
+        else if (!month) status = "error: missing advance month";
+        else if (existingKeys.has(key)) status = "error: employee already has an advance for that month";
+        else if (seenInFile.has(key)) status = "error: duplicate employee/month within this file";
+
+        if (status === "ok") seenInFile.add(key);
+        return { code, emp, name, branch: emp?.branch, department: emp?.department, requested, month, notes, status };
+      });
+      setPreview(rows);
+    } catch (e) { setErr(e.message); }
+  }
+
+  async function handleConfirm() {
+    if (!preview) return;
+    setImporting(true); setErr("");
+    try {
+      const result = await bulkRequestAdvances(preview, actorName);
+      setSummary(result);
+      setPreview(null); setFile(null);
+      setMsg(`Submitted ${result.imported} of ${result.total} advance requests for Finance approval.`);
+      reload();
+    } catch (e) { setErr(e.message); }
+    finally { setImporting(false); }
+  }
+
+  return (
+    <div>
+      <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
+        <h2 className="font-bold text-slate-800 mb-2">Bulk Request Advances</h2>
+        <p className="text-xs text-slate-500 mb-4">Upload an Excel file mapping Employee ID, Requested Amount, Advance Month and (optional) Notes. Each valid row is submitted as a new Pending request — exactly as if it were entered one at a time via "+ Request Advance" — and goes to Finance for approval.</p>
+        <div className="flex flex-wrap gap-2 items-center">
+          <Button variant="outline" onClick={downloadTemplate} className="rounded-xl">Download Template</Button>
+          <input type="file" accept=".xlsx,.xls" onChange={e => setFile(e.target.files[0] || null)} className="text-sm" />
+          <Button onClick={handlePreview} disabled={!file} className="rounded-xl">Preview</Button>
+        </div>
+      </div>
+
+      {summary && (
+        <div className="mb-4 p-4 rounded-2xl bg-blue-50 text-blue-800 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>Submitted {summary.imported} of {summary.total} requests. {summary.failed > 0 && `${summary.failed} failed.`}</span>
+            {summary.imported > 0 && (
+              <Button variant="outline" onClick={() => onPrintBatch(new Date().toISOString().slice(0, 10))} className="rounded-xl text-xs py-1 px-3 bg-white">
+                🖨️ Print Combined Slip for this Batch
+              </Button>
+            )}
+          </div>
+          {summary.errors?.length > 0 && (
+            <ul className="mt-2 list-disc list-inside text-xs text-red-600">
+              {summary.errors.slice(0, 20).map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {preview && (
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
+          <div className="px-5 pt-4 pb-2 flex items-center justify-between">
+            <div>
+              <h2 className="font-bold text-slate-800">Preview — {preview.length} rows</h2>
+              <p className="text-xs text-slate-400">
+                {preview.filter(r => r.status === "ok").length} ok ·{" "}
+                {preview.filter(r => r.status.startsWith("error")).length} errors (will be skipped)
+              </p>
+            </div>
+            <Button onClick={handleConfirm} disabled={importing || preview.every(r => r.status !== "ok")} className="rounded-xl">{importing ? "Submitting…" : "Submit Requests"}</Button>
+          </div>
+          <table className="w-full min-w-[900px] text-sm">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>{["Code", "Name", "Branch", "Department", "Requested", "Month", "Notes", "Row Status"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {preview.map((r, i) => (
+                <tr key={i} className={r.status.startsWith("error") ? "bg-red-50" : ""}>
+                  <td className="px-4 py-3">{r.code}</td>
+                  <td className="px-4 py-3">{r.name}</td>
+                  <td className="px-4 py-3">{r.branch || "—"}</td>
+                  <td className="px-4 py-3">{r.department || "—"}</td>
+                  <td className="px-4 py-3">{money(r.requested)}</td>
+                  <td className="px-4 py-3">{r.month}</td>
+                  <td className="px-4 py-3 max-w-[160px] truncate">{r.notes || "—"}</td>
+                  <td className="px-4 py-3 text-xs">{r.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -549,6 +708,7 @@ function SummaryPanel({ advances }) {
 const TABS = [
   ["all", "All Advances"],
   ["pending", "Pending Approval"],
+  ["bulk", "Bulk Request"],
   ["import", "Import Historical"],
 ];
 
@@ -558,12 +718,26 @@ export default function Advances({ role, actorName }) {
   const [employees, setEmployees] = useState([]);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  const [printingAdvance, setPrintingAdvance] = useState(null);
+  const [printingBatchDate, setPrintingBatchDate] = useState(null);
 
   const canRequest = ["Master", "HR"].includes(role);
   const canApprove = ["Master", "Finance"].includes(role);
   const canImport = ["Master", "HR"].includes(role);
 
   useEffect(() => { load(); }, []);
+
+  // Print is triggered a tick after printing state is set (so the print-only
+  // content below has actually rendered), and cleared on 'afterprint' so it
+  // disappears again once the browser's print dialog closes -- same pattern
+  // as LoanManagement.jsx's approval slip.
+  useEffect(() => {
+    if (!printingAdvance && !printingBatchDate) return;
+    const t = setTimeout(() => window.print(), 50);
+    const clear = () => { setPrintingAdvance(null); setPrintingBatchDate(null); };
+    window.addEventListener("afterprint", clear);
+    return () => { clearTimeout(t); window.removeEventListener("afterprint", clear); };
+  }, [printingAdvance, printingBatchDate]);
 
   async function load() {
     try {
@@ -572,10 +746,13 @@ export default function Advances({ role, actorName }) {
     } catch (e) { setErr(e.message); }
   }
 
-  const visibleTabs = TABS.filter(([k]) => (k !== "pending" || canApprove) && (k !== "import" || canImport));
+  const visibleTabs = TABS.filter(([k]) => (k !== "pending" || canApprove) && (k !== "bulk" || canRequest) && (k !== "import" || canImport));
+
+  const batchRows = printingBatchDate ? advances.filter(a => (a.created_at || "").slice(0, 10) === printingBatchDate) : [];
 
   return (
-    <div>
+    <>
+    <div className="print:hidden">
       <PageTitle title="Advances" subtitle="HR requests, Finance approves and issues — auto-deducted from that month's payroll." />
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
@@ -594,14 +771,106 @@ export default function Advances({ role, actorName }) {
 
       {tab === "all" && (
         <AllAdvancesTab advances={advances} employees={employees} role={role} actorName={actorName || role}
-          canRequest={canRequest} canApprove={canApprove} reload={load} setMsg={setMsg} setErr={setErr} />
+          canRequest={canRequest} canApprove={canApprove} reload={load} setMsg={setMsg} setErr={setErr}
+          onPrint={setPrintingAdvance} onPrintBatch={setPrintingBatchDate} />
       )}
       {tab === "pending" && canApprove && (
         <PendingApprovalTab advances={advances} actorName={actorName || role} role={role} reload={load} setMsg={setMsg} setErr={setErr} />
+      )}
+      {tab === "bulk" && canRequest && (
+        <BulkRequestTab employees={employees} advances={advances} actorName={actorName || role} reload={load} setMsg={setMsg} setErr={setErr}
+          onPrintBatch={setPrintingBatchDate} />
       )}
       {tab === "import" && canImport && (
         <ImportHistoricalTab employees={employees} reload={load} setMsg={setMsg} setErr={setErr} />
       )}
     </div>
+
+      {/* Print-only individual approval slip -- rendered as a sibling outside
+          the print:hidden wrapper above (a print:block descendant of a
+          print:hidden ancestor stays hidden, since the ancestor's
+          display:none wins), same pattern as LoanManagement.jsx. */}
+      {printingAdvance && (() => {
+        const a = printingAdvance;
+        const emp = employees.find(e => e.employee_code === a.employee_code);
+        return (
+          <div className="hidden print:block p-8 text-sm text-black">
+            <h1 className="text-lg font-bold mb-1">Advance Approval Slip</h1>
+            <p className="text-xs text-slate-500 mb-6">Printed {new Date().toLocaleString()}</p>
+            <table className="w-full text-sm mb-6">
+              <tbody>
+                <tr><td className="py-1 pr-4 font-semibold w-48">Employee</td><td className="py-1">{a.employee_name} ({a.employee_code})</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Department / Branch</td><td className="py-1">{a.department || emp?.department || "—"} / {a.branch || emp?.branch || "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Advance Month</td><td className="py-1">{a.advance_month}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Requested Amount</td><td className="py-1">{money(a.requested_amount)}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Approved Amount</td><td className="py-1">{a.approved_amount ? money(a.approved_amount) : "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Issued Amount</td><td className="py-1">{a.issued_amount ? money(a.issued_amount) : "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Notes</td><td className="py-1">{a.notes || "—"}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Status</td><td className="py-1">{a.status}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Approved By</td><td className="py-1">{a.approved_by || "—"}{a.approved_at ? ` on ${new Date(a.approved_at).toLocaleDateString()}` : ""}</td></tr>
+                <tr><td className="py-1 pr-4 font-semibold">Issued By</td><td className="py-1">{a.issued_by || "—"}{a.issued_at ? ` on ${new Date(a.issued_at).toLocaleDateString()}` : ""}</td></tr>
+              </tbody>
+            </table>
+            <div className="grid grid-cols-2 gap-8 mt-16">
+              <div><div className="border-t border-black pt-1">HR Signature</div></div>
+              <div><div className="border-t border-black pt-1">Finance Signature</div></div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Print-only combined slip -- every advance whose created_at date
+          matches the chosen date on one page with a single signature block,
+          instead of printing one slip per employee (the whole point of a
+          bulk upload's paper trail: one sheet for the batch, not N). */}
+      {printingBatchDate && (
+        <div className="hidden print:block p-8 text-sm text-black">
+          <h1 className="text-lg font-bold mb-1">Advance Requests — {printingBatchDate}</h1>
+          <p className="text-xs text-slate-500 mb-6">{batchRows.length} record{batchRows.length === 1 ? "" : "s"} · Printed {new Date().toLocaleString()}</p>
+          <table className="w-full text-xs mb-8 border-collapse">
+            <thead>
+              <tr className="border-b border-black">
+                {["Code", "Name", "Branch", "Department", "Requested", "Approved", "Issued", "Status", "Month"].map(h => (
+                  <th key={h} className="text-left py-1 pr-2">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {batchRows.map(a => (
+                <tr key={a.id} className="border-b border-slate-300">
+                  <td className="py-1 pr-2">{a.employee_code}</td>
+                  <td className="py-1 pr-2">{a.employee_name}</td>
+                  <td className="py-1 pr-2">{a.branch || "—"}</td>
+                  <td className="py-1 pr-2">{a.department || "—"}</td>
+                  <td className="py-1 pr-2">{money(a.requested_amount)}</td>
+                  <td className="py-1 pr-2">{a.approved_amount ? money(a.approved_amount) : "—"}</td>
+                  <td className="py-1 pr-2">{a.issued_amount ? money(a.issued_amount) : "—"}</td>
+                  <td className="py-1 pr-2">{a.status}</td>
+                  <td className="py-1 pr-2">{a.advance_month}</td>
+                </tr>
+              ))}
+              {batchRows.length === 0 && (
+                <tr><td colSpan={9} className="py-4 text-center text-slate-400">No advances found for this date.</td></tr>
+              )}
+            </tbody>
+            {batchRows.length > 0 && (
+              <tfoot>
+                <tr className="border-t border-black font-semibold">
+                  <td className="py-1 pr-2" colSpan={4}>Total</td>
+                  <td className="py-1 pr-2">{money(batchRows.reduce((s, a) => s + Number(a.requested_amount || 0), 0))}</td>
+                  <td className="py-1 pr-2">{money(batchRows.reduce((s, a) => s + Number(a.approved_amount || 0), 0))}</td>
+                  <td className="py-1 pr-2">{money(batchRows.reduce((s, a) => s + Number(a.issued_amount || 0), 0))}</td>
+                  <td colSpan={2}></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+          <div className="grid grid-cols-2 gap-8 mt-16">
+            <div><div className="border-t border-black pt-1">HR Signature</div></div>
+            <div><div className="border-t border-black pt-1">Finance Signature</div></div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
