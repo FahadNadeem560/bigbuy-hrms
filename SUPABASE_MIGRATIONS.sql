@@ -5660,3 +5660,46 @@ begin
 end;
 $function$;
 -- =============================================================
+
+-- =============================================================
+-- Correction: the "data_cleanup_2026_08_22" migration above wrongly
+-- assumed every Warehouse employee's weekly off day is Sunday and hand-
+-- inserted employee_work_rosters rows accordingly. That was wrong on two
+-- counts:
+-- Applied: 2026-08-22 (same day, later)
+--
+-- 1) A real, existing mechanism already does this properly:
+--    `generate_employee_work_rosters(from, to)` (RPC, wired to the
+--    "Generate Weekly Off Rosters" button on the ZKT Sync page) reads each
+--    employee's own `employees.weekly_off_day` (0=Sun..6=Sat) and writes
+--    is_weekly_off rows from that, with the company's 4-per-month cap for
+--    non-Management/non-Warehouse staff. There was never a need to
+--    hand-write roster rows.
+-- 2) 11 of the 18 employees the SQL touched had `weekly_off_day` already
+--    set to something OTHER than Sunday (Mon/Tue/Wed/Thu -- e.g. employee
+--    2032/Atta Ullah is Wednesday) -- the hand-written Sunday rows sat
+--    ALONGSIDE their real configured off day, giving them two weekly-offs
+--    a week instead of one. Only 7 of the 18 (1389, 3061, 3070, 3071,
+--    4008, 4014, 4025) genuinely had `weekly_off_day IS NULL` -- a real
+--    data gap, not a code gap.
+--
+-- Fix: deleted every row this migration's INSERT created
+-- (created_by = 'System (backfill 2026-08-22)'), set weekly_off_day = '0'
+-- for the 7 genuinely-unconfigured employees (all Warehouse, matching
+-- their peers), then called the real generate_employee_work_rosters RPC
+-- for 2026-07-01..2026-08-22 and reran process_daily_attendance.
+-- =============================================================
+DELETE FROM employee_work_rosters r
+USING employees e
+WHERE r.employee_code = e.employee_code
+  AND r.created_by = 'System (backfill 2026-08-22)'
+  AND e.weekly_off_day IS NOT NULL
+  AND e.weekly_off_day <> '0';
+
+UPDATE employees SET weekly_off_day = '0'
+WHERE employee_code IN ('1389','3061','3070','3071','4008','4014','4025');
+
+DELETE FROM employee_work_rosters WHERE created_by = 'System (backfill 2026-08-22)';
+
+SELECT * FROM public.generate_employee_work_rosters('2026-07-01','2026-08-22');
+-- =============================================================
