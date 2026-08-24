@@ -919,8 +919,12 @@ export default function PayrollAutomation({ role, actorName }) {
       // Leave-first offset: Management staff's short hours/half days/
       // absents are covered from their available leave balance before any
       // of it becomes a real deduction, once the balance is exhausted the
-      // rest deducts normally. Scoped to staff_level "Management" only.
-      if (emp.staff_level === "Management") {
+      // rest deducts normally. Scoped to staff_level "Management" only, and
+      // skipped for attendance-exempt employees -- payrollRules.js already
+      // zeroes their absent/short-hour/half-day deductions, so there's
+      // nothing left to offset and this would otherwise drain a real leave
+      // balance for a deduction that was never actually charged.
+      if (emp.staff_level === "Management" && !emp.is_attendance_exempt) {
         const deductibleDays =
           Number(adj.absentDays || 0) +
           Number(adj.halfDays || 0) * 0.5 +

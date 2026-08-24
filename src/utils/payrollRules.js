@@ -97,7 +97,12 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     leaveAdjustment;
 
   // ── Deductions ────────────────────────────────────────────
-  const absentDeduction = Math.round(dailyRate * Number(adjustments.absentDays || 0));
+  // Skipped for exempt employees like the other attendance-based deductions
+  // below -- an attendance-exempt employee (e.g. a GM who doesn't punch a
+  // biometric device) has no real "Present" rows at all, so without this
+  // check every unpunched day docks a full day's pay instead of the
+  // exemption meaning what it says.
+  const absentDeduction = isExempt ? 0 : Math.round(dailyRate * Number(adjustments.absentDays || 0));
 
   // Timing deductions skipped for exempt employees. Deduction scales with
   // lateness: every latePenaltyCount late days deducts another
