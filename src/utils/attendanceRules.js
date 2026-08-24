@@ -26,13 +26,25 @@ function fmtDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Company policy caps a non-exempt employee at 4 unpaid weekly-off days per
+// calendar month (see generate_employee_work_rosters -- Management/Warehouse
+// are exempt from the cap server-side, but never fall short of it either).
+const MONTHLY_WEEKLY_OFF_QUOTA = 4;
+
 // Shared first pass: buckets rows into fixed calendar blocks and tallies
 // what happened in each one. Both getWeeklyOffOverrideKeys (below) and
 // getFullyWorkedBlockKeys derive their answer from the same bucketing so
 // "what counted as this block's rest day" can never disagree between the
-// deduction side and the earning side of payroll.
+// deduction side and the earning side of payroll. Also tallies each
+// employee's total real Weekly Off count across the whole month (not
+// per-block) -- an operational reshuffle (asked to work through one week,
+// given two off days back-to-back the next) can leave a block with no
+// off day of its own even though the employee already received their full
+// monthly quota elsewhere; getFullyWorkedBlockKeys needs the month total to
+// tell that apart from a block that's genuinely short.
 function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey }) {
   const weeks = {};
+  const monthlyWeeklyOffCount = {};
   (rows || []).forEach((row) => {
     const status = row[statusKey];
     const dateStr = row[dateKey];
@@ -53,7 +65,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(blockStart)}`;
     const week = (weeks[weekKey] ||= {
-      absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false,
+      absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasWorkedGazettedHoliday: false,
       blockStart, blockEnd, empPart, isFullBlock,
     });
     // Real "Weekly Off" rows (roster-driven) count toward every day of the
@@ -61,8 +73,10 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     // the override below -- without this, a block that already has its real
     // off day (e.g. a roster Thursday) could still get a *second* Mon-Fri
     // Absent day relabeled Weekly Off too, hiding a real absence.
-    if (status === "Weekly Off") week.hasRealWeeklyOff = true;
-    else if (status === "Leave") week.hasLeave = true;
+    if (status === "Weekly Off") {
+      week.hasRealWeeklyOff = true;
+      monthlyWeeklyOffCount[empPart] = (monthlyWeeklyOffCount[empPart] || 0) + 1;
+    } else if (status === "Leave") week.hasLeave = true;
     else if (status === "Absent") {
       week.hasAnyAbsent = true;
       // Only a true no-show (no check-in AND no check-out at all) on a
@@ -74,8 +88,13 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
       // real short-attendance day as if it were their day off.
       if (dow !== 0 && dow !== 6 && !row[checkInKey] && !row[checkOutKey]) week.absentRows.push(row);
     }
+    // A real Gazetted Holiday actually worked is independent of the
+    // personal weekly-off quota -- it's a distinct kind of day off, so it
+    // stays compensable even in a block where the monthly quota gate below
+    // would otherwise suppress an EWD credit.
+    if (row.is_gazetted_holiday && row[checkInKey] && row[checkOutKey]) week.hasWorkedGazettedHoliday = true;
   });
-  return weeks;
+  return { weeks, monthlyWeeklyOffCount };
 }
 
 // rows: array of objects with at least a date field and a status field.
@@ -88,7 +107,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
 // as "Weekly Off" instead of "Absent".
 export function getWeeklyOffOverrideKeys(rows, opts = {}) {
   const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
-  const weeks = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+  const { weeks } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
 
   const overrideKeys = new Set();
   Object.values(weeks).forEach((week) => {
@@ -124,6 +143,15 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // missed day off once a full week has actually elapsed -- a 3-day tail
 // block at month-end (e.g. day 29-31) can't be said to owe a rest day yet,
 // so it never earns a bonus for "no rest taken" even if fully worked.
+//
+// Also gated on the employee's monthly weekly-off quota (see
+// MONTHLY_WEEKLY_OFF_QUOTA): if they've already received their full 4-a-month
+// entitlement elsewhere -- even unevenly, e.g. worked through one week and
+// were given 2 off days back-to-back the next to make up for it -- a block
+// with no off day of its own was already compensated and doesn't separately
+// earn a bonus. A block only earns EWD past the quota if it contains a real
+// Gazetted Holiday actually worked, since that's compensable independent of
+// the personal weekly-off quota.
 // Returns a Set of block keys: one entry per block earned, `${blockStartDate}`
 // (no employeeKey) or `${employee_code}|${blockStartDate}` (with
 // employeeKey) -- there's no single "the" date to credit, so count
@@ -131,7 +159,7 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // looking up individual dates.
 export function getFullyWorkedBlockKeys(rows, opts = {}) {
   const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
-  const weeks = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+  const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
 
   const blockKeys = new Set();
   Object.values(weeks).forEach((week) => {
@@ -139,6 +167,8 @@ export function getFullyWorkedBlockKeys(rows, opts = {}) {
     if (rangeStart || rangeEnd) {
       if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
     }
+    const monthlyWeeklyOffs = monthlyWeeklyOffCount[week.empPart] || 0;
+    if (monthlyWeeklyOffs >= MONTHLY_WEEKLY_OFF_QUOTA && !week.hasWorkedGazettedHoliday) return;
     blockKeys.add(`${week.empPart}${fmtDate(week.blockStart)}`);
   });
   return blockKeys;
