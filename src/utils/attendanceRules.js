@@ -8,10 +8,16 @@ export function getPolicyForLevel(level) {
 // Company policy: every employee gets one unpaid day off per week, taken
 // Mon-Fri only (Sat/Sun are working days at this business, not eligible as
 // an off day). Rather than relying on a pre-generated roster (which isn't
-// kept current — see attendance_pipeline_gotchas), a week's single Mon-Fri
+// kept current — see attendance_pipeline_gotchas), a "week"'s single Mon-Fri
 // Absent day is treated as that week's off day instead of a real absence.
 // Weeks with zero or more than one such Absent day are left as-is since the
 // intended off day is ambiguous.
+//
+// "Week" here is a fixed calendar block within the month -- 1-7, 8-14,
+// 15-21, 22-28, 29-end -- not a Monday-Sunday week. Blocks are pinned to the
+// day-of-month by design (not the calendar's actual week alignment) so a
+// block can never straddle a month boundary the way an ISO week can; every
+// block is always fully contained in whatever month it's part of.
 //
 // Shared by Timesheet.jsx, PayrollAutomation.jsx and FinalSettlement.jsx so
 // "Absent" always means the same thing — and costs the same deduction —
@@ -36,25 +42,32 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
     if (!dateStr) return;
     const d = new Date(`${dateStr}T00:00:00`);
     const dow = d.getDay(); // 0=Sun..6=Sat
+    // Fixed 1-7/8-14/15-21/22-28/29-end block, computed purely from the
+    // day-of-month -- e.g. day 22 -> block starts day 22 (floor((22-1)/7)*7+1
+    // = 22); day 31 -> block starts day 29 (floor((31-1)/7)*7+1 = 29). The
+    // last block is however many days remain in the month (3 in a 31-day
+    // month, 1-2 in shorter months), never spilling into the next one.
+    const dayOfMonth = d.getDate();
+    const blockStartDay = Math.floor((dayOfMonth - 1) / 7) * 7 + 1;
+    const blockStart = new Date(d.getFullYear(), d.getMonth(), blockStartDay);
+    const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    const blockEnd = new Date(d.getFullYear(), d.getMonth(), Math.min(blockStartDay + 6, daysInMonth));
+    const empPart = employeeKey ? `${row[employeeKey]}|` : "";
+    const weekKey = `${empPart}${fmtDate(blockStart)}`;
+    const week = (weeks[weekKey] ||= { absentRows: [], hasRealWeeklyOff: false, blockStart, blockEnd });
     // Real "Weekly Off" rows (roster-driven) count toward every day of the
-    // week, not just Mon-Fri, so a genuine off day on any day still blocks
-    // the override below -- without this, a week that already has its real
+    // block, not just Mon-Fri, so a genuine off day on any day still blocks
+    // the override below -- without this, a block that already has its real
     // off day (e.g. a roster Thursday) could still get a *second* Mon-Fri
     // Absent day relabeled Weekly Off too, hiding a real absence.
-    const isoDow = dow === 0 ? 7 : dow; // 1=Mon..7=Sun
-    const monday = new Date(d);
-    monday.setDate(d.getDate() - (isoDow - 1));
-    const empPart = employeeKey ? `${row[employeeKey]}|` : "";
-    const weekKey = `${empPart}${fmtDate(monday)}`;
-    const week = (weeks[weekKey] ||= { absentRows: [], hasRealWeeklyOff: false, monday });
+    if (status === "Weekly Off") week.hasRealWeeklyOff = true;
     // Only a true no-show (no check-in AND no check-out at all) is eligible
-    // to be reinterpreted as the week's off day. An employee who actually
+    // to be reinterpreted as the block's off day. An employee who actually
     // punched in/out but fell short of the minimum-presence bar (marked
     // "Absent" by classify_attendance_day for insufficient hours, not for a
     // no-show) genuinely came to work that day and must not be relabeled
     // Weekly Off -- that would hide a real short-attendance day as if it
     // were their day off.
-    if (status === "Weekly Off") week.hasRealWeeklyOff = true;
     else if (status === "Absent" && dow !== 0 && dow !== 6 && !row[checkInKey] && !row[checkOutKey]) week.absentRows.push(row);
   });
 
@@ -62,18 +75,14 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
   Object.values(weeks).forEach((week) => {
     if (week.hasRealWeeklyOff || week.absentRows.length !== 1) return;
     // Callers scope `rows` to a fixed query window (a payroll month, a
-    // timesheet range, a settlement period). A week straddling that
-    // window's edge -- e.g. the last week of the month, whose real off day
-    // falls a day or two into next month -- never gets its real "Weekly
-    // Off" row fetched at all, so hasRealWeeklyOff above can't see it and
-    // this week's lone Mon-Fri absence looks (wrongly) like the only
-    // candidate for the off day. Rather than guess, only override weeks
-    // fully contained in [rangeStart, rangeEnd]; a boundary-truncated week
-    // is left as a real Absent.
+    // timesheet range, a settlement period). Fixed calendar blocks can't
+    // cross a month boundary, but a caller's window can still start or end
+    // mid-block (e.g. Final Settlement's arbitrary resignDate/lastDay, or a
+    // custom Timesheet range) -- only override blocks fully contained in
+    // [rangeStart, rangeEnd]; a window-truncated block is left as a real
+    // Absent rather than guessed at.
     if (rangeStart || rangeEnd) {
-      const sunday = new Date(week.monday);
-      sunday.setDate(week.monday.getDate() + 6);
-      if ((rangeStart && fmtDate(week.monday) < rangeStart) || (rangeEnd && fmtDate(sunday) > rangeEnd)) return;
+      if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
     }
     const row = week.absentRows[0];
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
