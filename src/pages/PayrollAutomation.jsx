@@ -753,7 +753,7 @@ export default function PayrollAutomation({ role, actorName }) {
     // getWeeklyOffOverrideKeys) — otherwise absentDeduction in payrollRules.js
     // would wrongly dock a day's pay for it. Applied here so it's consistent
     // with the same rule on the Timesheet and Final Settlement pages.
-    const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code" });
+    const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate });
 
     // Attendance is generated daily for every employee regardless of
     // resignation status (confirmed: a resigned employee's post-departure

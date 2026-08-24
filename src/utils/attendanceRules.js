@@ -28,7 +28,7 @@ function fmtDate(d) {
 // Returns a Set of override keys: `${date}` (no employeeKey) or
 // `${employee_code}|${date}` (with employeeKey) for rows that should read
 // as "Weekly Off" instead of "Absent".
-export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out" } = {}) {
+export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = {}) {
   const weeks = {};
   (rows || []).forEach((row) => {
     const status = row[statusKey];
@@ -46,7 +46,7 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
     monday.setDate(d.getDate() - (isoDow - 1));
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(monday)}`;
-    const week = (weeks[weekKey] ||= { absentRows: [], hasRealWeeklyOff: false });
+    const week = (weeks[weekKey] ||= { absentRows: [], hasRealWeeklyOff: false, monday });
     // Only a true no-show (no check-in AND no check-out at all) is eligible
     // to be reinterpreted as the week's off day. An employee who actually
     // punched in/out but fell short of the minimum-presence bar (marked
@@ -61,6 +61,20 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
   const overrideKeys = new Set();
   Object.values(weeks).forEach((week) => {
     if (week.hasRealWeeklyOff || week.absentRows.length !== 1) return;
+    // Callers scope `rows` to a fixed query window (a payroll month, a
+    // timesheet range, a settlement period). A week straddling that
+    // window's edge -- e.g. the last week of the month, whose real off day
+    // falls a day or two into next month -- never gets its real "Weekly
+    // Off" row fetched at all, so hasRealWeeklyOff above can't see it and
+    // this week's lone Mon-Fri absence looks (wrongly) like the only
+    // candidate for the off day. Rather than guess, only override weeks
+    // fully contained in [rangeStart, rangeEnd]; a boundary-truncated week
+    // is left as a real Absent.
+    if (rangeStart || rangeEnd) {
+      const sunday = new Date(week.monday);
+      sunday.setDate(week.monday.getDate() + 6);
+      if ((rangeStart && fmtDate(week.monday) < rangeStart) || (rangeEnd && fmtDate(sunday) > rangeEnd)) return;
+    }
     const row = week.absentRows[0];
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     overrideKeys.add(`${empPart}${row[dateKey]}`);

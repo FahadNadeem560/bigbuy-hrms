@@ -548,7 +548,7 @@ export default function Timesheet({ branchFilter, role }) {
     // getWeeklyOffOverrideKeys for the shared Mon-Fri single-absence rule
     // (also applied in PayrollAutomation.jsx and FinalSettlement.jsx so
     // "Absent" means the same thing, and costs the same deduction, everywhere).
-    const overrideDates = getWeeklyOffOverrideKeys(base);
+    const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
     base.forEach((row) => {
       if (overrideDates.has(row.work_date)) {
         // The DB row's short_hours/late/OT were computed for "Absent"

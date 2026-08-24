@@ -113,7 +113,7 @@ export default function FinalSettlement({ role }) {
     // getWeeklyOffOverrideKeys for the shared Mon-Fri single-absence rule
     // (also applied on Timesheet and Payroll so "Absent" means the same
     // thing, and costs the same deduction, everywhere).
-    const overrideDates = getWeeklyOffOverrideKeys(attendanceData);
+    const overrideDates = getWeeklyOffOverrideKeys(attendanceData, { rangeStart: resignDate, rangeEnd: lastDay });
     let daysPresent = 0, weeklyOffs = 0, absentDays = 0;
     for (const a of attendanceData) {
       const s = overrideDates.has(a.work_date) ? "Weekly Off" : (a.attendance_status || "");
