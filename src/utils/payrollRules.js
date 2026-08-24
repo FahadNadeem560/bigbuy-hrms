@@ -9,8 +9,6 @@ const DEFAULT_TAX_SLABS = [
   { min_amount: 4100001, max_amount: 999999999, base_tax: 700000, rate_percentage: 35 },
 ];
 
-const EOBI_EMPLOYEE_CONTRIBUTION = 250;
-
 export function calculateMonthlyTax(annualSalary, slabs) {
   const s = (slabs && slabs.length > 0) ? slabs : DEFAULT_TAX_SLABS;
   const annual = Number(annualSalary || 0);
@@ -134,7 +132,10 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     taxMode === "manual" ? Number(taxSetting?.manual_tax_amount || 0) :
     taxMode === "exempt" ? 0 :
     calculateMonthlyTax(monthlySalary * 12, taxSlabs);
-  const eobiDeduction     = EOBI_EMPLOYEE_CONTRIBUTION;
+  // No longer a flat charge on every employee -- only employees HR has
+  // explicitly enrolled via Employees > EOBI (employees.eobi_monthly_deduction,
+  // a manually-entered amount, not computed) are deducted anything at all.
+  const eobiDeduction     = Number(employee.eobiMonthlyDeduction || 0);
   const otherDeductions   = Number(adjustments.otherDeductions || 0);
 
   const totalDeductions =

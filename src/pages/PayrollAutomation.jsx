@@ -911,6 +911,9 @@ export default function PayrollAutomation({ role, actorName }) {
         salary: emp.salary || 0, status: emp.status, joiningDate: emp.joining_date,
         isAttendanceExempt: !!emp.is_attendance_exempt,
         extraDaysEligible,
+        // Manually entered by HR via Employees > EOBI (0 by default -- not
+        // enrolled, nothing deducted). See payrollRules.js.
+        eobiMonthlyDeduction: Number(emp.eobi_monthly_deduction || 0),
         // Live late-deduction rule from the employee's real eligibility
         // group (Policy Settings page) — overrides the static per-level
         // default in payrollRules.js when present.
@@ -1294,7 +1297,7 @@ export default function PayrollAutomation({ role, actorName }) {
     const advanceDeduction     = r.advanceDeduction || r.advance_deduction || r.advance || 0;
     const loanDeduction        = r.loanDeduction || r.loan_deduction || 0;
     const taxDeduction         = r.taxDeduction || r.tax_deduction || 0;
-    const eobiDeduction        = r.eobiDeduction || r.eobi_deduction || 250;
+    const eobiDeduction        = r.eobiDeduction || r.eobi_deduction || 0;
     const otherDeductions      = r.otherDeductions || r.other_deductions || 0;
     const totalDeductions = lateDeduction + shortHourDeduction + absentDeduction + halfDayDeduction +
       fineDeduction + shortageDeduction + advanceDeduction + loanDeduction + taxDeduction + eobiDeduction + otherDeductions;

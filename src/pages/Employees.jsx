@@ -6,7 +6,7 @@ import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies";
 import { money } from "../utils/format";
 import { sendOnboardingOtp } from "../services/whatsappService.js";
 import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
-import { setEmployeePaymentMethod } from "../services/employeeService.js";
+import { setEmployeePaymentMethod, setEmployeeEobi } from "../services/employeeService.js";
 
 function cnicExpiryStatus(expiryDate) {
   if (!expiryDate) return null;
@@ -378,6 +378,155 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
   );
 }
 
+// ─── EOBI enrollment ───────────────────────────────────────────────────────
+// A deliberate opt-in list, not the main employee directory filtered down --
+// HR searches branch-by-branch and enrolls only the employees who are
+// actually EOBI-eligible, entering their EOBI number and monthly deduction
+// by hand (not computed). Only enrolled employees (eobi_monthly_deduction >
+// 0) get anything deducted in payroll; see payrollRules.js.
+function EobiRow({ e, onSaved }) {
+  const enrolled = Number(e.eobi_monthly_deduction || 0) > 0;
+  const [editing, setEditing] = useState(false);
+  const [number, setNumber] = useState(e.eobi_number || "");
+  const [amount, setAmount] = useState(e.eobi_monthly_deduction || "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function save() {
+    if (!(Number(amount) > 0)) { setErr("Monthly deduction must be greater than zero."); return; }
+    setSaving(true); setErr("");
+    try {
+      await setEmployeeEobi(e.employee_code, { eobiNumber: number, monthlyDeduction: amount });
+      setEditing(false);
+      onSaved();
+    } catch (ex) { setErr(ex.message); }
+    finally { setSaving(false); }
+  }
+
+  async function remove() {
+    setSaving(true); setErr("");
+    try {
+      await setEmployeeEobi(e.employee_code, { eobiNumber: null, monthlyDeduction: 0 });
+      onSaved();
+    } catch (ex) { setErr(ex.message); }
+    finally { setSaving(false); }
+  }
+
+  if (editing) return (
+    <tr>
+      <td className="px-4 py-3 font-mono">{e.employee_code}</td>
+      <td className="px-4 py-3">{e.full_name}</td>
+      <td className="px-4 py-3">{e.branch}</td>
+      <td className="px-4 py-3">{e.department}</td>
+      <td className="px-4 py-3">
+        <input value={number} onChange={ev => setNumber(ev.target.value)} placeholder="EOBI number"
+          className="w-32 px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+      </td>
+      <td className="px-4 py-3">
+        <input type="number" min="0" value={amount} onChange={ev => setAmount(ev.target.value)} placeholder="Amount"
+          className="w-24 px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex flex-col gap-1">
+          <div className="flex gap-1">
+            <Button onClick={save} disabled={saving} className="rounded-lg text-xs py-1 px-2">Save</Button>
+            <Button variant="outline" onClick={() => setEditing(false)} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
+          </div>
+          {err && <span className="text-xs text-red-500">{err}</span>}
+        </div>
+      </td>
+    </tr>
+  );
+
+  return (
+    <tr className="hover:bg-slate-50">
+      <td className="px-4 py-3 font-mono">{e.employee_code}</td>
+      <td className="px-4 py-3">{e.full_name}</td>
+      <td className="px-4 py-3">{e.branch}</td>
+      <td className="px-4 py-3">{e.department}</td>
+      <td className="px-4 py-3">{enrolled ? (e.eobi_number || "—") : <span className="text-slate-300">—</span>}</td>
+      <td className="px-4 py-3">{enrolled ? money(e.eobi_monthly_deduction) : <span className="text-slate-300">—</span>}</td>
+      <td className="px-4 py-3">
+        <div className="flex gap-1">
+          <Button variant="outline" onClick={() => setEditing(true)} className="rounded-lg text-xs py-1 px-2">
+            {enrolled ? "Edit" : "Enroll"}
+          </Button>
+          {enrolled && <Button variant="outline" onClick={remove} disabled={saving} className="rounded-lg text-xs py-1 px-2 text-red-600 border-red-200">Remove</Button>}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function EobiTab() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [branchFilter, setBranchFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [showEnrolledOnly, setShowEnrolledOnly] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await supabase.from("employees")
+      .select("employee_code, full_name, branch, department, status, eobi_number, eobi_monthly_deduction")
+      .eq("status", "Active").order("full_name");
+    setRows(data || []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  const filtered = useMemo(() => rows.filter(e => {
+    if (branchFilter && e.branch !== branchFilter) return false;
+    if (showEnrolledOnly && !(Number(e.eobi_monthly_deduction || 0) > 0)) return false;
+    if (search) {
+      const lq = search.toLowerCase();
+      if (!(e.full_name || "").toLowerCase().includes(lq) && !(e.employee_code || "").toLowerCase().includes(lq)) return false;
+    }
+    return true;
+  }), [rows, branchFilter, search, showEnrolledOnly]);
+
+  const enrolledCount = useMemo(() => rows.filter(e => Number(e.eobi_monthly_deduction || 0) > 0).length, [rows]);
+
+  return (
+    <div>
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 text-sm text-slate-500">
+        Search employees branch-wise and enroll them for EOBI. Enter each employee's EOBI number and monthly
+        deduction amount by hand — only enrolled employees have anything deducted from payroll. {enrolledCount} employee{enrolledCount === 1 ? "" : "s"} currently enrolled.
+      </div>
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / code…"
+          className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-56" />
+        <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+          <option value="">All Branches</option>
+          {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
+        </select>
+        <label className="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer select-none px-2">
+          <input type="checkbox" checked={showEnrolledOnly} onChange={e => setShowEnrolledOnly(e.target.checked)} />
+          Enrolled only
+        </label>
+      </div>
+      {loading
+        ? <p className="text-slate-400 text-sm">Loading employees...</p>
+        : (
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>{["ID", "Name", "Branch", "Department", "EOBI Number", "Monthly Deduction", "Action"].map(h =>
+                  <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.length === 0
+                  ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No employees match this search.</td></tr>
+                  : filtered.map(e => <EobiRow key={e.employee_code} e={e} onSaved={load} />)}
+              </tbody>
+            </table>
+          </div>
+        )}
+    </div>
+  );
+}
+
 export default function Employees({ query, setQuery, branch, setBranch, branchLocked, employeeStatusFilter, setEmployeeStatusFilter, showEmployeeForm, setShowEmployeeForm, newEmployee, setNewEmployee, saveEmployee, editingEmployee, setEditingEmployee, updateEmployee, loadingEmployees, filteredEmployees, updateEmployeeStatus, employees, role }) {
   const supervisorMap = useMemo(() =>
     Object.fromEntries((employees || []).map(e => [e.id, e.name])),
@@ -386,6 +535,12 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
   const viewOnly = role === "Branch Manager" || role === "Finance";
   const [inactivating, setInactivating] = useState(null); // employee id currently prompting for last working day
   const [lwdInput, setLwdInput] = useState("");
+
+  // EOBI enrollment is a distinct workflow from editing employee records --
+  // gated the same as employees_update/employees_manage_hr_master RLS
+  // (Master/HR only), not the broader viewOnly check above.
+  const canManageEobi = ["Master", "HR"].includes(role);
+  const [innerTab, setInnerTab] = useState("directory");
 
   // Confidential — same Master/GM-only gate as CashIncentives.jsx / Dashboard.
   const canSeeIncentive = ["Master", "GM"].includes(role);
@@ -441,6 +596,22 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
             {!viewOnly && <Button className="rounded-2xl" onClick={() => setShowEmployeeForm(true)}>+ New Employee</Button>}
           </div>
         } />
+
+      {canManageEobi && (
+        <div className="flex flex-wrap gap-2 mb-5 print:hidden">
+          {[["directory", "Directory"], ["eobi", "EOBI"]].map(([k, l]) => (
+            <button key={k} onClick={() => setInnerTab(k)}
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition ${innerTab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {innerTab === "eobi" && canManageEobi
+        ? <EobiTab />
+        : (
+      <>
       <div className="flex flex-col md:flex-row gap-3 mb-4 print:hidden">
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by name, ID, department, phone..." className="flex-1 px-4 py-2.5 rounded-2xl border border-slate-200" />
         <select value={branch} onChange={e => setBranch(e.target.value)} disabled={branchLocked} className="px-4 py-2.5 rounded-2xl border border-slate-200 disabled:bg-slate-50 disabled:text-slate-500">
@@ -553,6 +724,8 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
           );
         }}
       />
+      </>
+      )}
     </div>
   );
 }

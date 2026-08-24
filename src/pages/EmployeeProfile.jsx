@@ -211,6 +211,8 @@ export default function EmployeeProfile({ role }) {
                     ["Phone", selEmp.phone || selEmp.whatsapp_number || "—"],
                     ["CNIC", selEmp.cnic || "—"],
                     ["EOBI Status", selEmp.eobi_status || "—"],
+                    ["EOBI Number", selEmp.eobi_number || "—"],
+                    ["EOBI Monthly Deduction", Number(selEmp.eobi_monthly_deduction || 0) > 0 ? money(selEmp.eobi_monthly_deduction) : "Not enrolled"],
                     ["Employee Type", selEmp.employee_type || "Permanent"],
                   ].map(([label, val]) => (
                     <div key={label}>

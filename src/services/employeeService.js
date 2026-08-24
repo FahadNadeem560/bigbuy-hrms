@@ -131,6 +131,17 @@ export async function setEmployeePaymentMethod(employeeCode, paymentMethod) {
   if (error) throw error;
 }
 
+// Master/HR only, called from Employees > EOBI. Unlike setEmployeePaymentMethod
+// above, this doesn't need an RPC -- Master/HR already have full UPDATE rights
+// on `employees` directly per its own RLS.
+export async function setEmployeeEobi(employeeCode, { eobiNumber, monthlyDeduction }) {
+  const { error } = await supabase.from("employees").update({
+    eobi_number: eobiNumber || null,
+    eobi_monthly_deduction: Number(monthlyDeduction || 0),
+  }).eq("employee_code", employeeCode);
+  if (error) throw error;
+}
+
 export async function importEmployeeMasterBatch(rows, sourceFilename) {
   const { data, error } = await supabase.rpc("import_employee_master_batch", {
     p_rows: rows,
