@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { calculatePayrollForEmployee, getWorkingDaysInMonth } from "../utils/payrollRules.js";
-import { getWeeklyOffOverrideKeys } from "../utils/attendanceRules.js";
+import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys } from "../utils/attendanceRules.js";
 import { calcRemainingLeaveBalance } from "../utils/leaveBalance.js";
 import * as XLSX from "xlsx";
 import {
@@ -775,6 +775,15 @@ export default function PayrollAutomation({ role, actorName }) {
     // with the same rule on the Timesheet and Final Settlement pages.
     const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate });
 
+    // Extra Working Days: a block worked straight through with no rest at
+    // all (see getFullyWorkedBlockKeys) -- replaces trusting attendance.
+    // extra_day_eligible, which was set from employee_work_rosters (the
+    // same roster the override above already treats as unreliable), so
+    // "day off" means the same thing on both the earning and deduction
+    // side of payroll instead of trusting the roster for one and a
+    // behavior-based guess for the other.
+    const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate });
+
     // Attendance is generated daily for every employee regardless of
     // resignation status (confirmed: a resigned employee's post-departure
     // days show up as real "Absent"/"Weekly Off" rows), so absentDeduction
@@ -816,10 +825,6 @@ export default function PayrollAutomation({ role, actorName }) {
           attByEmp[c].shortHourFractionalDays += Number(a.short_hours || 0) / Number(a.required_hours);
         }
       }
-      // extra_day_eligible is computed server-side by classify_attendance_day from the
-      // employee's eligibility group (e.g. false for MANAGEMENT_ADMIN) — trust it instead
-      // of re-deriving "worked on a Sunday" here.
-      if (a.extra_day_eligible) attByEmp[c].extraWorkingDays++;
       if (Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
       attByEmp[c].workedHours += Number(a.worked_hours || 0);
       // A day the employee wasn't actually working owed nothing toward the
@@ -836,6 +841,14 @@ export default function PayrollAutomation({ role, actorName }) {
       // were being added on top, pushing net OT to a large negative and
       // zeroing it out instead of the ~9h actually earned on days worked.
       if (!isOverriddenOff && s !== "Weekly Off" && s !== "Absent") attByEmp[c].requiredHours += Number(a.required_hours || 0);
+    });
+
+    // One entry per block earned (see getFullyWorkedBlockKeys) -- every
+    // employee credited here already has an attByEmp entry, since a block
+    // can only be credited from rows that were just aggregated above.
+    fullyWorkedBlocks.forEach(key => {
+      const code = key.slice(0, key.indexOf("|"));
+      if (attByEmp[code]) attByEmp[code].extraWorkingDays++;
     });
 
     // OT is the month's NET excess (total worked - total required), not a

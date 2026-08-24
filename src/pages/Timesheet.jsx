@@ -5,7 +5,7 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
-import { getWeeklyOffOverrideKeys } from "../utils/attendanceRules.js";
+import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys } from "../utils/attendanceRules.js";
 
 const SHORT_TOLERANCE = 1.5;
 const OT_TOLERANCE = 1.5;
@@ -549,6 +549,11 @@ export default function Timesheet({ branchFilter, role }) {
     // (also applied in PayrollAutomation.jsx and FinalSettlement.jsx so
     // "Absent" means the same thing, and costs the same deduction, everywhere).
     const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
+    // Computed from the same pre-override `base` rows as overrideDates above
+    // (see PayrollAutomation.jsx for why) so Extra Working Days and the
+    // Absent-to-Weekly-Off override never disagree about what counted as a
+    // block's rest day.
+    const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
     base.forEach((row) => {
       if (overrideDates.has(row.work_date)) {
         // The DB row's short_hours/late/OT were computed for "Absent"
@@ -577,6 +582,9 @@ export default function Timesheet({ branchFilter, role }) {
       }
     });
 
+    // Attached to the array rather than restructuring `ledger`'s shape --
+    // every existing consumer treats it as a plain row array.
+    base.extraWorkingDaysCount = fullyWorkedBlockKeys.size;
     return base;
   }, [selectedEmp, attendance, roster, fromDate, toDate]);
 
@@ -616,12 +624,11 @@ export default function Timesheet({ branchFilter, role }) {
     return { totalOT, payableOT };
   }, [ledger, isOtEligible]);
 
-  // extra_day_eligible is only true when the employee actually punched in on
-  // a weekly-off day (see classify_attendance_day) -- a weekly off with no
-  // punches at all does not count, so this matches what payroll pays for.
-  const extraWorkingDaysCount = useMemo(() => {
-    return ledger.filter((r) => !!r.extra_day_eligible).length;
-  }, [ledger]);
+  // See getFullyWorkedBlockKeys in attendanceRules.js -- a block worked
+  // straight through with no rest at all (no real Weekly Off, no Leave, no
+  // forgiven Absent), matching what payroll now pays for instead of
+  // trusting attendance.extra_day_eligible's roster-driven flag.
+  const extraWorkingDaysCount = ledger.extraWorkingDaysCount || 0;
 
   const totalWorkedHours = useMemo(() => {
     return fmt2(ledger.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));

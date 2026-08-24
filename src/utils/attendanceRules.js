@@ -26,15 +26,12 @@ function fmtDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-// rows: array of objects with at least a date field and a status field.
-// employeeKey: pass null/undefined when rows are already scoped to one
-// employee (e.g. FinalSettlement's per-employee fetch); pass the field name
-// to group by when rows span multiple employees (e.g. payroll's month-wide
-// fetch).
-// Returns a Set of override keys: `${date}` (no employeeKey) or
-// `${employee_code}|${date}` (with employeeKey) for rows that should read
-// as "Weekly Off" instead of "Absent".
-export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = {}) {
+// Shared first pass: buckets rows into fixed calendar blocks and tallies
+// what happened in each one. Both getWeeklyOffOverrideKeys (below) and
+// getFullyWorkedBlockKeys derive their answer from the same bucketing so
+// "what counted as this block's rest day" can never disagree between the
+// deduction side and the earning side of payroll.
+function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey }) {
   const weeks = {};
   (rows || []).forEach((row) => {
     const status = row[statusKey];
@@ -54,22 +51,43 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
     const blockEnd = new Date(d.getFullYear(), d.getMonth(), Math.min(blockStartDay + 6, daysInMonth));
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(blockStart)}`;
-    const week = (weeks[weekKey] ||= { absentRows: [], hasRealWeeklyOff: false, blockStart, blockEnd });
+    const week = (weeks[weekKey] ||= {
+      absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false,
+      blockStart, blockEnd, empPart,
+    });
     // Real "Weekly Off" rows (roster-driven) count toward every day of the
     // block, not just Mon-Fri, so a genuine off day on any day still blocks
     // the override below -- without this, a block that already has its real
     // off day (e.g. a roster Thursday) could still get a *second* Mon-Fri
     // Absent day relabeled Weekly Off too, hiding a real absence.
     if (status === "Weekly Off") week.hasRealWeeklyOff = true;
-    // Only a true no-show (no check-in AND no check-out at all) is eligible
-    // to be reinterpreted as the block's off day. An employee who actually
-    // punched in/out but fell short of the minimum-presence bar (marked
-    // "Absent" by classify_attendance_day for insufficient hours, not for a
-    // no-show) genuinely came to work that day and must not be relabeled
-    // Weekly Off -- that would hide a real short-attendance day as if it
-    // were their day off.
-    else if (status === "Absent" && dow !== 0 && dow !== 6 && !row[checkInKey] && !row[checkOutKey]) week.absentRows.push(row);
+    else if (status === "Leave") week.hasLeave = true;
+    else if (status === "Absent") {
+      week.hasAnyAbsent = true;
+      // Only a true no-show (no check-in AND no check-out at all) on a
+      // working day is eligible to be reinterpreted as the block's off day.
+      // An employee who actually punched in/out but fell short of the
+      // minimum-presence bar (marked "Absent" by classify_attendance_day
+      // for insufficient hours, not for a no-show) genuinely came to work
+      // that day and must not be relabeled Weekly Off -- that would hide a
+      // real short-attendance day as if it were their day off.
+      if (dow !== 0 && dow !== 6 && !row[checkInKey] && !row[checkOutKey]) week.absentRows.push(row);
+    }
   });
+  return weeks;
+}
+
+// rows: array of objects with at least a date field and a status field.
+// employeeKey: pass null/undefined when rows are already scoped to one
+// employee (e.g. FinalSettlement's per-employee fetch); pass the field name
+// to group by when rows span multiple employees (e.g. payroll's month-wide
+// fetch).
+// Returns a Set of override keys: `${date}` (no employeeKey) or
+// `${employee_code}|${date}` (with employeeKey) for rows that should read
+// as "Weekly Off" instead of "Absent".
+export function getWeeklyOffOverrideKeys(rows, opts = {}) {
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
+  const weeks = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
 
   const overrideKeys = new Set();
   Object.values(weeks).forEach((week) => {
@@ -85,10 +103,39 @@ export function getWeeklyOffOverrideKeys(rows, { dateKey = "work_date", statusKe
       if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
     }
     const row = week.absentRows[0];
-    const empPart = employeeKey ? `${row[employeeKey]}|` : "";
-    overrideKeys.add(`${empPart}${row[dateKey]}`);
+    overrideKeys.add(`${week.empPart}${row[dateKey]}`);
   });
   return overrideKeys;
+}
+
+// A block the employee worked straight through with no rest at all -- no
+// real Weekly Off, no approved Leave, and not even a single forgiven Absent
+// (see getWeeklyOffOverrideKeys above) -- earns one Extra Working Day.
+// Deliberately mirrors the same block heuristic used for the deduction
+// side instead of trusting attendance.extra_day_eligible, which is set
+// server-side from employee_work_rosters.is_weekly_off -- the same roster
+// getWeeklyOffOverrideKeys was built to route around because it isn't kept
+// current. This keeps "what counts as this block's day off" consistent on
+// both the earning and the deduction side of payroll, rather than trusting
+// the roster for one and a behavior-based guess for the other.
+// Returns a Set of block keys: one entry per block earned, `${blockStartDate}`
+// (no employeeKey) or `${employee_code}|${blockStartDate}` (with
+// employeeKey) -- there's no single "the" date to credit, so count
+// `.size` (optionally after filtering by employee prefix) rather than
+// looking up individual dates.
+export function getFullyWorkedBlockKeys(rows, opts = {}) {
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
+  const weeks = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+
+  const blockKeys = new Set();
+  Object.values(weeks).forEach((week) => {
+    if (week.hasRealWeeklyOff || week.hasLeave || week.hasAnyAbsent) return;
+    if (rangeStart || rangeEnd) {
+      if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
+    }
+    blockKeys.add(`${week.empPart}${fmtDate(week.blockStart)}`);
+  });
+  return blockKeys;
 }
 
 // Detect shift from punch-in time.
