@@ -180,6 +180,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
   const [deptFilter, setDeptFilter] = useState("");
   const [search, setSearch] = useState("");
   const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10));
+  const [toggledMonths, setToggledMonths] = useState(() => new Set());
 
   const filtered = useMemo(() => advances.filter(a => {
     if (branchFilter && a.branch !== branchFilter) return false;
@@ -192,6 +193,41 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
     }
     return true;
   }), [advances, branchFilter, monthFilter, statusFilter, deptFilter, search]);
+
+  // Group the ledger by advance month, newest first, so a long history
+  // reads as a stack of drop-downs instead of one giant table.
+  const monthGroups = useMemo(() => {
+    const map = new Map();
+    filtered.forEach(a => {
+      const key = a.advance_month || "—";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(a);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([month, rows]) => ({
+        month, rows,
+        requested: rows.reduce((s, a) => s + Number(a.requested_amount || 0), 0),
+        approved: rows.reduce((s, a) => s + Number(a.approved_amount || 0), 0),
+        issued: rows.reduce((s, a) => s + Number(a.issued_amount || 0), 0),
+        pending: rows.filter(a => a.status === "Pending").length,
+      }));
+  }, [filtered]);
+
+  // Open by default: the current month, and whichever month sorts first
+  // (covers the case where there's no current-month data at all). Clicking
+  // a header just flips that month out of its default state.
+  function isMonthOpen(month, idx) {
+    const defaultOpen = month === currentMonth() || idx === 0;
+    return toggledMonths.has(month) ? !defaultOpen : defaultOpen;
+  }
+  function toggleMonth(month) {
+    setToggledMonths(prev => {
+      const next = new Set(prev);
+      next.has(month) ? next.delete(month) : next.add(month);
+      return next;
+    });
+  }
 
   async function submit() {
     setErr(""); setMsg("");
@@ -280,44 +316,71 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
         <Button variant="outline" onClick={() => onPrintBatch(batchDate)} className="rounded-xl text-sm">🖨️ Print Combined Slip for this Date</Button>
       </div>
 
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
-        <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Advance Ledger</h2><p className="text-xs text-slate-400">{filtered.length} records</p></div>
-        <table className="w-full min-w-[1100px] text-sm">
-          <thead className="bg-slate-50 text-slate-500">
-            <tr>{["S.No", "Branch", "Employee Code", "Name", "Department", "Requested", "Approved", "Issued", "Excess", "Status", "Month", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {filtered.length === 0
-              ? <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">No advance records found.</td></tr>
-              : filtered.map((a, i) => {
-                const excess = a.excess_amount || (a.issued_amount > a.approved_amount ? a.issued_amount - a.approved_amount : 0);
-                return (
-                  <tr key={a.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 text-slate-400">{i + 1}</td>
-                    <td className="px-4 py-3">{a.branch || "—"}</td>
-                    <td className="px-4 py-3">{a.employee_code}</td>
-                    <td className="px-4 py-3 font-medium">{a.employee_name}</td>
-                    <td className="px-4 py-3">{a.department || "—"}</td>
-                    <td className="px-4 py-3">{money(a.requested_amount)}</td>
-                    <td className="px-4 py-3">{a.approved_amount ? money(a.approved_amount) : "—"}</td>
-                    <td className={`px-4 py-3 ${issuedCellClass(a)}`}>{a.issued_amount ? money(a.issued_amount) : "—"}{issuedIcon(a)}</td>
-                    <td className="px-4 py-3">{excess > 0 ? <span className="text-red-600 font-semibold">{money(excess)}</span> : "—"}</td>
-                    <td className="px-4 py-3"><Badge tone={statusTone(a.status)}>{a.status}</Badge></td>
-                    <td className="px-4 py-3 text-slate-500">{a.advance_month}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1 items-center">
-                        {a.status !== "Pending" && a.status !== "Rejected" && (
-                          <Button variant="outline" onClick={() => onPrint(a)} className="rounded-lg text-xs py-1 px-2" title="Print approval slip">🖨️</Button>
-                        )}
-                        <RowActions a={a} canApprove={canApprove} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-          </tbody>
-        </table>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="font-bold text-slate-800">Advance Ledger</h2>
+        <p className="text-xs text-slate-400">{filtered.length} records across {monthGroups.length} month{monthGroups.length === 1 ? "" : "s"}</p>
       </div>
+
+      {monthGroups.length === 0 && (
+        <div className="bg-white border border-slate-100 rounded-2xl shadow-sm px-4 py-8 text-center text-slate-400 text-sm">No advance records found.</div>
+      )}
+
+      {monthGroups.map((g, idx) => {
+        const open = isMonthOpen(g.month, idx);
+        return (
+          <div key={g.month} className="bg-white border border-slate-100 rounded-2xl shadow-sm mb-3 overflow-hidden">
+            <button onClick={() => toggleMonth(g.month)} className="w-full flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-left hover:bg-slate-50">
+              <div className="flex items-center gap-3">
+                <span className={`inline-block text-slate-400 transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+                <span className="font-bold text-slate-800">{g.month !== "—" ? formatMonthYear(`${g.month}-01`) : "No Month"}</span>
+                <span className="text-xs text-slate-400">{g.rows.length} record{g.rows.length === 1 ? "" : "s"}</span>
+                {g.pending > 0 && <Badge tone="blue">{g.pending} pending</Badge>}
+              </div>
+              <div className="flex gap-4 text-xs text-slate-500">
+                <span>Requested {money(g.requested)}</span>
+                <span>Approved {money(g.approved)}</span>
+                <span className="text-emerald-600 font-semibold">Issued {money(g.issued)}</span>
+              </div>
+            </button>
+            {open && (
+              <div className="overflow-x-auto border-t border-slate-100 overflow-y-auto max-h-[60vh]">
+                <table className="w-full min-w-[1100px] text-sm">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr>{["S.No", "Branch", "Employee Code", "Name", "Department", "Requested", "Approved", "Issued", "Excess", "Status", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {g.rows.map((a, i) => {
+                      const excess = a.excess_amount || (a.issued_amount > a.approved_amount ? a.issued_amount - a.approved_amount : 0);
+                      return (
+                        <tr key={a.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-400">{i + 1}</td>
+                          <td className="px-4 py-3">{a.branch || "—"}</td>
+                          <td className="px-4 py-3">{a.employee_code}</td>
+                          <td className="px-4 py-3 font-medium">{a.employee_name}</td>
+                          <td className="px-4 py-3">{a.department || "—"}</td>
+                          <td className="px-4 py-3">{money(a.requested_amount)}</td>
+                          <td className="px-4 py-3">{a.approved_amount ? money(a.approved_amount) : "—"}</td>
+                          <td className={`px-4 py-3 ${issuedCellClass(a)}`}>{a.issued_amount ? money(a.issued_amount) : "—"}{issuedIcon(a)}</td>
+                          <td className="px-4 py-3">{excess > 0 ? <span className="text-red-600 font-semibold">{money(excess)}</span> : "—"}</td>
+                          <td className="px-4 py-3"><Badge tone={statusTone(a.status)}>{a.status}</Badge></td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-1 items-center">
+                              {a.status !== "Pending" && a.status !== "Rejected" && (
+                                <Button variant="outline" onClick={() => onPrint(a)} className="rounded-lg text-xs py-1 px-2" title="Print approval slip">🖨️</Button>
+                              )}
+                              <RowActions a={a} canApprove={canApprove} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
