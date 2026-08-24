@@ -1070,21 +1070,28 @@ export default function PayrollAutomation({ role, actorName }) {
       // Was one sequential awaited request per employee (~300 serial round
       // trips for a full company — the concurrency=8 batching that replaced
       // an even worse fully-sequential loop still meant ~35+ round trips,
-      // which is what was actually taking ~50s). A single bulk upsert
-      // keyed on each row's own primary key (already known from the
-      // currently-loaded payrollRows) does the same in one round trip.
-      // Rows with no existing id (never Generated this month) are skipped,
+      // which is what was actually taking ~50s). A single bulk upsert does
+      // the same in one round trip.
+      // Rows for an employee not already generated this month are skipped,
       // same as before — Refresh has never added newly-eligible employees.
-      const idByCode = Object.fromEntries(payrollRows.map(r => [r.employee_code, r.id]));
+      // Keyed on the natural (employee_code, payroll_month) unique
+      // constraint, not each row's cached `id` from the currently-loaded
+      // payrollRows -- that id can be stale (this page hasn't been reloaded
+      // since a regenerate, or another session/direct fix touched the
+      // table), and upserting a stale id creates a phantom new row instead
+      // of updating the real one, colliding with the constraint. Matching
+      // on employee_code+payroll_month always finds and updates the real
+      // row regardless of what id this page's stale state remembers.
+      const codesWithExistingRow = new Set(payrollRows.map(r => r.employee_code));
       const now = new Date().toISOString();
       const updateRows = payloadRows
-        .filter(r => idByCode[r.employee_code])
-        .map(r => ({ ...r, id: idByCode[r.employee_code], generated_at: now }));
+        .filter(r => codesWithExistingRow.has(r.employee_code))
+        .map(r => ({ ...r, generated_at: now }));
       const skipped = payloadRows.length - updateRows.length;
       let failed = 0;
       let firstError = "";
       if (updateRows.length > 0) {
-        const { error } = await supabase.from("payroll").upsert(updateRows, { onConflict: "id" });
+        const { error } = await supabase.from("payroll").upsert(updateRows, { onConflict: "employee_code,payroll_month" });
         if (error) { failed = updateRows.length; firstError = error.message; }
       }
       await loadPayroll();
