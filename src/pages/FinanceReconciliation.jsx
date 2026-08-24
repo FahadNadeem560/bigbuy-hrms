@@ -6,6 +6,7 @@ import { fetchCashIncentiveBranchTotals, markIncentivesPaidForBranch } from "../
 
 export default function FinanceReconciliation({ role, month, setMonth, actorName }) {
   const [payroll, setPayroll] = useState([]);
+  const [settlements, setSettlements] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [incentiveBranchTotals, setIncentiveBranchTotals] = useState([]);
   const [marking, setMarking] = useState(null);
@@ -15,12 +16,17 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
   useEffect(() => { load(); }, [month]);
 
   async function load() {
-    const [{ data: pr }, { data: emps }, branchTotals] = await Promise.all([
+    // final_settlements is a separate table now (see FinalSettlement.jsx /
+    // PayrollAutomation.jsx's loadBase) -- payroll.payment_status can no
+    // longer be FnF/No_FnF, F&F settlements are fetched on their own here.
+    const [{ data: pr }, { data: settled }, { data: emps }, branchTotals] = await Promise.all([
       supabase.from("payroll").select("*").eq("payroll_month", month),
+      supabase.from("final_settlements").select("*").eq("payroll_month", month),
       supabase.from("employees").select("employee_code, branch, full_name"),
       fetchCashIncentiveBranchTotals(month).catch(() => []),
     ]);
     setPayroll(pr || []);
+    setSettlements(settled || []);
     setEmployees(emps || []);
     setIncentiveBranchTotals(branchTotals);
   }
@@ -39,6 +45,9 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
   const incentiveByBranch = useMemo(() => Object.fromEntries(incentiveBranchTotals.map(b => [b.branch, b.total])), [incentiveBranchTotals]);
   const cashIncentiveTotal = useMemo(() => incentiveBranchTotals.reduce((s, b) => s + Number(b.total || 0), 0), [incentiveBranchTotals]);
 
+  // payroll.payment_status can no longer be FnF/No_FnF -- those settlements
+  // live in final_settlements now (see FinalSettlement.jsx / PayrollAutomation.jsx's
+  // loadBase), so a regular payroll row here is always Normal or Hold.
   const rows = useMemo(() => payroll.map(r => ({
     ...r,
     branch: empByCode[r.employee_code]?.branch || "Unassigned",
@@ -53,17 +62,25 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
     overtimeAmount: Number(r.overtime_amount || 0),
   })), [payroll, empByCode]);
 
+  // final_settlements already carries its own branch snapshot -- no join
+  // needed. Only F&F is actually owed anything; No F&F is a zero/forfeited
+  // record shown for visibility, never counted as payable.
+  const settlementRows = useMemo(() => settlements.map(s => ({
+    ...s, netPayable: Number(s.net_payable || 0), isPaid: !!s.is_paid,
+  })), [settlements]);
+
   const [branchFilter, setBranchFilter] = useState("");
   const branchOptions = useMemo(() => {
-    const set = new Set([...rows.map(r => r.branch), ...Object.keys(incentiveByBranch)]);
+    const set = new Set([...rows.map(r => r.branch), ...settlementRows.map(s => s.branch), ...Object.keys(incentiveByBranch)]);
     return Array.from(set).filter(Boolean).sort();
-  }, [rows, incentiveByBranch]);
+  }, [rows, settlementRows, incentiveByBranch]);
   const scopedRows = useMemo(() => branchFilter ? rows.filter(r => r.branch === branchFilter) : rows, [rows, branchFilter]);
+  const scopedSettlements = useMemo(() => branchFilter ? settlementRows.filter(s => s.branch === branchFilter) : settlementRows, [settlementRows, branchFilter]);
   const scopedCashIncentiveTotal = useMemo(() => branchFilter ? Number(incentiveByBranch[branchFilter] || 0) : cashIncentiveTotal, [branchFilter, incentiveByBranch, cashIncentiveTotal]);
 
   const totals = useMemo(() => {
     const normal = scopedRows.filter(r => r.paymentStatus === "Normal").reduce((s, r) => s + r.netSalary, 0);
-    const fnf = scopedRows.filter(r => r.paymentStatus === "FnF").reduce((s, r) => s + r.netSalary, 0);
+    const fnf = scopedSettlements.filter(s => s.payment_status === "FnF").reduce((s, r) => s + r.netPayable, 0);
     const holdover = scopedRows.reduce((s, r) => s + r.holdoverAmount, 0);
     const loan = scopedRows.reduce((s, r) => s + r.loanDeduction, 0);
     const advance = scopedRows.reduce((s, r) => s + r.advanceDeduction, 0);
@@ -71,10 +88,12 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
     const eobi = scopedRows.reduce((s, r) => s + r.eobiDeduction, 0);
     const overtime = scopedRows.reduce((s, r) => s + r.overtimeAmount, 0);
     const totalToPay = normal + fnf + holdover + scopedCashIncentiveTotal;
-    const alreadyPaid = scopedRows.filter(r => ["Normal", "FnF"].includes(r.paymentStatus) && r.isPaid).reduce((s, r) => s + r.netSalary, 0);
+    const alreadyPaidNormal = scopedRows.filter(r => r.paymentStatus === "Normal" && r.isPaid).reduce((s, r) => s + r.netSalary, 0);
+    const alreadyPaidFnf = scopedSettlements.filter(s => s.payment_status === "FnF" && s.isPaid).reduce((s, r) => s + r.netPayable, 0);
+    const alreadyPaid = alreadyPaidNormal + alreadyPaidFnf;
     const remaining = totalToPay - alreadyPaid;
     return { normal, fnf, holdover, loan, advance, tax, eobi, overtime, cashIncentiveTotal: scopedCashIncentiveTotal, totalToPay, alreadyPaid, remaining };
-  }, [scopedRows, scopedCashIncentiveTotal]);
+  }, [scopedRows, scopedSettlements, scopedCashIncentiveTotal]);
 
   const incentivePaidByBranch = useMemo(() => Object.fromEntries(incentiveBranchTotals.map(b => [b.branch, !!b.is_paid])), [incentiveBranchTotals]);
 
@@ -82,14 +101,19 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
     const acc = {};
     rows.forEach(r => {
       if (!acc[r.branch]) acc[r.branch] = { branch: r.branch, payable: 0, hold: 0, noFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 };
-      if (r.paymentStatus === "Normal" || r.paymentStatus === "FnF") acc[r.branch].payable += r.netSalary;
+      if (r.paymentStatus === "Normal") acc[r.branch].payable += r.netSalary;
       else if (r.paymentStatus === "Hold") acc[r.branch].hold += r.netSalary;
-      else if (r.paymentStatus === "No_FnF") acc[r.branch].noFnf += r.netSalary;
       acc[r.branch].loan += r.loanDeduction;
       acc[r.branch].advance += r.advanceDeduction;
       acc[r.branch].tax += r.taxDeduction;
       acc[r.branch].eobi += r.eobiDeduction;
       acc[r.branch].overtime += r.overtimeAmount;
+    });
+    settlementRows.forEach(s => {
+      const b = s.branch || "Unassigned";
+      if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 };
+      if (s.payment_status === "FnF") acc[b].payable += s.netPayable;
+      else acc[b].noFnf += s.netPayable;
     });
     Object.keys(incentiveByBranch).forEach(b => { if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 }; });
     return Object.values(acc).map(b => ({

@@ -644,13 +644,24 @@ export default function PayrollAutomation({ role, actorName }) {
     // it their Final Settlement already paid them out. Without this,
     // resigning employees vanished from payroll entirely the moment
     // FinalSettlement.jsx flipped their status to "Resigned".
-    const [{ data: activeEmps }, { data: resignedEmps }, { data: lns }] = await Promise.all([
+    //
+    // Once actually settled (a final_settlements row exists), they're
+    // excluded here permanently -- final_settlements is now the sole record
+    // of what they're owed, and letting them back into buildPayrollRows
+    // would silently recompute and overwrite that with a full-month
+    // attendance-based day count that disagrees with the settlement's own.
+    // A Resigned employee who hasn't been through Final Settlement yet
+    // still belongs here as normal, so their partial-month attendance keeps
+    // accruing correctly until they are.
+    const [{ data: activeEmps }, { data: resignedEmps }, { data: lns }, { data: settled }] = await Promise.all([
       supabase.from("employees").select("*").eq("status", "Active"),
       supabase.from("employees").select("*").eq("status", "Resigned")
         .gte("last_working_day", fromDate).lte("last_working_day", toDate),
       supabase.from("loans").select("*").eq("status", "Active"),
+      supabase.from("final_settlements").select("employee_code"),
     ]);
-    setEmployees([...(activeEmps || []), ...(resignedEmps || [])]);
+    const settledCodes = new Set((settled || []).map(s => s.employee_code));
+    setEmployees([...(activeEmps || []), ...(resignedEmps || [])].filter(e => !settledCodes.has(e.employee_code)));
     setLoans(lns || []);
   }
 

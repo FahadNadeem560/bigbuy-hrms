@@ -56,7 +56,138 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
+// ─── Settlements Ledger ────────────────────────────────────────────────────
+// Every processed settlement, entirely separate from the regular monthly
+// payroll table (see final_settlements / loadBase in PayrollAutomation.jsx).
+// Its own payable line: only F&F rows are actually owed anything -- No F&F
+// is a record of zero/forfeited settlement, nothing to mark paid.
+function SettlementsLedger({ role }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [monthFilter, setMonthFilter] = useState("");
+  const [branchFilter, setBranchFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [marking, setMarking] = useState(null);
+  const [err, setErr] = useState("");
+
+  const canMarkPaid = ["Master", "Finance"].includes(role);
+
+  async function load() {
+    setLoading(true);
+    const [{ data: settlements }, { data: emps }] = await Promise.all([
+      supabase.from("final_settlements").select("*").order("settled_at", { ascending: false }),
+      supabase.from("employees").select("employee_code, full_name"),
+    ]);
+    const nameByCode = Object.fromEntries((emps || []).map(e => [e.employee_code, e.full_name]));
+    setRows((settlements || []).map(s => ({ ...s, employee_name: nameByCode[s.employee_code] || s.employee_code })));
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function markPaid(row) {
+    setMarking(row.id); setErr("");
+    try {
+      const { error } = await supabase.from("final_settlements").update({
+        is_paid: true, paid_at: new Date().toISOString(), paid_by: role,
+      }).eq("id", row.id);
+      if (error) throw error;
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setMarking(null); }
+  }
+
+  const filtered = useMemo(() => rows.filter(r => {
+    if (monthFilter && r.payroll_month !== monthFilter) return false;
+    if (branchFilter && r.branch !== branchFilter) return false;
+    if (statusFilter !== "All" && r.payment_status !== statusFilter) return false;
+    return true;
+  }), [rows, monthFilter, branchFilter, statusFilter]);
+
+  const branchOptions = useMemo(() => Array.from(new Set(rows.map(r => r.branch).filter(Boolean))).sort(), [rows]);
+
+  const totals = useMemo(() => {
+    const fnfRows = filtered.filter(r => r.payment_status === "FnF");
+    const payable = fnfRows.reduce((s, r) => s + Number(r.net_payable || 0), 0);
+    const paid = fnfRows.filter(r => r.is_paid).reduce((s, r) => s + Number(r.net_payable || 0), 0);
+    return { fnfCount: fnfRows.length, payable, paid, outstanding: payable - paid };
+  }, [filtered]);
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        {[
+          ["F&F Settlements", totals.fnfCount],
+          ["Total Payable", money(totals.payable)],
+          ["Already Paid", money(totals.paid)],
+          ["Outstanding", money(totals.outstanding)],
+        ].map(([label, value]) => (
+          <div key={label} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+            <p className="text-xs text-slate-500">{label}</p>
+            <p className="text-xl font-bold text-slate-800">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
+
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input type="month" value={monthFilter} onChange={e => setMonthFilter(e.target.value)}
+          className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+          <option value="">All Branches</option>
+          {branchOptions.map(b => <option key={b}>{b}</option>)}
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+          <option value="All">All Status</option>
+          <option value="FnF">F&F</option>
+          <option value="No_FnF">No F&F</option>
+        </select>
+      </div>
+
+      {loading
+        ? <p className="text-slate-400 text-sm">Loading settlements...</p>
+        : (
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
+            <table className="w-full min-w-[1000px] text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>{["Employee", "Branch", "Department", "Last Working Day", "Month", "Status", "Net Payable", "Paid", "Action"].map(h =>
+                  <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.length === 0
+                  ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
+                  : filtered.map(r => (
+                    <tr key={r.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium">{r.employee_name} <span className="text-xs text-slate-400">({r.employee_code})</span></td>
+                      <td className="px-4 py-3">{r.branch || "—"}</td>
+                      <td className="px-4 py-3">{r.department || "—"}</td>
+                      <td className="px-4 py-3">{r.last_working_day || "—"}</td>
+                      <td className="px-4 py-3">{r.payroll_month}</td>
+                      <td className="px-4 py-3"><Badge tone={r.payment_status === "FnF" ? "blue" : "red"}>{r.payment_status === "FnF" ? "F&F" : "No F&F"}</Badge></td>
+                      <td className="px-4 py-3 font-semibold">{money(r.net_payable)}</td>
+                      <td className="px-4 py-3">
+                        {r.is_paid ? <Badge tone="green">Paid</Badge> : <span className="text-slate-400 text-xs">Unpaid</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {r.payment_status === "FnF" && !r.is_paid && canMarkPaid && (
+                          <Button onClick={() => markPaid(r)} disabled={marking === r.id} className="rounded-lg text-xs py-1 px-2">
+                            {marking === r.id ? "Marking…" : "Mark Paid"}
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+    </div>
+  );
+}
+
 export default function FinalSettlement({ role }) {
+  const [innerTab, setInnerTab] = useState("process");
   const [employees, setEmployees] = useState([]);
   const [selEmp, setSelEmp] = useState(null);
   const [resignDate, setResignDate] = useState("");
@@ -185,33 +316,40 @@ export default function FinalSettlement({ role }) {
 
     // No amount payable, or notice period not served and Master hasn't
     // overridden it -> No F&F. Otherwise some amount is due -> F&F.
-    // Written straight onto payroll.payment_status (bypassing the normal
-    // request/approval flow -- this IS the approval, decided at settlement
-    // time) for the month last_working_day falls in. If that month's
-    // payroll hasn't been generated yet, mergePersistentPayrollFields
-    // carries this forward once it is (see payrollControlService.js).
+    // Lives entirely in final_settlements now, not payroll -- a settled
+    // employee is removed from the regular monthly payroll cycle for good
+    // (see PayrollAutomation.jsx's loadBase, which excludes anyone with a
+    // final_settlements row), so Generate/Refresh Payroll can never again
+    // silently recompute and overwrite these figures with a different,
+    // full-month attendance-based day count.
     const fnfStatus = (settlement.net === 0 || (!noticeComplete && !overrideMode)) ? "No_FnF" : "FnF";
     const payrollMonth = lastDay.slice(0, 7);
     const nowIso = new Date().toISOString();
-    const paymentStatusPayload = {
-      payment_status: fnfStatus,
-      payment_status_changed_by: role || "Master",
-      payment_status_changed_at: nowIso,
-      payment_status_approved_by: role || "Master",
-      payment_status_reason: `Final settlement processed — net payable ${money(settlement.net)}`,
-    };
-    const { data: existingPayrollRow } = await supabase.from("payroll")
-      .select("id").eq("employee_code", selEmp.employee_code).eq("payroll_month", payrollMonth).maybeSingle();
-    if (existingPayrollRow) {
-      await supabase.from("payroll").update(paymentStatusPayload).eq("id", existingPayrollRow.id);
-    } else {
-      await supabase.from("payroll").insert({
-        employee_code: selEmp.employee_code, payroll_month: payrollMonth,
-        status: "Draft", ...paymentStatusPayload,
-      });
-    }
 
-    setMsg(`Settlement processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}. Payroll status set to ${fnfStatus === "FnF" ? "F&F" : "No F&F"} for ${payrollMonth}.`);
+    // Remove any regular payroll row already generated for this employee this
+    // month (e.g. Generate Payroll ran before the resignation was processed)
+    // -- the settlement below is now the sole record of what they're owed.
+    await supabase.from("payroll").delete()
+      .eq("employee_code", selEmp.employee_code).eq("payroll_month", payrollMonth);
+
+    await supabase.from("final_settlements").upsert({
+      employee_code: selEmp.employee_code, payroll_month: payrollMonth,
+      resignation_date: resignDate, last_working_day: lastDay, resignation_reason: resignReason || null,
+      staff_level: selEmp.staff_level, branch: selEmp.branch, department: selEmp.department,
+      salary: settlement.salary, daily_rate: settlement.dailyRate,
+      days_present: settlement.daysPresent, weekly_offs: settlement.weeklyOffs,
+      absent_days: settlement.absentDays, paid_days: settlement.paidDays,
+      pending_salary: settlement.pendingSalary, leave_encashment: settlement.leaveEncashment,
+      loan_balance: settlement.loanBalance,
+      notice_required_days: noticeRequired, notice_served_days: noticeDaysServed, notice_complete: noticeComplete,
+      notice_penalty: settlement.noticePenalty, is_absconding: isAbsconding,
+      override_applied: overrideMode, override_by: overrideMode ? (role || "Master") : null,
+      override_reason: overrideMode ? overrideReason : null,
+      gross_earnings: settlement.gross, total_deductions: settlement.deductions, net_payable: settlement.net,
+      payment_status: fnfStatus, settled_by: role || "Master", settled_at: nowIso, updated_at: nowIso,
+    }, { onConflict: "employee_code" });
+
+    setMsg(`Settlement processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}. Recorded as ${fnfStatus === "FnF" ? "F&F" : "No F&F"} for ${payrollMonth}, removed from regular payroll.`);
     setSelEmp(null);
     setResignDate("");
     setLastDay("");
@@ -227,6 +365,17 @@ export default function FinalSettlement({ role }) {
     <div>
       <PageTitle title="Final Settlement" subtitle="Resignation processing, notice period validation and settlement calculator." />
 
+      <div className="flex flex-wrap gap-2 mb-5">
+        {[["process", "Process Settlement"], ["ledger", "Settlements Ledger"]].map(([k, l]) => (
+          <button key={k} onClick={() => setInnerTab(k)}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition ${innerTab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {innerTab === "ledger" ? <SettlementsLedger role={role} /> : (
+      <>
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
@@ -402,6 +551,8 @@ export default function FinalSettlement({ role }) {
             </Button>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

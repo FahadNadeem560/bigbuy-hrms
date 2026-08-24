@@ -6,10 +6,17 @@ export const PAYMENT_STATUSES = ["Normal", "Hold", "No_FnF", "FnF"];
 export const PAYMENT_STATUS_LABELS = { Normal: "Normal", Hold: "Hold", No_FnF: "No F&F", FnF: "F&F" };
 export const PAYMENT_STATUS_TONES = { Normal: "green", Hold: "yellow", No_FnF: "red", FnF: "blue" };
 
-// Allowed transitions per spec. No_FnF -> Normal is allowed but Master-only (enforced at approval time).
+// No_FnF/FnF are no longer reachable from here -- they're exclusively set by
+// FinalSettlement.jsx, which writes to the separate final_settlements table
+// instead of payroll.payment_status (see PayrollAutomation.jsx's loadBase).
+// Allowing a manual Normal -> FnF/No_FnF transition here would let someone
+// bypass Final Settlement entirely and put a settlement-status row back into
+// the regular payroll table, reopening the exact day-count overwrite bug
+// final_settlements was built to close. A payroll row's payment_status is
+// now only ever Normal or Hold.
 const ALLOWED_TRANSITIONS = {
-  Normal: ["Hold", "No_FnF", "FnF"],
-  Hold: ["Normal", "No_FnF"],
+  Normal: ["Hold"],
+  Hold: ["Normal"],
   No_FnF: ["Normal"],
   FnF: [],
 };
