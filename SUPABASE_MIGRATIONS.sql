@@ -2338,6 +2338,18 @@ CREATE POLICY advances_select_audit ON public.advances
 -- =============================================================
 
 -- =============================================================
+-- 2026-08-24: advances_add_finance_access
+-- advances_full_access excluded Finance, so HR-uploaded advances were
+-- invisible to Finance/Finance Head despite advanceService.js expecting
+-- Finance to approve/issue them (matches loans/payroll policies which
+-- already include Finance).
+DROP POLICY IF EXISTS advances_full_access ON public.advances;
+CREATE POLICY advances_full_access ON public.advances FOR ALL TO authenticated
+  USING ((select app_current_role()) IN ('Master','HR','Finance'))
+  WITH CHECK ((select app_current_role()) IN ('Master','HR','Finance'));
+-- =============================================================
+
+-- =============================================================
 -- 2026-08-01: confidential_incentives_phase1
 -- =============================================================
 -- Extends the existing cash_incentives table (already a Master/GM-only
