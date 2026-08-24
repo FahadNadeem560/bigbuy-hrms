@@ -49,11 +49,12 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     const blockStart = new Date(d.getFullYear(), d.getMonth(), blockStartDay);
     const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
     const blockEnd = new Date(d.getFullYear(), d.getMonth(), Math.min(blockStartDay + 6, daysInMonth));
+    const isFullBlock = blockStartDay + 6 <= daysInMonth;
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(blockStart)}`;
     const week = (weeks[weekKey] ||= {
       absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false,
-      blockStart, blockEnd, empPart,
+      blockStart, blockEnd, empPart, isFullBlock,
     });
     // Real "Weekly Off" rows (roster-driven) count toward every day of the
     // block, not just Mon-Fri, so a genuine off day on any day still blocks
@@ -108,16 +109,21 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
   return overrideKeys;
 }
 
-// A block the employee worked straight through with no rest at all -- no
-// real Weekly Off, no approved Leave, and not even a single forgiven Absent
-// (see getWeeklyOffOverrideKeys above) -- earns one Extra Working Day.
-// Deliberately mirrors the same block heuristic used for the deduction
-// side instead of trusting attendance.extra_day_eligible, which is set
-// server-side from employee_work_rosters.is_weekly_off -- the same roster
-// getWeeklyOffOverrideKeys was built to route around because it isn't kept
-// current. This keeps "what counts as this block's day off" consistent on
-// both the earning and the deduction side of payroll, rather than trusting
-// the roster for one and a behavior-based guess for the other.
+// A full 7-day block the employee worked straight through with no rest at
+// all -- no real Weekly Off, no approved Leave, and not even a single
+// forgiven Absent (see getWeeklyOffOverrideKeys above) -- earns one Extra
+// Working Day. Deliberately mirrors the same block heuristic used for the
+// deduction side instead of trusting attendance.extra_day_eligible, which
+// is set server-side from employee_work_rosters.is_weekly_off -- the same
+// roster getWeeklyOffOverrideKeys was built to route around because it
+// isn't kept current. This keeps "what counts as this block's day off"
+// consistent on both the earning and the deduction side of payroll, rather
+// than trusting the roster for one and a behavior-based guess for the other.
+// Restricted to full blocks (unlike the override above, which applies to a
+// truncated month-end block too): "one day off per week" only implies a
+// missed day off once a full week has actually elapsed -- a 3-day tail
+// block at month-end (e.g. day 29-31) can't be said to owe a rest day yet,
+// so it never earns a bonus for "no rest taken" even if fully worked.
 // Returns a Set of block keys: one entry per block earned, `${blockStartDate}`
 // (no employeeKey) or `${employee_code}|${blockStartDate}` (with
 // employeeKey) -- there's no single "the" date to credit, so count
@@ -129,7 +135,7 @@ export function getFullyWorkedBlockKeys(rows, opts = {}) {
 
   const blockKeys = new Set();
   Object.values(weeks).forEach((week) => {
-    if (week.hasRealWeeklyOff || week.hasLeave || week.hasAnyAbsent) return;
+    if (!week.isFullBlock || week.hasRealWeeklyOff || week.hasLeave || week.hasAnyAbsent) return;
     if (rangeStart || rangeEnd) {
       if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
     }
