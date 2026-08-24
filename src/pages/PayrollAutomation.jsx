@@ -665,13 +665,33 @@ export default function PayrollAutomation({ role, actorName }) {
     setFlagNotifications(flags || []);
   }
 
+  // A plain unranged .select("*") silently truncates below the real row
+  // count once a month's headcount grows past PostgREST's implicit cap
+  // (confirmed: July 2026 has 587 payroll rows, the old `.limit(500)` here
+  // dropped up to 87 of them with no stable ordering behind the cutoff, so
+  // which employees vanished from the page -- and from search -- could
+  // shift between loads). Page through with .range() the same way
+  // fetchAllAttendanceForMonth already does, ordered so the cutoff is
+  // deterministic instead of arbitrary.
   async function loadPayroll() {
-    const { data } = await supabase.from("payroll").select("*").eq("payroll_month", month).limit(500);
-    if (data && data.length > 0) {
-      setPayrollRows(data);
-      setPayrollStatus(data[0]?.status || "Draft");
-      setPublishedBy(data[0]?.published_by || "");
-      setPublishedAt(data[0]?.published_at || "");
+    const pageSize = 1000;
+    let all = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase.from("payroll").select("*")
+        .eq("payroll_month", month)
+        .order("employee_code", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) break;
+      all = all.concat(data || []);
+      if (!data || data.length < pageSize) break;
+      from += pageSize;
+    }
+    if (all.length > 0) {
+      setPayrollRows(all);
+      setPayrollStatus(all[0]?.status || "Draft");
+      setPublishedBy(all[0]?.published_by || "");
+      setPublishedAt(all[0]?.published_at || "");
     } else {
       setPayrollRows([]);
       setPayrollStatus("Draft");
@@ -989,7 +1009,15 @@ export default function PayrollAutomation({ role, actorName }) {
       const rows = await buildPayrollRows();
       let payloadRows = buildPayloadRows(rows);
       payloadRows = await mergePersistentPayrollFields(month, payloadRows);
-      await supabase.from("payroll").delete().eq("payroll_month", month);
+      // Result was previously ignored -- a silently failed/partial delete
+      // (RLS, network blip, anything) let the insert below stack a second
+      // full set on top of the first instead of replacing it. Confirmed:
+      // July 2026 ended up with 293 duplicate rows this way. A DB-level
+      // unique constraint on (employee_code, payroll_month) now backstops
+      // this too, but abort loudly here rather than let that constraint
+      // reject every row's insert one at a time.
+      const { error: deleteError } = await supabase.from("payroll").delete().eq("payroll_month", month);
+      if (deleteError) throw new Error(`Could not clear existing payroll for ${month} before regenerating: ${deleteError.message}`);
       if (payloadRows.length > 0) {
         const { error } = await supabase.from("payroll").insert(payloadRows);
         if (error) {
