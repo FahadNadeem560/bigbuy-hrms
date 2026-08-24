@@ -59,6 +59,38 @@ export async function requestAdvance({ employee, requestedAmount, advanceMonth, 
   });
 }
 
+// HR can still correct a request they raised (wrong amount, wrong month,
+// a notes typo) right up until Finance acts on it. The status="Pending"
+// clause in the update's WHERE is the actual guard against a race with
+// Finance approving/rejecting between page load and this save landing --
+// a 0-row result means it was already decided and the edit didn't apply.
+export async function updateAdvanceRequest({ id, employeeCode, requestedAmount, advanceMonth, notes, actedBy }) {
+  const amount = Number(requestedAmount);
+  if (!(amount > 0)) throw new Error("Requested amount must be greater than zero.");
+  if (!advanceMonth) throw new Error("Advance month is required.");
+
+  const { data: existing, error: existErr } = await supabase.from("advances").select("id")
+    .eq("employee_code", employeeCode).eq("advance_month", advanceMonth)
+    .neq("status", "Rejected").neq("id", id).limit(1);
+  if (existErr) throw existErr;
+  if (existing && existing.length > 0) {
+    throw new Error(`Employee already has an advance for ${advanceMonth}. Only one advance per month is allowed.`);
+  }
+
+  const { data, error } = await supabase.from("advances").update({
+    requested_amount: amount, advance_month: advanceMonth, payroll_month: advanceMonth, notes: notes || null,
+  }).eq("id", id).eq("status", "Pending").select();
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error("This request has already been decided by Finance and can no longer be edited.");
+  }
+
+  await supabase.from("audit_logs").insert({
+    action: "advance_edited", entity: "advances", entity_id: id, performed_by: actedBy,
+    details: `Advance request edited — amount ${money(amount)}, month ${advanceMonth}`, created_at: new Date().toISOString(),
+  }).then(() => {}, () => {});
+}
+
 export async function approveAdvance({ id, requestedAmount, approvedAmount, approvedBy, employeeName, actorRole }) {
   const reqAmt = Number(requestedAmount);
   const appAmt = Number(approvedAmount);

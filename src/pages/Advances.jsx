@@ -5,7 +5,7 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money, formatMonthYear } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import {
-  fetchAdvances, fetchActiveEmployeesForPicker, requestAdvance,
+  fetchAdvances, fetchActiveEmployeesForPicker, requestAdvance, updateAdvanceRequest,
   approveAdvance, rejectAdvance, issueAdvance, importHistoricalAdvances, bulkRequestAdvances,
 } from "../services/advanceService.js";
 
@@ -85,17 +85,29 @@ function issuedIcon(a) {
 }
 
 // ─── Row actions shared by the "All Advances" and "Pending Approval" tables ───
-function RowActions({ a, canApprove, actorName, role, onChanged, setErr, setMsg }) {
-  const [mode, setMode] = useState(null); // "approve" | "issue" | "reject"
+function RowActions({ a, canApprove, canEditRequest, actorName, role, onChanged, setErr, setMsg }) {
+  const [mode, setMode] = useState(null); // "approve" | "issue" | "reject" | "edit"
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
+  const [editMonth, setEditMonth] = useState("");
+  const [editNotes, setEditNotes] = useState("");
   const [busy, setBusy] = useState(false);
 
-  if (!canApprove) {
+  const canEditThisRow = canEditRequest && a.status === "Pending";
+
+  if (!canApprove && !canEditThisRow) {
     if (a.status === "Rejected" && a.rejection_reason) return <span className="text-xs text-red-500">{a.rejection_reason}</span>;
     return <span className="text-slate-300 text-xs">—</span>;
   }
 
+  async function doEdit() {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      await updateAdvanceRequest({ id: a.id, employeeCode: a.employee_code, requestedAmount: amount, advanceMonth: editMonth, notes: editNotes, actedBy: actorName });
+      setMsg(`Advance request updated for ${a.employee_name}.`); setMode(null); onChanged();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
   async function doApprove() {
     setBusy(true); setErr(""); setMsg("");
     try {
@@ -121,6 +133,20 @@ function RowActions({ a, canApprove, actorName, role, onChanged, setErr, setMsg 
     finally { setBusy(false); }
   }
 
+  if (mode === "edit") return (
+    <div className="flex flex-col gap-1 min-w-[160px]">
+      <input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)}
+        placeholder="Requested amount" className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+      <input type="month" value={editMonth} onChange={e => setEditMonth(e.target.value)}
+        className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+      <input value={editNotes} onChange={e => setEditNotes(e.target.value)} placeholder="Notes (optional)"
+        className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+      <div className="flex gap-1">
+        <Button onClick={doEdit} disabled={busy} className="rounded-lg text-xs py-1 px-2">Save</Button>
+        <Button variant="outline" onClick={() => setMode(null)} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
+      </div>
+    </div>
+  );
   if (mode === "approve") return (
     <div className="flex flex-col gap-1 min-w-[160px]">
       <input type="number" min="0" max={a.requested_amount} value={amount} onChange={e => setAmount(e.target.value)}
@@ -154,8 +180,16 @@ function RowActions({ a, canApprove, actorName, role, onChanged, setErr, setMsg 
 
   if (a.status === "Pending") return (
     <div className="flex gap-1">
-      <Button onClick={() => { setMode("approve"); setAmount(a.requested_amount); }} className="rounded-lg text-xs py-1 px-2">Approve</Button>
-      <Button variant="outline" onClick={() => { setMode("reject"); setReason(""); }} className="rounded-lg text-xs py-1 px-2 text-red-600 border-red-200">Reject</Button>
+      {canEditThisRow && (
+        <Button variant="outline" onClick={() => { setMode("edit"); setAmount(a.requested_amount); setEditMonth(a.advance_month || ""); setEditNotes(a.notes || ""); }}
+          className="rounded-lg text-xs py-1 px-2">Edit</Button>
+      )}
+      {canApprove && (
+        <>
+          <Button onClick={() => { setMode("approve"); setAmount(a.requested_amount); }} className="rounded-lg text-xs py-1 px-2">Approve</Button>
+          <Button variant="outline" onClick={() => { setMode("reject"); setReason(""); }} className="rounded-lg text-xs py-1 px-2 text-red-600 border-red-200">Reject</Button>
+        </>
+      )}
     </div>
   );
   if (a.status === "Approved") return (
@@ -175,7 +209,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
   const [saving, setSaving] = useState(false);
 
   const [branchFilter, setBranchFilter] = useState("");
-  const [monthFilter, setMonthFilter] = useState("");
+  const [monthFilter, setMonthFilter] = useState(currentMonth());
   const [statusFilter, setStatusFilter] = useState("All");
   const [deptFilter, setDeptFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -256,6 +290,23 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
 
   return (
     <div>
+      <div className="flex flex-wrap gap-3 mb-4">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / code…"
+          className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-52" />
+        <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+          <option value="">All Branches</option>
+          {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
+        </select>
+        <input type="month" value={monthFilter} onChange={e => setMonthFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+          <option value="All">All Status</option>
+          {["Pending", "Approved", "Issued", "Rejected", "Deducted"].map(s => <option key={s}>{s}</option>)}
+        </select>
+        <input value={deptFilter} onChange={e => setDeptFilter(e.target.value)} placeholder="Department…"
+          className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-40" />
+        <Button variant="outline" onClick={exportExcel} className="rounded-xl">Export to Excel</Button>
+      </div>
+
       {canRequest && (
         <div className="mb-4">
           <Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ Request Advance"}</Button>
@@ -292,23 +343,6 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
           </div>
         </div>
       )}
-
-      <div className="flex flex-wrap gap-3 mb-4">
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / code…"
-          className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-52" />
-        <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-          <option value="">All Branches</option>
-          {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
-        </select>
-        <input type="month" value={monthFilter} onChange={e => setMonthFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-          <option value="All">All Status</option>
-          {["Pending", "Approved", "Issued", "Rejected", "Deducted"].map(s => <option key={s}>{s}</option>)}
-        </select>
-        <input value={deptFilter} onChange={e => setDeptFilter(e.target.value)} placeholder="Department…"
-          className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-40" />
-        <Button variant="outline" onClick={exportExcel} className="rounded-xl">Export to Excel</Button>
-      </div>
 
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 flex flex-wrap items-center gap-3">
         <p className="text-xs text-slate-500">Print every advance requested/uploaded on one date as a single combined slip — one signature block instead of one printout per employee.</p>
@@ -368,7 +402,7 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
                               {a.status !== "Pending" && a.status !== "Rejected" && (
                                 <Button variant="outline" onClick={() => onPrint(a)} className="rounded-lg text-xs py-1 px-2" title="Print approval slip">🖨️</Button>
                               )}
-                              <RowActions a={a} canApprove={canApprove} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
+                              <RowActions a={a} canApprove={canApprove} canEditRequest={canRequest} actorName={actorName} role={role} onChanged={reload} setErr={setErr} setMsg={setMsg} />
                             </div>
                           </td>
                         </tr>
@@ -704,17 +738,23 @@ function ImportHistoricalTab({ employees, reload, setMsg, setErr }) {
 // ─── Summary panel ─────────────────────────────────────────────────────────
 function SummaryPanel({ advances }) {
   const nowMonth = currentMonth();
+  // Scoped to the current advance_month, not an all-time total -- a
+  // long-running ledger's all-time sums aren't a useful "how are we doing
+  // right now" snapshot. The dedicated Pending Approval tab still shows
+  // every pending request regardless of month, so nothing is hidden, just
+  // not double-counted into a stale running total here.
+  const monthly = useMemo(() => advances.filter(a => a.advance_month === nowMonth), [advances, nowMonth]);
   const totals = useMemo(() => {
-    const totalRequested = advances.reduce((s, a) => s + Number(a.requested_amount || 0), 0);
-    const totalApproved = advances.reduce((s, a) => s + Number(a.approved_amount || 0), 0);
-    const totalIssued = advances.reduce((s, a) => s + Number(a.issued_amount || 0), 0);
-    const totalExcess = advances.reduce((s, a) => s + Number(a.excess_amount || 0), 0);
-    const totalPending = advances.filter(a => a.status === "Pending").length;
-    const deductedThisMonth = advances
+    const totalRequested = monthly.reduce((s, a) => s + Number(a.requested_amount || 0), 0);
+    const totalApproved = monthly.reduce((s, a) => s + Number(a.approved_amount || 0), 0);
+    const totalIssued = monthly.reduce((s, a) => s + Number(a.issued_amount || 0), 0);
+    const totalExcess = monthly.reduce((s, a) => s + Number(a.excess_amount || 0), 0);
+    const totalPending = monthly.filter(a => a.status === "Pending").length;
+    const deductedThisMonth = monthly
       .filter(a => a.status === "Deducted" && a.deducted_in_month === nowMonth)
       .reduce((s, a) => s + Number(a.issued_amount || 0), 0);
     const byBranch = {};
-    advances.forEach(a => {
+    monthly.forEach(a => {
       const b = a.branch || "Unassigned";
       if (!byBranch[b]) byBranch[b] = { requested: 0, approved: 0, issued: 0 };
       byBranch[b].requested += Number(a.requested_amount || 0);
@@ -725,7 +765,7 @@ function SummaryPanel({ advances }) {
       totalRequested, totalApproved, totalIssued, totalExcess, totalPending, deductedThisMonth,
       branchRows: Object.entries(byBranch).map(([branch, v]) => ({ branch, ...v })).sort((a, b) => a.branch.localeCompare(b.branch)),
     };
-  }, [advances, nowMonth]);
+  }, [monthly, nowMonth]);
 
   const tile = (label, value, tone) => (
     <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
@@ -736,6 +776,7 @@ function SummaryPanel({ advances }) {
 
   return (
     <div className="mb-5">
+      <p className="text-xs text-slate-400 mb-2">Showing {formatMonthYear(`${nowMonth}-01`)}</p>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
         {tile("Total Requested", money(totals.totalRequested))}
         {tile("Total Approved", money(totals.totalApproved))}
