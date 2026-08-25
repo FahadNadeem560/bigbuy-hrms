@@ -107,11 +107,12 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
 // as "Weekly Off" instead of "Absent".
 export function getWeeklyOffOverrideKeys(rows, opts = {}) {
   const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
-  const { weeks } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+  const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
 
-  const overrideKeys = new Set();
-  Object.values(weeks).forEach((week) => {
-    if (week.hasRealWeeklyOff || week.absentRows.length !== 1) return;
+  // Candidate blocks: no real Weekly Off of their own, and exactly one lone
+  // Mon-Fri no-show that could be read as this block's rest day.
+  const candidates = Object.values(weeks).filter((week) => {
+    if (week.hasRealWeeklyOff || week.absentRows.length !== 1) return false;
     // Callers scope `rows` to a fixed query window (a payroll month, a
     // timesheet range, a settlement period). Fixed calendar blocks can't
     // cross a month boundary, but a caller's window can still start or end
@@ -120,8 +121,31 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
     // [rangeStart, rangeEnd]; a window-truncated block is left as a real
     // Absent rather than guessed at.
     if (rangeStart || rangeEnd) {
-      if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
+      if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return false;
     }
+    return true;
+  });
+
+  // Same MONTHLY_WEEKLY_OFF_QUOTA that gates the EWD bonus in
+  // getFullyWorkedBlockKeys also gates this forgiveness -- without it, an
+  // employee who already took their full 4 real Weekly Offs elsewhere in
+  // the month could still get every further lone absence forgiven too, one
+  // per block, with no cap at all (confirmed against employee 1815, July
+  // 2026: 4 real Thursday-off days already used, and a 5th lone Wednesday
+  // absence in the trailing block was still forgiven -- 5 unpaid rest days
+  // in one month with zero deduction). Earliest block first, so once an
+  // employee is out of quota room the earlier lone absences are forgiven
+  // and later ones fall back to a real, deducted Absent -- rather than
+  // every candidate in the month racing for the same remaining slots in
+  // Object.values() insertion order.
+  candidates.sort((a, b) => a.blockStart - b.blockStart);
+
+  const runningCount = { ...monthlyWeeklyOffCount };
+  const overrideKeys = new Set();
+  candidates.forEach((week) => {
+    const used = runningCount[week.empPart] || 0;
+    if (used >= MONTHLY_WEEKLY_OFF_QUOTA) return;
+    runningCount[week.empPart] = used + 1;
     const row = week.absentRows[0];
     overrideKeys.add(`${week.empPart}${row[dateKey]}`);
   });
