@@ -119,7 +119,7 @@ function RowActions({ a, canApprove, canEditRequest, actorName, role, onChanged,
   async function doIssue() {
     setBusy(true); setErr(""); setMsg("");
     try {
-      await issueAdvance({ id: a.id, approvedAmount: a.approved_amount, issuedAmount: amount, issuedBy: actorName, employeeName: a.employee_name, actorRole: role });
+      await issueAdvance({ id: a.id, approvedAmount: a.approved_amount, issuedAmount: amount, previousIssuedAmount: a.issued_amount, issuedBy: actorName, employeeName: a.employee_name, actorRole: role });
       setMsg(`Advance issued to ${a.employee_name}.`); setMode(null); onChanged();
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
@@ -159,8 +159,9 @@ function RowActions({ a, canApprove, canEditRequest, actorName, role, onChanged,
   );
   if (mode === "issue") return (
     <div className="flex flex-col gap-1 min-w-[160px]">
-      <input type="number" min="0" max={a.approved_amount} value={amount} onChange={e => setAmount(e.target.value)}
+      <input type="number" min={a.issued_amount || 0} max={a.approved_amount} value={amount} onChange={e => setAmount(e.target.value)}
         placeholder={`Max ${money(a.approved_amount)}`} className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+      {Number(a.issued_amount) > 0 && <p className="text-[10px] text-slate-400">{money(a.issued_amount)} already given — enter the new running total, not just the top-up.</p>}
       <div className="flex gap-1">
         <Button onClick={doIssue} disabled={busy} className="rounded-lg text-xs py-1 px-2">Confirm</Button>
         <Button variant="outline" onClick={() => setMode(null)} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
@@ -195,6 +196,14 @@ function RowActions({ a, canApprove, canEditRequest, actorName, role, onChanged,
   if (a.status === "Approved") return (
     <Button onClick={() => { setMode("issue"); setAmount(a.approved_amount); }} className="rounded-lg text-xs py-1 px-2">Mark as Issued</Button>
   );
+  if (a.status === "Issued" && canApprove) {
+    const remaining = Number(a.approved_amount || 0) - Number(a.issued_amount || 0);
+    if (remaining > 0) return (
+      <Button onClick={() => { setMode("issue"); setAmount(a.approved_amount); }} className="rounded-lg text-xs py-1 px-2">
+        Issue Remaining ({money(remaining)})
+      </Button>
+    );
+  }
   if (a.status === "Rejected" && a.rejection_reason) return <span className="text-xs text-red-500">{a.rejection_reason}</span>;
   return <span className="text-slate-300 text-xs">—</span>;
 }
@@ -213,8 +222,18 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
   const [statusFilter, setStatusFilter] = useState("All");
   const [deptFilter, setDeptFilter] = useState("");
   const [search, setSearch] = useState("");
-  const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10));
+  const [batchFrom, setBatchFrom] = useState(new Date().toISOString().slice(0, 10));
+  const [batchTo, setBatchTo] = useState(new Date().toISOString().slice(0, 10));
   const [toggledMonths, setToggledMonths] = useState(() => new Set());
+
+  // Bulk approve/issue: only available to Finance, and only meaningful once
+  // the list is filtered down to a single actionable status -- Approve only
+  // applies to Pending rows, Issue only to Approved rows, so tying bulk mode
+  // to the status filter avoids ambiguity over mixed-status selections.
+  const bulkMode = canApprove && statusFilter === "Pending" ? "approve" : canApprove && statusFilter === "Approved" ? "issue" : null;
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  useEffect(() => { setSelected(new Set()); }, [bulkMode, branchFilter, monthFilter, deptFilter, search]);
 
   const filtered = useMemo(() => advances.filter(a => {
     if (branchFilter && a.branch !== branchFilter) return false;
@@ -273,6 +292,34 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
       reload();
     } catch (e) { setErr(e.message); }
     finally { setSaving(false); }
+  }
+
+  function toggleSelectOne(id) {
+    setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }
+  function toggleSelectAll() {
+    setSelected(prev => (prev.size === filtered.length && filtered.length > 0) ? new Set() : new Set(filtered.map(a => a.id)));
+  }
+
+  async function bulkAct() {
+    if (!bulkMode || selected.size === 0) return;
+    setBulkBusy(true); setErr(""); setMsg("");
+    let ok = 0, fail = 0; const errors = [];
+    for (const a of filtered.filter(r => selected.has(r.id))) {
+      try {
+        if (bulkMode === "approve") {
+          await approveAdvance({ id: a.id, requestedAmount: a.requested_amount, approvedAmount: a.requested_amount, approvedBy: actorName, employeeName: a.employee_name, actorRole: role });
+        } else {
+          await issueAdvance({ id: a.id, approvedAmount: a.approved_amount, issuedAmount: a.approved_amount, issuedBy: actorName, employeeName: a.employee_name, actorRole: role });
+        }
+        ok++;
+      } catch (e) { fail++; errors.push(`${a.employee_code}: ${e.message}`); }
+    }
+    setBulkBusy(false); setSelected(new Set());
+    const verb = bulkMode === "approve" ? "Approved" : "Issued";
+    setMsg(`${verb} ${ok} of ${ok + fail} selected advance${ok + fail === 1 ? "" : "s"} (at full ${bulkMode === "approve" ? "requested" : "approved"} amount)${fail ? ` — ${fail} failed` : ""}.`);
+    if (errors.length) setErr(errors.slice(0, 10).join(" | "));
+    reload();
   }
 
   function exportExcel() {
@@ -345,15 +392,32 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
       )}
 
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 flex flex-wrap items-center gap-3">
-        <p className="text-xs text-slate-500">Print every advance requested/uploaded on one date as a single combined slip — one signature block instead of one printout per employee.</p>
-        <input type="date" value={batchDate} onChange={e => setBatchDate(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm" />
-        <Button variant="outline" onClick={() => onPrintBatch(batchDate)} className="rounded-xl text-sm">🖨️ Print Combined Slip for this Date</Button>
+        <p className="text-xs text-slate-500">Print every advance requested/uploaded within a date range as a single combined slip — one signature block instead of one printout per employee.</p>
+        <div className="flex items-center gap-2">
+          <input type="date" value={batchFrom} onChange={e => setBatchFrom(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+          <span className="text-xs text-slate-400">to</span>
+          <input type="date" value={batchTo} onChange={e => setBatchTo(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+        </div>
+        <Button variant="outline" onClick={() => onPrintBatch({ from: batchFrom, to: batchTo })} className="rounded-xl text-sm">🖨️ Print Combined Slip for this Range</Button>
       </div>
 
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-bold text-slate-800">Advance Ledger</h2>
-        <p className="text-xs text-slate-400">{filtered.length} records across {monthGroups.length} month{monthGroups.length === 1 ? "" : "s"}</p>
+        <div className="flex items-center gap-3">
+          {bulkMode && selected.size > 0 && (
+            <Button onClick={bulkAct} disabled={bulkBusy} className="rounded-xl text-sm">
+              {bulkBusy ? (bulkMode === "approve" ? "Approving…" : "Issuing…") : `${bulkMode === "approve" ? "Approve" : "Issue"} Selected (${selected.size}) — full amount`}
+            </Button>
+          )}
+          <p className="text-xs text-slate-400">{filtered.length} records across {monthGroups.length} month{monthGroups.length === 1 ? "" : "s"}</p>
+        </div>
       </div>
+      {bulkMode && (
+        <div className="mb-2 flex items-center gap-2 text-xs text-slate-500">
+          <input type="checkbox" checked={filtered.length > 0 && selected.size === filtered.length} onChange={toggleSelectAll} />
+          <span>Select all {filtered.length} {statusFilter.toLowerCase()} record{filtered.length === 1 ? "" : "s"} across all months shown</span>
+        </div>
+      )}
 
       {monthGroups.length === 0 && (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm px-4 py-8 text-center text-slate-400 text-sm">No advance records found.</div>
@@ -380,13 +444,29 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
               <div className="overflow-x-auto border-t border-slate-100 overflow-y-auto max-h-[60vh]">
                 <table className="w-full min-w-[1100px] text-sm">
                   <thead className="bg-slate-50 text-slate-500">
-                    <tr>{["S.No", "Branch", "Employee Code", "Name", "Department", "Requested", "Approved", "Issued", "Excess", "Status", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
+                    <tr>
+                      {bulkMode && (
+                        <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)] w-8">
+                          <input type="checkbox" checked={g.rows.length > 0 && g.rows.every(r => selected.has(r.id))}
+                            onChange={() => setSelected(prev => {
+                              const next = new Set(prev);
+                              const allOn = g.rows.every(r => next.has(r.id));
+                              g.rows.forEach(r => allOn ? next.delete(r.id) : next.add(r.id));
+                              return next;
+                            })} />
+                        </th>
+                      )}
+                      {["S.No", "Branch", "Employee Code", "Name", "Department", "Requested", "Approved", "Issued", "Excess", "Status", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
+                    </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {g.rows.map((a, i) => {
                       const excess = a.excess_amount || (a.issued_amount > a.approved_amount ? a.issued_amount - a.approved_amount : 0);
                       return (
                         <tr key={a.id} className="hover:bg-slate-50">
+                          {bulkMode && (
+                            <td className="px-4 py-3"><input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelectOne(a.id)} /></td>
+                          )}
                           <td className="px-4 py-3 text-slate-400">{i + 1}</td>
                           <td className="px-4 py-3">{a.branch || "—"}</td>
                           <td className="px-4 py-3">{a.employee_code}</td>
@@ -422,18 +502,61 @@ function AllAdvancesTab({ advances, employees, role, actorName, canRequest, canA
 // ─── Tab 2: Pending Approval (Finance) ────────────────────────────────────
 function PendingApprovalTab({ advances, actorName, role, reload, setMsg, setErr }) {
   const pending = useMemo(() => advances.filter(a => a.status === "Pending"), [advances]);
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  useEffect(() => { setSelected(new Set()); }, [pending.length]);
+
+  function toggleOne(id) {
+    setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }
+  function toggleAll() {
+    setSelected(prev => (prev.size === pending.length && pending.length > 0) ? new Set() : new Set(pending.map(a => a.id)));
+  }
+
+  async function approveSelected() {
+    if (selected.size === 0) return;
+    setBulkBusy(true); setErr(""); setMsg("");
+    let ok = 0, fail = 0; const errors = [];
+    for (const a of pending.filter(r => selected.has(r.id))) {
+      try {
+        await approveAdvance({ id: a.id, requestedAmount: a.requested_amount, approvedAmount: a.requested_amount, approvedBy: actorName, employeeName: a.employee_name, actorRole: role });
+        ok++;
+      } catch (e) { fail++; errors.push(`${a.employee_code}: ${e.message}`); }
+    }
+    setBulkBusy(false); setSelected(new Set());
+    setMsg(`Approved ${ok} of ${ok + fail} selected request${ok + fail === 1 ? "" : "s"} (at full requested amount)${fail ? ` — ${fail} failed` : ""}.`);
+    if (errors.length) setErr(errors.slice(0, 10).join(" | "));
+    reload();
+  }
+
+  const allSelected = pending.length > 0 && selected.size === pending.length;
+
   return (
     <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
-      <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Pending Approval</h2><p className="text-xs text-slate-400">{pending.length} awaiting Finance decision</p></div>
+      <div className="px-5 pt-4 pb-2 flex flex-wrap items-center justify-between gap-2">
+        <div><h2 className="font-bold text-slate-800">Pending Approval</h2><p className="text-xs text-slate-400">{pending.length} awaiting Finance decision</p></div>
+        {selected.size > 0 && (
+          <Button onClick={approveSelected} disabled={bulkBusy} className="rounded-xl text-sm">
+            {bulkBusy ? "Approving…" : `Approve Selected (${selected.size}) — full amount`}
+          </Button>
+        )}
+      </div>
       <table className="w-full min-w-[900px] text-sm">
         <thead className="bg-slate-50 text-slate-500">
-          <tr>{["Branch", "Employee Code", "Name", "Department", "Requested", "Month", "Requested By", "Notes", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
+          <tr>
+            <th className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)] w-8">
+              <input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={pending.length === 0} />
+            </th>
+            {["Branch", "Employee Code", "Name", "Department", "Requested", "Month", "Requested By", "Notes", "Actions"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
+          </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {pending.length === 0
-            ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No advances awaiting approval.</td></tr>
+            ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No advances awaiting approval.</td></tr>
             : pending.map(a => (
               <tr key={a.id} className="hover:bg-slate-50">
+                <td className="px-4 py-3"><input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleOne(a.id)} /></td>
                 <td className="px-4 py-3">{a.branch || "—"}</td>
                 <td className="px-4 py-3">{a.employee_code}</td>
                 <td className="px-4 py-3 font-medium">{a.employee_name}</td>
@@ -550,7 +673,7 @@ function BulkRequestTab({ employees, advances, actorName, reload, setMsg, setErr
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>Submitted {summary.imported} of {summary.total} requests. {summary.failed > 0 && `${summary.failed} failed.`}</span>
             {summary.imported > 0 && (
-              <Button variant="outline" onClick={() => onPrintBatch(new Date().toISOString().slice(0, 10))} className="rounded-xl text-xs py-1 px-3 bg-white">
+              <Button variant="outline" onClick={() => { const d = new Date().toISOString().slice(0, 10); onPrintBatch({ from: d, to: d }); }} className="rounded-xl text-xs py-1 px-3 bg-white">
                 🖨️ Print Combined Slip for this Batch
               </Button>
             )}
@@ -823,7 +946,7 @@ export default function Advances({ role, actorName }) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [printingAdvance, setPrintingAdvance] = useState(null);
-  const [printingBatchDate, setPrintingBatchDate] = useState(null);
+  const [printingBatchRange, setPrintingBatchRange] = useState(null); // { from, to }
 
   const canRequest = ["Master", "HR"].includes(role);
   const canApprove = ["Master", "Finance"].includes(role);
@@ -836,12 +959,12 @@ export default function Advances({ role, actorName }) {
   // disappears again once the browser's print dialog closes -- same pattern
   // as LoanManagement.jsx's approval slip.
   useEffect(() => {
-    if (!printingAdvance && !printingBatchDate) return;
+    if (!printingAdvance && !printingBatchRange) return;
     const t = setTimeout(() => window.print(), 50);
-    const clear = () => { setPrintingAdvance(null); setPrintingBatchDate(null); };
+    const clear = () => { setPrintingAdvance(null); setPrintingBatchRange(null); };
     window.addEventListener("afterprint", clear);
     return () => { clearTimeout(t); window.removeEventListener("afterprint", clear); };
-  }, [printingAdvance, printingBatchDate]);
+  }, [printingAdvance, printingBatchRange]);
 
   async function load() {
     try {
@@ -852,7 +975,15 @@ export default function Advances({ role, actorName }) {
 
   const visibleTabs = TABS.filter(([k]) => (k !== "pending" || canApprove) && (k !== "bulk" || canRequest) && (k !== "import" || canImport));
 
-  const batchRows = printingBatchDate ? advances.filter(a => (a.created_at || "").slice(0, 10) === printingBatchDate) : [];
+  const batchRows = useMemo(() => {
+    if (!printingBatchRange) return [];
+    const from = printingBatchRange.from <= printingBatchRange.to ? printingBatchRange.from : printingBatchRange.to;
+    const to = printingBatchRange.from <= printingBatchRange.to ? printingBatchRange.to : printingBatchRange.from;
+    return advances.filter(a => {
+      const d = (a.created_at || "").slice(0, 10);
+      return d && d >= from && d <= to;
+    });
+  }, [advances, printingBatchRange]);
 
   return (
     <>
@@ -876,14 +1007,14 @@ export default function Advances({ role, actorName }) {
       {tab === "all" && (
         <AllAdvancesTab advances={advances} employees={employees} role={role} actorName={actorName || role}
           canRequest={canRequest} canApprove={canApprove} reload={load} setMsg={setMsg} setErr={setErr}
-          onPrint={setPrintingAdvance} onPrintBatch={setPrintingBatchDate} />
+          onPrint={setPrintingAdvance} onPrintBatch={setPrintingBatchRange} />
       )}
       {tab === "pending" && canApprove && (
         <PendingApprovalTab advances={advances} actorName={actorName || role} role={role} reload={load} setMsg={setMsg} setErr={setErr} />
       )}
       {tab === "bulk" && canRequest && (
         <BulkRequestTab employees={employees} advances={advances} actorName={actorName || role} reload={load} setMsg={setMsg} setErr={setErr}
-          onPrintBatch={setPrintingBatchDate} />
+          onPrintBatch={setPrintingBatchRange} />
       )}
       {tab === "import" && canImport && (
         <ImportHistoricalTab employees={employees} reload={load} setMsg={setMsg} setErr={setErr} />
@@ -927,9 +1058,11 @@ export default function Advances({ role, actorName }) {
           matches the chosen date on one page with a single signature block,
           instead of printing one slip per employee (the whole point of a
           bulk upload's paper trail: one sheet for the batch, not N). */}
-      {printingBatchDate && (
+      {printingBatchRange && (
         <div className="hidden print:block p-8 text-sm text-black">
-          <h1 className="text-lg font-bold mb-1">Advance Requests — {printingBatchDate}</h1>
+          <h1 className="text-lg font-bold mb-1">
+            Advance Requests — {printingBatchRange.from === printingBatchRange.to ? printingBatchRange.from : `${printingBatchRange.from} to ${printingBatchRange.to}`}
+          </h1>
           <p className="text-xs text-slate-500 mb-6">{batchRows.length} record{batchRows.length === 1 ? "" : "s"} · Printed {new Date().toLocaleString()}</p>
           <table className="w-full text-xs mb-8 border-collapse">
             <thead>

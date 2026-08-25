@@ -130,31 +130,42 @@ export async function rejectAdvance({ id, reason, actedBy, actorRole, employeeNa
   }
 }
 
-export async function issueAdvance({ id, approvedAmount, issuedAmount, issuedBy, employeeName, actorRole }) {
+// issuedAmount is always the new running total (not a top-up delta) -- this
+// also covers issuing the remaining balance on an already-partially-issued
+// advance, so previousIssuedAmount guards against accidentally lowering an
+// amount that was already handed to the employee.
+export async function issueAdvance({ id, approvedAmount, issuedAmount, previousIssuedAmount, issuedBy, employeeName, actorRole }) {
   const appAmt = Number(approvedAmount);
   const issAmt = Number(issuedAmount);
+  const prevAmt = Number(previousIssuedAmount || 0);
   if (!(issAmt > 0)) throw new Error("Issued amount must be greater than zero.");
   if (issAmt > appAmt) throw new Error(`Issued amount cannot exceed approved amount of ${money(appAmt)}.`);
+  if (issAmt < prevAmt) throw new Error(`Issued amount cannot be less than the ${money(prevAmt)} already issued.`);
+  const topUp = issAmt - prevAmt;
 
   const { error } = await supabase.from("advances").update({
     status: "Issued", issued_amount: issAmt, issued_by: issuedBy, issued_at: new Date().toISOString(),
   }).eq("id", id);
   if (error) throw error;
 
+  const detail = prevAmt > 0
+    ? `Additional ${money(topUp)} issued to ${employeeName} (total now ${money(issAmt)})`
+    : `Advance of ${money(issAmt)} issued to ${employeeName}`;
+
   await supabase.from("audit_logs").insert({
     action: "advance_issued", entity: "advances", entity_id: id, performed_by: issuedBy,
-    details: `Advance of ${money(issAmt)} issued to ${employeeName}`, created_at: new Date().toISOString(),
+    details: detail, created_at: new Date().toISOString(),
   }).then(() => {}, () => {});
 
   await notify({
     recipientRole: "HR", type: "advance_issued", link: "loans",
     title: "Advance Issued",
-    message: `Advance issued to ${employeeName} — ${money(issAmt)}.`,
+    message: `${detail}.`,
   });
   if (actorRole !== "Finance") {
     await notify({
       recipientRole: "Finance", type: "advance_decision", link: "loans",
-      title: "Advance Issued", message: `${issuedBy} issued an advance of ${money(issAmt)} to ${employeeName}.`,
+      title: "Advance Issued", message: `${issuedBy} — ${detail}.`,
     });
   }
 }
