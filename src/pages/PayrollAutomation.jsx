@@ -653,15 +653,29 @@ export default function PayrollAutomation({ role, actorName }) {
     // A Resigned employee who hasn't been through Final Settlement yet
     // still belongs here as normal, so their partial-month attendance keeps
     // accruing correctly until they are.
+    // An employee whose joining_date is after this month's last day hasn't
+    // started yet -- without this filter they showed up in the payroll
+    // Draft anyway (zero attendance rows, since they don't exist yet), and
+    // with nothing to mark them absent (see the gap-fill below, which only
+    // fills days *within* an employee's employment span) they were paid a
+    // full month's salary before their first day of work.
     const [{ data: activeEmps }, { data: resignedEmps }, { data: lns }, { data: settled }] = await Promise.all([
-      supabase.from("employees").select("*").eq("status", "Active"),
+      supabase.from("employees").select("*").eq("status", "Active").lte("joining_date", toDate),
       supabase.from("employees").select("*").eq("status", "Resigned")
         .gte("last_working_day", fromDate).lte("last_working_day", toDate),
       supabase.from("loans").select("*").eq("status", "Active"),
       supabase.from("final_settlements").select("employee_code"),
     ]);
     const settledCodes = new Set((settled || []).map(s => s.employee_code));
-    setEmployees([...(activeEmps || []), ...(resignedEmps || [])].filter(e => !settledCodes.has(e.employee_code)));
+    // A resigned employee whose joining_date is AFTER their own
+    // last_working_day is a stale/rehire record -- last_working_day belongs
+    // to a prior stint, not the one joining_date describes, so it doesn't
+    // mean "left partway through this month". Including them here paid a
+    // full month's salary for a month they were never actually employed in
+    // (confirmed: employee 3082, joining_date 2026-08-03 vs. last_working_day
+    // 2026-07-31 -- zero attendance all of July because he hadn't joined yet).
+    const validResignedEmps = (resignedEmps || []).filter(e => !(e.joining_date && e.joining_date > e.last_working_day));
+    setEmployees([...(activeEmps || []), ...validResignedEmps].filter(e => !settledCodes.has(e.employee_code)));
     setLoans(lns || []);
   }
 
@@ -944,19 +958,44 @@ export default function PayrollAutomation({ role, actorName }) {
         otherEarnings: oneTimeAdj.otherEarnings || 0,
         otherDeductions: oneTimeAdj.otherDeductions || 0,
       };
-      // Resigned mid-month: attendance already carries real Absent/Weekly
-      // Off rows for every day after last_working_day in the normal case,
-      // so absentDeduction (dailyRate * absentDays) already prorates this
-      // employee correctly via attByEmp above -- adding to absentDays again
-      // here would double-deduct. Only fill days that have NO attendance
-      // row at all (e.g. a ZKT export outage swallowed them), as a safety
-      // net so a genuine gap doesn't silently pay out in full instead.
-      if (emp.status === "Resigned" && emp.last_working_day >= fromDate && emp.last_working_day <= toDate) {
+      // Attendance normally carries a real Present/Absent/Weekly Off row for
+      // every day of an employee's employment span within the month, so
+      // absentDeduction (dailyRate * absentDays) already prorates a
+      // mid-month join or resignation correctly via attByEmp above --
+      // adding to absentDays again here would double-deduct. This only
+      // fills days *inside that span* that have NO attendance row at all
+      // (e.g. a ZKT export outage swallowed them, or attendance generation
+      // never ran for this employee), as a safety net so a genuine gap
+      // doesn't silently pay out in full instead.
+      //
+      // Confirmed against employee 3082, July 2026: Resigned with
+      // last_working_day 2026-07-31 but zero attendance rows for the whole
+      // month (not just after departure) -- the old version only scanned
+      // days *after* last_working_day, so with last_working_day on the
+      // final day of the month that range was empty and 0 attendance rows
+      // paid out as a full month with no absence at all. Now scans the
+      // employee's whole in-month span, and runs for every employee (not
+      // just Resigned) so an Active employee whose attendance simply never
+      // generated for the month gets the same safety net.
+      {
         const daysInMonth = new Date(y, m, 0).getDate();
-        const lastDayOfMonth = Number(emp.last_working_day.slice(8, 10));
+        const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+        const monthEnd = `${y}-${String(m).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+        // Only trust joining_date as the span's start if it actually falls
+        // in this month -- a stale/inconsistent joining_date from a later
+        // rehire (after this month, or after the employee's own
+        // last_working_day) means "this employee started this month" is
+        // false, and using it would zero out the very gap this is meant to
+        // catch.
+        const startDay = (emp.joining_date && emp.joining_date >= monthStart && emp.joining_date <= monthEnd)
+          ? Number(emp.joining_date.slice(8, 10))
+          : 1;
+        const lastDayOfMonth = (emp.status === "Resigned" && emp.last_working_day >= fromDate && emp.last_working_day <= toDate)
+          ? Number(emp.last_working_day.slice(8, 10))
+          : daysInMonth;
         const trackedDates = attDatesByEmp[emp.employee_code] || new Set();
         let missingDays = 0;
-        for (let d = lastDayOfMonth + 1; d <= daysInMonth; d++) {
+        for (let d = startDay; d <= lastDayOfMonth; d++) {
           const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
           if (!trackedDates.has(dateStr)) missingDays++;
         }
