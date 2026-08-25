@@ -157,17 +157,20 @@ function RowActions({ a, canApprove, canEditRequest, actorName, role, onChanged,
       </div>
     </div>
   );
-  if (mode === "issue") return (
-    <div className="flex flex-col gap-1 min-w-[160px]">
-      <input type="number" min={a.issued_amount || 0} max={a.approved_amount} value={amount} onChange={e => setAmount(e.target.value)}
-        placeholder={`Max ${money(a.approved_amount)}`} className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
-      {Number(a.issued_amount) > 0 && <p className="text-[10px] text-slate-400">{money(a.issued_amount)} already given — enter the new running total, not just the top-up.</p>}
-      <div className="flex gap-1">
-        <Button onClick={doIssue} disabled={busy} className="rounded-lg text-xs py-1 px-2">Confirm</Button>
-        <Button variant="outline" onClick={() => setMode(null)} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
+  if (mode === "issue") {
+    const remaining = Number(a.approved_amount || 0) - Number(a.issued_amount || 0);
+    return (
+      <div className="flex flex-col gap-1 min-w-[160px]">
+        <input type="number" min="0" max={remaining} value={amount} onChange={e => setAmount(e.target.value)}
+          placeholder={`Max ${money(remaining)}`} className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+        {Number(a.issued_amount) > 0 && <p className="text-[10px] text-slate-400">{money(a.issued_amount)} already given — this is the additional amount to issue now.</p>}
+        <div className="flex gap-1">
+          <Button onClick={doIssue} disabled={busy} className="rounded-lg text-xs py-1 px-2">Confirm</Button>
+          <Button variant="outline" onClick={() => setMode(null)} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
   if (mode === "reject") return (
     <div className="flex flex-col gap-1 min-w-[160px]">
       <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Reason (required)…"
@@ -199,7 +202,7 @@ function RowActions({ a, canApprove, canEditRequest, actorName, role, onChanged,
   if (a.status === "Issued" && canApprove) {
     const remaining = Number(a.approved_amount || 0) - Number(a.issued_amount || 0);
     if (remaining > 0) return (
-      <Button onClick={() => { setMode("issue"); setAmount(a.approved_amount); }} className="rounded-lg text-xs py-1 px-2">
+      <Button onClick={() => { setMode("issue"); setAmount(remaining); }} className="rounded-lg text-xs py-1 px-2">
         Issue Remaining ({money(remaining)})
       </Button>
     );

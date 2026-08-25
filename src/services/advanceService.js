@@ -130,18 +130,17 @@ export async function rejectAdvance({ id, reason, actedBy, actorRole, employeeNa
   }
 }
 
-// issuedAmount is always the new running total (not a top-up delta) -- this
-// also covers issuing the remaining balance on an already-partially-issued
-// advance, so previousIssuedAmount guards against accidentally lowering an
-// amount that was already handed to the employee.
+// issuedAmount is the amount being handed over right now (a top-up on top of
+// whatever was already issued), not the new running total -- this covers
+// issuing the remaining balance on an already-partially-issued advance,
+// where the new total is computed here as previous + this top-up.
 export async function issueAdvance({ id, approvedAmount, issuedAmount, previousIssuedAmount, issuedBy, employeeName, actorRole }) {
   const appAmt = Number(approvedAmount);
-  const issAmt = Number(issuedAmount);
+  const topUp = Number(issuedAmount);
   const prevAmt = Number(previousIssuedAmount || 0);
-  if (!(issAmt > 0)) throw new Error("Issued amount must be greater than zero.");
-  if (issAmt > appAmt) throw new Error(`Issued amount cannot exceed approved amount of ${money(appAmt)}.`);
-  if (issAmt < prevAmt) throw new Error(`Issued amount cannot be less than the ${money(prevAmt)} already issued.`);
-  const topUp = issAmt - prevAmt;
+  if (!(topUp > 0)) throw new Error("Issued amount must be greater than zero.");
+  const issAmt = prevAmt + topUp;
+  if (issAmt > appAmt) throw new Error(`Issued amount cannot exceed the remaining approved balance of ${money(appAmt - prevAmt)}.`);
 
   const { error } = await supabase.from("advances").update({
     status: "Issued", issued_amount: issAmt, issued_by: issuedBy, issued_at: new Date().toISOString(),
