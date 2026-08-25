@@ -176,6 +176,19 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // earn a bonus. A block only earns EWD past the quota if it contains a real
 // Gazetted Holiday actually worked, since that's compensable independent of
 // the personal weekly-off quota.
+//
+// "Already received" counts a forgiven lone absence (getWeeklyOffOverrideKeys)
+// the same as a real Weekly Off -- both are an unpaid rest day the employee
+// didn't have to work, so both draw from the same quota. And the quota is
+// consumed progressively as EWD blocks are credited within the same run, not
+// just compared against the pre-existing real-Weekly-Off count -- otherwise
+// two zero-rest blocks in the same month could each independently pass a
+// static "not yet at quota" check and both get credited, blowing past what
+// the remaining quota room actually allows. Confirmed against employee 2082,
+// July 2026: 2 real Weekly Offs + 1 forgiven lone absence already used 3 of
+// the 4-day quota, leaving room for exactly 1 more EWD -- it was earning 2
+// because the gate only ever compared against the static real-Weekly-Off
+// count (2), never the forgiven day, and never advanced between blocks.
 // Returns a Set of block keys: one entry per block earned, `${blockStartDate}`
 // (no employeeKey) or `${employee_code}|${blockStartDate}` (with
 // employeeKey) -- there's no single "the" date to credit, so count
@@ -185,14 +198,37 @@ export function getFullyWorkedBlockKeys(rows, opts = {}) {
   const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
 
-  const blockKeys = new Set();
-  Object.values(weeks).forEach((week) => {
-    if (!week.isFullBlock || week.hasRealWeeklyOff || week.hasLeave || week.hasAnyAbsent) return;
+  // Forgiven lone absences count toward the same quota as real Weekly Offs
+  // (see comment above) -- tallied per employee from the same override set
+  // getWeeklyOffOverrideKeys returns, so the two functions can never disagree
+  // on how many rest days an employee has already been granted this month.
+  const forgivenCount = {};
+  getWeeklyOffOverrideKeys(rows, opts).forEach((key) => {
+    const empPart = key.includes("|") ? key.slice(0, key.lastIndexOf("|") + 1) : "";
+    forgivenCount[empPart] = (forgivenCount[empPart] || 0) + 1;
+  });
+  const runningCount = { ...monthlyWeeklyOffCount };
+  Object.keys(forgivenCount).forEach((k) => { runningCount[k] = (runningCount[k] || 0) + forgivenCount[k]; });
+
+  const candidates = Object.values(weeks).filter((week) => {
+    if (!week.isFullBlock || week.hasRealWeeklyOff || week.hasLeave || week.hasAnyAbsent) return false;
     if (rangeStart || rangeEnd) {
-      if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
+      if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return false;
     }
-    const monthlyWeeklyOffs = monthlyWeeklyOffCount[week.empPart] || 0;
-    if (monthlyWeeklyOffs >= MONTHLY_WEEKLY_OFF_QUOTA && !week.hasWorkedGazettedHoliday) return;
+    return true;
+  });
+  // Earliest block first, so once the running count hits quota the earlier
+  // zero-rest blocks are the ones credited and later ones fall out, rather
+  // than depending on Object.values() insertion order.
+  candidates.sort((a, b) => a.blockStart - b.blockStart);
+
+  const blockKeys = new Set();
+  candidates.forEach((week) => {
+    const used = runningCount[week.empPart] || 0;
+    if (used >= MONTHLY_WEEKLY_OFF_QUOTA && !week.hasWorkedGazettedHoliday) return;
+    // A worked Gazetted Holiday is compensable independent of the quota, so
+    // crediting it never consumes a slot other blocks are still competing for.
+    if (!week.hasWorkedGazettedHoliday) runningCount[week.empPart] = used + 1;
     blockKeys.add(`${week.empPart}${fmtDate(week.blockStart)}`);
   });
   return blockKeys;
