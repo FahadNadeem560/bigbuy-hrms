@@ -27,7 +27,7 @@ export default function Attendance({ rows, role, branchFilter, employees }) {
         ))}
       </div>
 
-      {mainTab === "records"     && <AttendanceRecords rows={rows} employees={employees} branchFilter={branchFilter} />}
+      {mainTab === "records"     && <AttendanceRecords rows={rows} employees={employees} branchFilter={branchFilter} role={role} />}
       {mainTab === "timesheet"   && <Timesheet branchFilter={branchFilter} role={role} />}
       {mainTab === "adjustments" && <AttendanceAdjustment role={role} />}
       {mainTab === "missing"     && <MissingPunch role={role} />}

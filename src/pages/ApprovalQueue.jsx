@@ -294,6 +294,90 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
   }
 
   // ── Attendance correction actions (single-stage: Master/GM approve or reject) ──
+
+  // A manual day-status change (Present -> Leave / Weekly Off / Absent), queued
+  // from the Timesheet ledger or Attendance > Records via
+  // submitAttendanceStatusChange. Applied to the live row here on approval,
+  // mirroring the instant-apply logic those pages used to run inline, then
+  // locked so the next ZKT re-sync can't overwrite it. Payroll picks it up on
+  // its next Refresh.
+  async function applyStatusChange(item) {
+    const target = item.adjusted_status;
+    const reason = item.reason || "";
+    const by = item.adjusted_by || "HR";
+    const { data: existing } = await supabase.from("attendance").select("id, required_hours")
+      .eq("employee_code", item.employee_code).eq("attendance_date", item.attendance_date).maybeSingle();
+
+    let update;
+    if (target === "Weekly Off") {
+      update = {
+        attendance_status: "Weekly Off", is_weekly_off: true,
+        required_hours: 0, short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
+        needs_review: false, exception_reason: null,
+        review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
+        adjustment_status: `Weekly Off (approved): ${reason}`, adjustment_approved_by: role,
+      };
+    } else if (target === "Absent") {
+      update = {
+        attendance_status: "Absent",
+        worked_hours: 0, actual_hours: 0, short_hours: Number(existing?.required_hours || 0),
+        late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
+        needs_review: false, exception_reason: null,
+        review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
+        adjustment_status: `Absent (approved): ${reason}`, adjustment_approved_by: role,
+      };
+    } else if (target === "Leave") {
+      update = {
+        attendance_status: "Leave", status: "Leave",
+        check_in: null, check_out: null, first_check_in: null, last_check_out: null,
+        worked_hours: 0, actual_hours: 0, short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
+        needs_review: false, exception_reason: null,
+        review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
+        adjustment_status: `Leave (approved): ${reason}`, adjustment_approved_by: role,
+      };
+    } else { // "Present" — revert an override: unlock and let the classifier recompute from punches
+      update = {
+        review_status: "Calculated", is_manual_entry: false,
+        adjustment_status: `Reverted to Present (approved): ${reason}`, adjustment_approved_by: role,
+      };
+    }
+
+    let rowId = existing?.id || null;
+    if (existing) {
+      await supabase.from("attendance").update(update).eq("id", existing.id);
+    } else {
+      const { data: inserted } = await supabase.from("attendance").insert({
+        employee_code: item.employee_code, work_date: item.attendance_date, attendance_date: item.attendance_date,
+        ...update,
+      }).select("id").single();
+      rowId = inserted?.id || null;
+    }
+    if (target === "Present" && rowId) {
+      await supabase.rpc("reclassify_attendance_row", { p_attendance_id: rowId });
+    }
+
+    // Leave must also count against the employee's leave balance — LeaveManagement
+    // only sums Approved leave_requests, it never reads attendance_status='Leave'.
+    if (target === "Leave") {
+      const emp = empMap[item.employee_code];
+      const now = new Date().toISOString();
+      const { data: lr } = await supabase.from("leave_requests").insert({
+        employee_id: item.employee_code, employee_code: item.employee_code,
+        employee_name: emp?.full_name || item.employee_code, leave_type: "Annual",
+        from_date: item.attendance_date, to_date: item.attendance_date, days: 1,
+        reason: `Marked as Leave (approved attendance change). ${reason}`,
+        applied_date: item.attendance_date, status: "Approved",
+        approved_by: role, approved_at: now,
+        approval_trail: [{ level: null, approver: role, action: "Approved (attendance change)", timestamp: now }],
+      }).select().single();
+      if (lr) {
+        await supabase.from("leave_approvals").insert({
+          leave_request_id: lr.id, stage: "Attendance Change", actor_role: role, actor_name: actorName || role, action: "Approved",
+        }).then(() => {});
+      }
+    }
+  }
+
   async function approveAttCorr(id) {
     const item = attCorrs.find(a => a.id === id);
     if (!item) return;
@@ -302,6 +386,15 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
     await supabase.from("attendance_adjustments").update({
       status: "Approved", approved_by: role, approved_at: now,
     }).eq("id", id);
+
+    // Status change vs. time correction — different apply logic.
+    if (item.adjusted_status) {
+      await applyStatusChange(item);
+      await notify(item.adjusted_by, "attendance_adjustment", "Attendance Change Approved",
+        `${role} approved the ${item.adjusted_status} change for ${item.employee_code} on ${item.attendance_date}.`);
+      setMsg(`Attendance change approved and applied (${item.adjusted_status}).`); loadAll();
+      return;
+    }
 
     // Apply the corrected times to the live attendance record — mirrors the
     // instant-apply logic on the Attendance Adjustments page, just gated
@@ -590,22 +683,27 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Date","Orig In","Orig Out","Adj In","Adj Out","Reason","Stage","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
+                {["Employee","Date","Change","Orig In","Orig Out","Adj In","Adj Out","Reason","Stage","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {pendingCorr.length === 0
-                ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No pending attendance corrections.</td></tr>
+                ? <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No pending attendance corrections.</td></tr>
                 : pendingCorr.map(a => (
                   <tr key={a.id}>
                     <td className="px-4 py-3"><RowCheckbox id={a.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canActAttendance} /></td>
                     <td className="px-4 py-3"><EmployeeCell code={a.employee_code} name={empMap[a.employee_code]?.full_name} empMap={empMap} /></td>
                     <td className="px-4 py-3">{a.attendance_date}</td>
-                    <td className="px-4 py-3">{formatAdjTime(a.original_check_in)}</td>
-                    <td className="px-4 py-3">{formatAdjTime(a.original_check_out)}</td>
-                    <td className="px-4 py-3 text-emerald-700">{formatAdjTime(a.adjusted_check_in)}</td>
-                    <td className="px-4 py-3 text-emerald-700">{formatAdjTime(a.adjusted_check_out)}</td>
-                    <td className="px-4 py-3 max-w-[120px] truncate">{a.reason || "—"}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {a.adjusted_status
+                        ? <span className="text-xs"><span className="text-slate-400">{a.original_status || "—"}</span> <span className="text-slate-300">→</span> <Badge tone={a.adjusted_status === "Absent" ? "red" : a.adjusted_status === "Leave" ? "yellow" : a.adjusted_status === "Weekly Off" ? "purple" : "green"}>{a.adjusted_status}</Badge></span>
+                        : <span className="text-xs text-slate-400">Time</span>}
+                    </td>
+                    <td className="px-4 py-3">{a.adjusted_status ? "—" : formatAdjTime(a.original_check_in)}</td>
+                    <td className="px-4 py-3">{a.adjusted_status ? "—" : formatAdjTime(a.original_check_out)}</td>
+                    <td className="px-4 py-3 text-emerald-700">{a.adjusted_status ? "—" : formatAdjTime(a.adjusted_check_in)}</td>
+                    <td className="px-4 py-3 text-emerald-700">{a.adjusted_status ? "—" : formatAdjTime(a.adjusted_check_out)}</td>
+                    <td className="px-4 py-3 max-w-[120px] truncate" title={a.reason || ""}>{a.reason || "—"}</td>
                     <td className="px-4 py-3"><StageBadge status={a.status} /></td>
                     <td className="px-4 py-3">
                       <ApproveRejectBtns
