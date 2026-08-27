@@ -8,10 +8,16 @@ export function getPolicyForLevel(level) {
 // Company policy: every employee gets one unpaid day off per week, taken
 // Mon-Fri only (Sat/Sun are working days at this business, not eligible as
 // an off day). Rather than relying on a pre-generated roster (which isn't
-// kept current — see attendance_pipeline_gotchas), a "week"'s single Mon-Fri
-// Absent day is treated as that week's off day instead of a real absence.
-// Weeks with zero or more than one such Absent day are left as-is since the
-// intended off day is ambiguous.
+// kept current — see attendance_pipeline_gotchas), one Mon-Fri Absent day
+// per "week" is treated as that week's off day instead of a real absence.
+// A week with several weekday Absent days still yields exactly ONE forgiven
+// off day (its earliest) -- the employee is entitled to that rest day even
+// in a bad week; the rest stay real, deducted absences. A week yields none
+// if it has zero weekday Absent days, or if the employee did not work a
+// single day in it (a rest day is rest *from work* -- a zero-work week is
+// just an absent week). The month-wide total is capped at
+// MONTHLY_WEEKLY_OFF_QUOTA (below), counting real roster Weekly Off days
+// already taken.
 //
 // "Week" here is a fixed calendar block within the month -- 1-7, 8-14,
 // 15-21, 22-28, 29-end -- not a Monday-Sunday week. Blocks are pinned to the
@@ -66,8 +72,24 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     const weekKey = `${empPart}${fmtDate(blockStart)}`;
     const week = (weeks[weekKey] ||= {
       absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasWorkedGazettedHoliday: false,
+      hasWorkedDay: false,
       blockStart, blockEnd, empPart, isFullBlock,
     });
+    // A weekly off is a rest day *from work* -- track whether the employee
+    // actually worked at least one day in this block (a real punch, or a
+    // manual working-status entry). getWeeklyOffOverrideKeys only forgives an
+    // absence in a block where this is true: a week with zero work isn't a
+    // week they were owed a rest day, it's just an absent week, and forgiving
+    // one day of it would pay a rest day to someone who never showed up
+    // (confirmed July 2026: chronic no-shows and barely-present mid-month
+    // joiners would each pick up 1-4 free days otherwise).
+    if (
+      row[checkInKey] || row[checkOutKey] ||
+      status === "Present" || status === "Late" || status === "Half Day" ||
+      status === "HalfDay" || status === "Short Hours" || status === "Early Out"
+    ) {
+      week.hasWorkedDay = true;
+    }
     // Real "Weekly Off" rows (roster-driven) count toward every day of the
     // block, not just Mon-Fri, so a genuine off day on any day still blocks
     // the override below -- without this, a block that already has its real
@@ -109,10 +131,13 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
   const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
 
-  // Candidate blocks: no real Weekly Off of their own, and exactly one lone
-  // Mon-Fri no-show that could be read as this block's rest day.
+  // Candidate blocks: no real Weekly Off of their own, and at least one lone
+  // Mon-Fri no-show that could be read as this block's rest day. A block with
+  // multiple weekday no-shows still qualifies -- it yields one forgiven rest
+  // day (the earliest, picked in the loop below), not zero; the block's
+  // other no-shows remain real, deducted absences.
   const candidates = Object.values(weeks).filter((week) => {
-    if (week.hasRealWeeklyOff || week.absentRows.length !== 1) return false;
+    if (week.hasRealWeeklyOff || week.absentRows.length < 1 || !week.hasWorkedDay) return false;
     // Callers scope `rows` to a fixed query window (a payroll month, a
     // timesheet range, a settlement period). Fixed calendar blocks can't
     // cross a month boundary, but a caller's window can still start or end
@@ -126,18 +151,17 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
     return true;
   });
 
-  // Same MONTHLY_WEEKLY_OFF_QUOTA that gates the EWD bonus in
-  // getFullyWorkedBlockKeys also gates this forgiveness -- without it, an
-  // employee who already took their full 4 real Weekly Offs elsewhere in
-  // the month could still get every further lone absence forgiven too, one
-  // per block, with no cap at all (confirmed against employee 1815, July
-  // 2026: 4 real Thursday-off days already used, and a 5th lone Wednesday
-  // absence in the trailing block was still forgiven -- 5 unpaid rest days
-  // in one month with zero deduction). Earliest block first, so once an
-  // employee is out of quota room the earlier lone absences are forgiven
-  // and later ones fall back to a real, deducted Absent -- rather than
-  // every candidate in the month racing for the same remaining slots in
-  // Object.values() insertion order.
+  // MONTHLY_WEEKLY_OFF_QUOTA caps how many rest days an employee can be
+  // granted in a month, counting real roster Weekly Off days already taken
+  // (monthlyWeeklyOffCount) plus every day forgiven here -- one per block.
+  // Without the cap an employee who already took 4 real Weekly Offs could
+  // still get a further absence forgiven in every remaining block (confirmed
+  // against employee 1815, July 2026: 4 real Thursday-off days already used,
+  // plus a 5th forgiven Wednesday absence -- 5 unpaid rest days, zero
+  // deduction). Earliest block first, and within a block the earliest
+  // no-show, so quota is spent front-to-back: once an employee is out of
+  // room the later blocks fall back to real, deducted Absents rather than
+  // racing for the remaining slots in Object.values() insertion order.
   candidates.sort((a, b) => a.blockStart - b.blockStart);
 
   const runningCount = { ...monthlyWeeklyOffCount };
@@ -146,7 +170,10 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
     const used = runningCount[week.empPart] || 0;
     if (used >= MONTHLY_WEEKLY_OFF_QUOTA) return;
     runningCount[week.empPart] = used + 1;
-    const row = week.absentRows[0];
+    // One forgiven day per block -- the earliest weekday no-show in it.
+    const row = [...week.absentRows].sort(
+      (a, b) => String(a[dateKey]).localeCompare(String(b[dateKey]))
+    )[0];
     overrideKeys.add(`${week.empPart}${row[dateKey]}`);
   });
   return overrideKeys;
@@ -177,7 +204,7 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // Gazetted Holiday actually worked, since that's compensable independent of
 // the personal weekly-off quota.
 //
-// "Already received" counts a forgiven lone absence (getWeeklyOffOverrideKeys)
+// "Already received" counts a forgiven absence (getWeeklyOffOverrideKeys)
 // the same as a real Weekly Off -- both are an unpaid rest day the employee
 // didn't have to work, so both draw from the same quota. And the quota is
 // consumed progressively as EWD blocks are credited within the same run, not
@@ -185,7 +212,7 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // two zero-rest blocks in the same month could each independently pass a
 // static "not yet at quota" check and both get credited, blowing past what
 // the remaining quota room actually allows. Confirmed against employee 2082,
-// July 2026: 2 real Weekly Offs + 1 forgiven lone absence already used 3 of
+// July 2026: 2 real Weekly Offs + 1 forgiven absence already used 3 of
 // the 4-day quota, leaving room for exactly 1 more EWD -- it was earning 2
 // because the gate only ever compared against the static real-Weekly-Off
 // count (2), never the forgiven day, and never advanced between blocks.
