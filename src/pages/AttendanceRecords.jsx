@@ -40,7 +40,13 @@ const COUNT_TONE = {
 };
 
 // A worked day can be re-flagged to one of these.
-const CHANGE_TARGETS = ["Weekly Off", "Leave", "Absent"];
+// What a given day can be re-flagged to, by its current bucket.
+const TARGETS_FROM = {
+  "Present":  ["Weekly Off", "Leave", "Absent"],
+  "Half Day": ["Present", "Weekly Off", "Leave", "Absent"],
+  "Absent":   ["Present", "Weekly Off", "Leave"],
+};
+const CHANGEABLE_BUCKETS = Object.keys(TARGETS_FROM);
 
 function currentMonthKey() {
   const d = new Date();
@@ -53,6 +59,7 @@ function ChangeModal({ ctx, onClose, onSubmitted }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   if (!ctx) return null;
+  const options = TARGETS_FROM[ctx.bucket] || [];
 
   async function submit() {
     if (!target) { setErr("Pick what to change the day to."); return; }
@@ -60,7 +67,7 @@ function ChangeModal({ ctx, onClose, onSubmitted }) {
     setBusy(true); setErr("");
     const res = await submitAttendanceStatusChange({
       employeeCode: ctx.empCode, date: ctx.date,
-      originalStatus: ctx.originalStatus || "Present", adjustedStatus: target,
+      originalStatus: ctx.originalStatus || ctx.bucket, adjustedStatus: target,
       reason, actor: ctx.actor,
     });
     setBusy(false);
@@ -74,11 +81,11 @@ function ChangeModal({ ctx, onClose, onSubmitted }) {
       <div className="bg-white rounded-2xl p-6 shadow-xl w-full max-w-md">
         <h3 className="font-bold text-slate-800">Change {ctx.dateLabel} — {ctx.name}</h3>
         <p className="text-xs text-slate-400 mt-1 mb-4">
-          Currently <span className="font-medium text-slate-600">Present</span>. This is submitted to the Approval Queue
+          Currently <span className="font-medium text-slate-600">{ctx.bucket}</span>. This is submitted to the Approval Queue
           (Attendance Corrections); it only updates the record and payroll after Master/GM approval.
         </p>
-        <div className="flex gap-2 mb-4">
-          {CHANGE_TARGETS.map(t => (
+        <div className="flex flex-wrap gap-2 mb-4">
+          {options.map(t => (
             <button key={t} onClick={() => setTarget(t)}
               className={`px-3 py-1.5 rounded-xl text-sm border transition ${target === t ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`}>
               {t}
@@ -214,7 +221,7 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
     <div>
       <PageTitle
         title="Attendance Records"
-        subtitle="Employee-wise monthly register. Click a Present day to request a change — it routes through the Approval Queue."
+        subtitle="Employee-wise monthly register. Click a day (Present / Absent / Half Day) to request a change — it routes through the Approval Queue."
         action={<Button className="rounded-2xl" onClick={exportCsv} disabled={registerRows.length === 0}>Export</Button>}
       />
 
@@ -294,7 +301,7 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
                 <td className="px-4 py-3 border-b border-slate-100">
                   <div className="flex flex-wrap gap-1.5">
                     {days.map(d => {
-                      const clickable = canRequest && d.bucket === "Present" && !d.pendingTo;
+                      const clickable = canRequest && CHANGEABLE_BUCKETS.includes(d.bucket) && !d.pendingTo;
                       return (
                         <span
                           key={d.n}
@@ -302,7 +309,7 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
                           tabIndex={clickable ? 0 : undefined}
                           onClick={clickable ? () => setChangeCtx({
                             empCode: emp.id, name: emp.name || emp.id, date: d.date, dateLabel: d.label,
-                            originalStatus: d.raw || "Present", actor: role,
+                            bucket: d.bucket, originalStatus: d.raw || d.bucket, actor: role,
                           }) : undefined}
                           title={d.pendingTo ? `Pending approval: change to ${d.pendingTo}` : (clickable ? "Click to request a change" : (d.bucket || "No record"))}
                           className={`relative w-[62px] shrink-0 rounded-md border px-1 py-1 text-center leading-tight ${CHIP_CLASS[d.bucket]} ${clickable ? "cursor-pointer hover:ring-2 hover:ring-slate-300" : ""} ${d.pendingTo ? "ring-2 ring-amber-400" : ""}`}

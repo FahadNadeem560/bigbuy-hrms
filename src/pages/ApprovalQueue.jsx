@@ -305,7 +305,7 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
     const target = item.adjusted_status;
     const reason = item.reason || "";
     const by = item.adjusted_by || "HR";
-    const { data: existing } = await supabase.from("attendance").select("id, required_hours")
+    const { data: existing } = await supabase.from("attendance").select("id, required_hours, check_in, check_out")
       .eq("employee_code", item.employee_code).eq("attendance_date", item.attendance_date).maybeSingle();
 
     let update;
@@ -335,11 +335,23 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
         review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
         adjustment_status: `Leave (approved): ${reason}`, adjustment_approved_by: role,
       };
-    } else { // "Present" — revert an override: unlock and let the classifier recompute from punches
-      update = {
-        review_status: "Calculated", is_manual_entry: false,
-        adjustment_status: `Reverted to Present (approved): ${reason}`, adjustment_approved_by: role,
-      };
+    } else { // "Present" — the day was worked (misclassified Absent, or a manual entry)
+      const hasPunch = !!(existing?.check_in || existing?.check_out);
+      update = hasPunch
+        // real punches exist: unlock and let the server classifier recompute from them
+        ? {
+            review_status: "Calculated", is_manual_entry: false,
+            adjustment_status: `Marked Present (approved): ${reason}`, adjustment_approved_by: role,
+          }
+        // no punches: HR is asserting a full worked day — set it manually, full hours
+        : {
+            attendance_status: "Present", status: "Present",
+            worked_hours: Number(existing?.required_hours || 0), actual_hours: Number(existing?.required_hours || 0),
+            short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
+            is_weekly_off: false, needs_review: false, exception_reason: null,
+            review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
+            adjustment_status: `Marked Present (approved): ${reason}`, adjustment_approved_by: role,
+          };
     }
 
     let rowId = existing?.id || null;
@@ -352,7 +364,9 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
       }).select("id").single();
       rowId = inserted?.id || null;
     }
-    if (target === "Present" && rowId) {
+    // Only reclassify when we handed the row back to the classifier (Present
+    // with real punches) — a manual full-day Present must stay as set.
+    if (target === "Present" && rowId && !update.is_manual_entry) {
       await supabase.rpc("reclassify_attendance_row", { p_attendance_id: rowId });
     }
 

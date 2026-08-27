@@ -126,6 +126,7 @@ function AdjustTimeModal({ row, form, setForm, onSubmit, onClose, submitting }) 
 }
 
 const OVERRIDE_BLURB = {
+  "Present": "Flags this day as a full worked day (misclassified, or a manual entry).",
   "Absent": "Flags this worked day to become Absent (full-day deduction).",
   "Weekly Off": "Flags this day to become Weekly Off — excluded from short/late/OT and absence counts.",
   "Leave": "Flags this day to become Leave — one day is deducted from the employee's leave balance on approval.",
@@ -924,6 +925,9 @@ export default function Timesheet({ branchFilter, role }) {
                                 <span className="block mt-1 text-[10px] text-amber-600 print:hidden">Change pending approval</span>
                               ) : (
                                 <span className="block mt-1 space-x-2 print:hidden">
+                                  {["Absent", "Half Day"].includes(status) && (
+                                    <button onClick={() => openOverrideModal(row, "Present")} className="text-[10px] text-sky-600 underline">Present</button>
+                                  )}
                                   <button onClick={() => openOverrideModal(row, "Weekly Off")} className="text-[10px] text-purple-600 underline">Weekly Off</button>
                                   <button onClick={() => openOverrideModal(row, "Leave")} className="text-[10px] text-blue-600 underline">Leave</button>
                                   {status !== "Absent" && (
