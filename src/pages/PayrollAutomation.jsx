@@ -706,6 +706,7 @@ export default function PayrollAutomation({ role, actorName }) {
       const { data, error } = await supabase.from("payroll").select("*")
         .eq("payroll_month", month)
         .order("employee_code", { ascending: true })
+        .order("id", { ascending: true }) // unique tie-break — see fetchAllAttendanceForMonth
         .range(from, from + pageSize - 1);
       if (error) break;
       all = all.concat(data || []);
@@ -730,8 +731,19 @@ export default function PayrollAutomation({ role, actorName }) {
   // didn't fit in the first page, undercounting their present/absent days
   // and worked hours (confirmed: employee 1169 showed 139 worked hours in
   // payroll vs. a real 290.28 in the Timesheet/DB). Page through with
-  // .range() until a page comes back short, same pattern already used in
-  // attendanceService.js's fetchRecentAttendance for exactly this reason.
+  // .range() until a page comes back short.
+  //
+  // The ORDER BY *must* be unique across the whole result set: ~268 rows
+  // share every work_date value, so ordering by work_date alone leaves the
+  // ~268 rows for a given date in an arbitrary order that Postgres does not
+  // keep stable between the separate paginated requests. Any page boundary
+  // landing inside a date (every boundary does, at ~268/day) then drops or
+  // duplicates rows — an employee loses a day (missing-day safety net docks
+  // a phantom absent) or gains one (inflated worked hours / present_days,
+  // seen as high as 32 on a 31-day month). Tie-break on the uuid PK so the
+  // order is total and identical on every page fetch. Confirmed against
+  // July 2026: ~150 of 276 payroll rows had a worked-hours / absent-day
+  // count that didn't reconcile with the (unchanged) attendance rows.
   async function fetchAllAttendanceForMonth(fromDate, toDate) {
     const pageSize = 1000;
     let all = [];
@@ -740,6 +752,7 @@ export default function PayrollAutomation({ role, actorName }) {
       const { data, error } = await supabase.from("attendance").select("*")
         .gte("work_date", fromDate).lte("work_date", toDate)
         .order("work_date", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, from + pageSize - 1);
       if (error) throw error;
       all = all.concat(data || []);

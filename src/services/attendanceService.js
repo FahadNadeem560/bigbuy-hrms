@@ -15,7 +15,13 @@ async function fetchAttendancePage(from, to) {
     ({ data, error } = await supabase
       .from("attendance")
       .select(ATTENDANCE_COLUMNS)
+      // work_date is far from unique (~one row per employee per day), and
+      // these pages are fetched concurrently as separate queries -- without
+      // a unique tie-break Postgres won't order the rows sharing a date the
+      // same way twice, so page boundaries silently drop or duplicate rows.
+      // Tie-break on the PK. See PayrollAutomation.fetchAllAttendanceForMonth.
       .order("work_date", { ascending: false })
+      .order("id", { ascending: false })
       .range(from, to));
 
     if (!error) break;
