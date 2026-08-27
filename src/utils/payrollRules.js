@@ -1,5 +1,14 @@
 import { STAFF_LEVEL_POLICIES, LOAN_POLICY } from "../config/staffPolicies";
 
+// Company policy (2026-08): overtime and the Management "Short Hours"
+// deduction are both computed from the month's NET position (total worked
+// vs total required), and neither counts at all until that net reaches this
+// many hours -- routine daily drift of a few minutes either side of a shift
+// shouldn't accumulate into a payable/deductible amount. OT past the
+// threshold is additionally paid rounded DOWN to the nearest half hour (see
+// buildPayrollRows, which applies both).
+export const OT_SHORT_MIN_HOURS = 3;
+
 const DEFAULT_TAX_SLABS = [
   { min_amount: 0,       max_amount: 600000,    base_tax: 0,      rate_percentage: 0  },
   { min_amount: 600001,  max_amount: 1200000,   base_tax: 0,      rate_percentage: 5  },
@@ -117,13 +126,21 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const latePenaltyUnits = isExempt ? 0 : Math.floor(Number(adjustments.lateCount || 0) / latePenaltyCount);
   const latePenaltyDays  = latePenaltyUnits * Number(policy.latePenaltyDays || 0);
   const lateDeduction     = isExempt ? 0 : Math.round(dailyRate * latePenaltyDays);
-  // Management/Admin has no half-day/late variance rules -- days that fall
-  // short of required hours are marked "Short Hours" instead, which never
-  // used to cost anything. shortHourFractionalDays (Σ short_hours/required_
-  // hours across the month's Short Hours days, from buildPayrollRows) turns
-  // that into a proportional day-rate deduction, same leave-offset-first
-  // treatment as absents/half days.
-  const shortHourDeduction = isExempt ? 0 : Math.round(dailyRate * Number(adjustments.shortHourFractionalDays || 0));
+  // Management/Admin has no half-day/late variance rules -- days short of
+  // the required hours are marked "Short Hours" instead. Amount = the
+  // proportional day-rate cost of those short days (shortHourFractionalDays
+  // = Σ short_hours/required across them, from buildPayrollRows). GATE: only
+  // charged once the month's NET shortfall (required - worked, all days)
+  // reaches OT_SHORT_MIN_HOURS -- so days run over genuinely offset short
+  // days, and a Management employee a few minutes under across scattered
+  // days isn't docked. buildPayrollRows passes netShortHours (0 unless the
+  // net shortfall is past the threshold). shortHourFractionalDays is 0 for
+  // non-Management (they never get "Short Hours" days), so no level check is
+  // needed here. Leave-offset-first like absents/half days.
+  const shortPastThreshold = Number(adjustments.netShortHours || 0) >= OT_SHORT_MIN_HOURS;
+  const shortHourDeduction = (isExempt || !shortPastThreshold)
+    ? 0
+    : Math.round(dailyRate * Number(adjustments.shortHourFractionalDays || 0));
   const halfDayDeduction  = isExempt ? 0 : (adjustments.halfDays !== undefined
     ? Math.round((dailyRate / 2) * Number(adjustments.halfDays || 0))
     : Number(adjustments.halfDayDeduction || 0));

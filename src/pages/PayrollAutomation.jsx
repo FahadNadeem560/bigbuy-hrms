@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { calculatePayrollForEmployee, getWorkingDaysInMonth } from "../utils/payrollRules.js";
+import { calculatePayrollForEmployee, getWorkingDaysInMonth, OT_SHORT_MIN_HOURS } from "../utils/payrollRules.js";
 import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys } from "../utils/attendanceRules.js";
 import { calcRemainingLeaveBalance } from "../utils/leaveBalance.js";
 import * as XLSX from "xlsx";
@@ -831,7 +831,7 @@ export default function PayrollAutomation({ role, actorName }) {
       if (!attByEmp[c]) attByEmp[c] = {
         presentDays: 0, absentDays: 0, halfDays: 0, weeklyOffDays: 0,
         lateCount: 0, otHours: 0, extraWorkingDays: 0, leaveDaysUsed: 0, numberOfWorkingDays,
-        workedHours: 0, requiredHours: 0, shortHourFractionalDays: 0,
+        workedHours: 0, requiredHours: 0, shortHourFractionalDays: 0, netShortHours: 0,
       };
       const isOverriddenOff = weeklyOffOverrides.has(`${c}|${a.work_date}`);
       const s = isOverriddenOff ? "Weekly Off" : (a.attendance_status || a.status || "");
@@ -840,12 +840,16 @@ export default function PayrollAutomation({ role, actorName }) {
       else if (s === "Half Day" || s === "HalfDay") { attByEmp[c].presentDays++; attByEmp[c].halfDays++; }
       else if (s === "Leave") { attByEmp[c].leaveDaysUsed++; }
       else {
+        // Present / Late / Early Out / Short Hours (Management) all count as
+        // a worked day here.
         attByEmp[c].presentDays++;
         // Management/Admin has no half-day/late rules -- a day short of its
         // required hours is "Short Hours" instead, tracked as a fractional
-        // day (short_hours / that day's required_hours) so payrollRules.js
-        // can turn the month's total into a proportional deduction, offset
-        // against leave first like absents/half days (see buildPayrollRows).
+        // day (short_hours / that day's required_hours). payrollRules.js
+        // turns the month's total into a proportional deduction -- but only
+        // when the month's NET shortfall (see netShortHours below) clears
+        // OT_SHORT_MIN_HOURS, so scattered sub-threshold short days and days
+        // run over cancel out instead of every stray minute being docked.
         if (s === "Short Hours" && Number(a.required_hours || 0) > 0) {
           attByEmp[c].shortHourFractionalDays += Number(a.short_hours || 0) / Number(a.required_hours);
         }
@@ -876,16 +880,24 @@ export default function PayrollAutomation({ role, actorName }) {
       if (attByEmp[code]) attByEmp[code].extraWorkingDays++;
     });
 
-    // OT is the month's NET excess (total worked - total required), not a
-    // sum of each day's individual positive overage -- summing daily
-    // overages paid OT for good days while separately docking short days,
-    // even when the employee finished the month behind overall. Confirmed
-    // against the old system's own numbers (employee 1169, July 2026:
-    // required 297 / worked 290.03 / OT 0 -- net short, so no OT despite
-    // most individual days running ~15-30 min over their own daily
-    // requirement).
+    // OT is the month's NET excess (total worked - total required), never a
+    // sum of each day's positive overage -- that paid OT for good days while
+    // short days were docked separately even when the month finished behind
+    // overall (employee 1169, July 2026: required 297 / worked 290 / OT 0).
+    // Company policy (2026-08): the net must reach OT_SHORT_MIN_HOURS before
+    // any OT is payable, and OT is then paid rounded DOWN to the nearest
+    // half hour -- routine few-minute daily drift shouldn't accumulate.
+    // netShortHours is the mirror on the deduction side: the month's net
+    // shortfall, but only once past the same threshold. It's a GATE, not the
+    // charged amount -- payrollRules still sizes the Management "Short Hours"
+    // deduction from shortHourFractionalDays (the per-day model), it just
+    // suppresses it entirely until the net shortfall clears the threshold.
+    // (A net *shortfall* for OT-eligible staff needs nothing here -- it's
+    // already covered by their Late / Half Day / absent lines.)
     Object.values(attByEmp).forEach(a => {
-      a.otHours = Math.max(0, roundN(a.workedHours - a.requiredHours, 2));
+      const net = roundN(a.workedHours - a.requiredHours, 2);
+      a.otHours = net >= OT_SHORT_MIN_HOURS ? Math.floor(net * 2) / 2 : 0;
+      a.netShortHours = net <= -OT_SHORT_MIN_HOURS ? roundN(-net, 2) : 0;
     });
 
     // Aggregate fines/shortages/advances per employee
@@ -1035,10 +1047,15 @@ export default function PayrollAutomation({ role, actorName }) {
         // Pre-join unpaid days (mid-month joiner) are excluded here -- they're
         // an unworked-period proration, not a leave-coverable absence, so
         // they must not drain the employee's leave balance.
+        // Short-hour days only count toward the leave offset when payroll
+        // actually charges them (net shortfall past OT_SHORT_MIN_HOURS) --
+        // otherwise a sub-threshold fractional-day total would drain leave
+        // for a deduction that was never made.
+        const shortDeductibleDays = Number(adj.netShortHours || 0) >= OT_SHORT_MIN_HOURS
+          ? Number(adj.shortHourFractionalDays || 0) : 0;
         const deductibleDays =
           Number(adj.absentDays || 0) - Number(adj.preJoinUnpaidDays || 0) +
-          Number(adj.halfDays || 0) * 0.5 +
-          Number(adj.shortHourFractionalDays || 0);
+          Number(adj.halfDays || 0) * 0.5 + shortDeductibleDays;
 
         // Always clear out a prior run's auto-adjustment row for this exact
         // month before recomputing -- Refresh Payroll can be clicked
