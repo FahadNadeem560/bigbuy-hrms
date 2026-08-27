@@ -100,7 +100,14 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   // biometric device) has no real "Present" rows at all, so without this
   // check every unpunched day docks a full day's pay instead of the
   // exemption meaning what it says.
-  const absentDeduction = isExempt ? 0 : Math.round(dailyRate * Number(adjustments.absentDays || 0));
+  // Capped at 30 days: dailyRate is Salary/30, so 30 absent-equivalent days
+  // is already a whole month's pay. Anything beyond that (e.g. someone who
+  // joined on the last day of a 31-day month -- 30 pre-join days plus an
+  // in-span no-show) would otherwise deduct MORE than they earn and drive
+  // net pay negative. The floor is "worked nothing, paid nothing", not
+  // "worked nothing, owes the company".
+  const absentDaysCharged = Math.min(30, Number(adjustments.absentDays || 0));
+  const absentDeduction = isExempt ? 0 : Math.round(dailyRate * absentDaysCharged);
 
   // Timing deductions skipped for exempt employees. Deduction scales with
   // lateness: every latePenaltyCount late days deducts another

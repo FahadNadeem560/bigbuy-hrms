@@ -961,12 +961,14 @@ export default function PayrollAutomation({ role, actorName }) {
       // Attendance normally carries a real Present/Absent/Weekly Off row for
       // every day of an employee's employment span within the month, so
       // absentDeduction (dailyRate * absentDays) already prorates a
-      // mid-month join or resignation correctly via attByEmp above --
-      // adding to absentDays again here would double-deduct. This only
-      // fills days *inside that span* that have NO attendance row at all
-      // (e.g. a ZKT export outage swallowed them, or attendance generation
-      // never ran for this employee), as a safety net so a genuine gap
-      // doesn't silently pay out in full instead.
+      // mid-month resignation correctly via attByEmp above -- adding to
+      // absentDays again here would double-deduct. This block does two
+      // things: (1) fills days *inside that span* that have NO attendance row
+      // at all (e.g. a ZKT export outage swallowed them, or attendance
+      // generation never ran), as a safety net so a genuine gap doesn't
+      // silently pay out in full; (2) charges the pre-join portion of the
+      // month for a mid-month joiner, which attendance never generates rows
+      // for at all (see below).
       //
       // Confirmed against employee 3082, July 2026: Resigned with
       // last_working_day 2026-07-31 but zero attendance rows for the whole
@@ -999,7 +1001,26 @@ export default function PayrollAutomation({ role, actorName }) {
           const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
           if (!trackedDates.has(dateStr)) missingDays++;
         }
-        adj.absentDays = Number(adj.absentDays || 0) + missingDays;
+
+        // A genuine mid-month joiner is not paid for the part of the month
+        // before they joined. Attendance only generates rows from the join
+        // date onward, and the scan above deliberately starts at startDay, so
+        // without this those pre-join calendar days are neither attended nor
+        // deducted -- a full month's salary pays out for a partial month
+        // (confirmed: July 2026 had ~30 mid-month joiners each drawing
+        // near-full salary, e.g. an employee who joined on the 31st taking
+        // 38,667 of 40,000). Charged as unpaid days at the daily rate, same
+        // salary/30 model as any other non-worked day. Guarded on "no
+        // attendance row" so a rehire whose joining_date is a stale later
+        // value but who actually worked earlier in the month (those days have
+        // real rows) is not charged for days they were genuinely present.
+        let preJoinUnpaidDays = 0;
+        for (let d = 1; d < startDay; d++) {
+          const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          if (!trackedDates.has(dateStr)) preJoinUnpaidDays++;
+        }
+        adj.preJoinUnpaidDays = preJoinUnpaidDays;
+        adj.absentDays = Number(adj.absentDays || 0) + missingDays + preJoinUnpaidDays;
       }
 
       // Leave-first offset: Management staff's short hours/half days/
@@ -1011,8 +1032,11 @@ export default function PayrollAutomation({ role, actorName }) {
       // nothing left to offset and this would otherwise drain a real leave
       // balance for a deduction that was never actually charged.
       if (emp.staff_level === "Management" && !emp.is_attendance_exempt) {
+        // Pre-join unpaid days (mid-month joiner) are excluded here -- they're
+        // an unworked-period proration, not a leave-coverable absence, so
+        // they must not drain the employee's leave balance.
         const deductibleDays =
-          Number(adj.absentDays || 0) +
+          Number(adj.absentDays || 0) - Number(adj.preJoinUnpaidDays || 0) +
           Number(adj.halfDays || 0) * 0.5 +
           Number(adj.shortHourFractionalDays || 0);
 
