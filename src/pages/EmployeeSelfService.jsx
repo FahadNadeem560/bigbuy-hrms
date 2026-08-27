@@ -5,6 +5,8 @@ import NotificationBell from "../components/NotificationBell.jsx";
 import { signOut } from "../services/authService.js";
 import { approveLeaveStage, rejectLeaveStage, normalizeStage, routeInitialApprover, notifyInitialApprover } from "../services/leaveApprovalService.js";
 import { confirmVerification, flagEmployeeForHR } from "../services/payrollControlService.js";
+import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
+import { OT_SHORT_MIN_HOURS } from "../utils/payrollRules.js";
 
 const BASE_TABS = [
   { id: "attendance",  label: "My Attendance",  icon: "⏱️" },
@@ -24,9 +26,8 @@ function fmtDatePlusOneDay(dateStr) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const SHORT_TOLERANCE = 1.5;
-const OT_TOLERANCE = 1.5;
 const LATE_WARNING_COUNT = 2;
+const EXEMPT_REQUIRED_HOURS_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave", "Absent"];
 
 const LEAVE_TYPES = ["Annual Leave", "Half Day", "Emergency Leave", "Maternity Leave", "Paternity Leave", "Unpaid Leave"];
 
@@ -233,17 +234,40 @@ export default function EmployeeSelfService({ profile: authProfile }) {
     return { totalLateCount, totalLateMins, deductibleLates };
   }, [attendance]);
 
+  // OT / short hours mirror payroll (payrollRules.js OT_SHORT_MIN_HOURS):
+  // both driven by the NET position (worked - required, excluding Weekly
+  // Off / Absent / Leave / Gazetted), and neither counts until |net|
+  // reaches the threshold -- OT then paid rounded DOWN to the nearest half
+  // hour. This is a rolling last-30-days estimate, not the payroll month.
+  const netHours = useMemo(() => {
+    let worked = 0, required = 0;
+    for (const r of attendance) {
+      worked += Number(r.actual_hours ?? r.hours_worked ?? r.worked_hours ?? 0);
+      const st = r.attendance_status || r.status;
+      if (!EXEMPT_REQUIRED_HOURS_STATUSES.includes(st)) required += Number(r.required_hours || 0);
+    }
+    return Math.round((worked - required) * 100) / 100;
+  }, [attendance]);
+
+  const isOtEligible = useMemo(() => {
+    if (profile?.ot_eligible != null) return !!profile.ot_eligible;
+    const policy = STAFF_LEVEL_POLICIES[profile?.staff_level || session?.staff_level];
+    return policy ? !!policy.overtimeEligible : false;
+  }, [profile, session]);
+
   const shortSummary = useMemo(() => {
     const totalShort = Math.round(attendance.reduce((s, r) => s + Number(r.short_hours || 0), 0) * 100) / 100;
-    const deductibleShort = Math.round(Math.max(0, totalShort - SHORT_TOLERANCE) * 100) / 100;
+    const isManagement = (profile?.staff_level || session?.staff_level) === "Management";
+    const deductibleShort = (isManagement && netHours <= -OT_SHORT_MIN_HOURS)
+      ? Math.round(-netHours * 100) / 100 : 0;
     return { totalShort, deductibleShort };
-  }, [attendance]);
+  }, [attendance, netHours, profile, session]);
 
   const otSummary = useMemo(() => {
     const totalOT = Math.round(attendance.reduce((s, r) => s + Number(r.ot_hours || r.overtime_hours || 0), 0) * 100) / 100;
-    const payableOT = Math.round(Math.max(0, totalOT - OT_TOLERANCE) * 100) / 100;
+    const payableOT = (isOtEligible && netHours >= OT_SHORT_MIN_HOURS) ? Math.floor(netHours * 2) / 2 : 0;
     return { totalOT, payableOT };
-  }, [attendance]);
+  }, [attendance, netHours, isOtEligible]);
 
   // A leave request can be actioned here if it's still on the legacy fixed
   // chain's first stage (any listed supervisor could act, matching the old
@@ -527,8 +551,8 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                         <span className="font-semibold">{shortSummary.totalShort} hrs</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-400 text-xs">Tolerance</span>
-                        <span className="text-slate-400 text-xs">{SHORT_TOLERANCE} hrs</span>
+                        <span className="text-slate-400 text-xs">Net Threshold</span>
+                        <span className="text-slate-400 text-xs">{OT_SHORT_MIN_HOURS} hrs</span>
                       </div>
                       <div className="h-px bg-slate-100" />
                       <div className="flex justify-between font-semibold">
@@ -550,8 +574,8 @@ export default function EmployeeSelfService({ profile: authProfile }) {
                         <span className="font-semibold">{otSummary.totalOT} hrs</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-400 text-xs">Tolerance</span>
-                        <span className="text-slate-400 text-xs">{OT_TOLERANCE} hrs</span>
+                        <span className="text-slate-400 text-xs">Net Threshold</span>
+                        <span className="text-slate-400 text-xs">{OT_SHORT_MIN_HOURS} hrs</span>
                       </div>
                       <div className="h-px bg-slate-100" />
                       <div className="flex justify-between font-semibold">

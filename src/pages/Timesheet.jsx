@@ -6,9 +6,8 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
 import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys } from "../utils/attendanceRules.js";
+import { OT_SHORT_MIN_HOURS } from "../utils/payrollRules.js";
 
-const SHORT_TOLERANCE = 1.5;
-const OT_TOLERANCE = 1.5;
 const LATE_WARNING_COUNT = 2;
 const ADJ_TONE = { "Pending Approval": "yellow", "Approved": "green", "Rejected": "red" };
 const DB_FIELD_MAP = {
@@ -612,24 +611,6 @@ export default function Timesheet({ branchFilter, role }) {
     return { totalLateCount, totalLateMins, deductibleLates };
   }, [ledger]);
 
-  const shortSummary = useMemo(() => {
-    const totalShort = fmt2(ledger.reduce((s, r) => s + Number(r.short_hours || r.short_hour || 0), 0));
-    const deductibleShort = fmt2(Math.max(0, totalShort - SHORT_TOLERANCE));
-    return { totalShort, deductibleShort };
-  }, [ledger]);
-
-  const otSummary = useMemo(() => {
-    const totalOT = fmt2(ledger.reduce((s, r) => s + Number(r.ot_hours || r.overtime_hours || 0), 0));
-    const payableOT = isOtEligible ? fmt2(Math.max(0, totalOT - OT_TOLERANCE)) : 0;
-    return { totalOT, payableOT };
-  }, [ledger, isOtEligible]);
-
-  // See getFullyWorkedBlockKeys in attendanceRules.js -- a block worked
-  // straight through with no rest at all (no real Weekly Off, no Leave, no
-  // forgiven Absent), matching what payroll now pays for instead of
-  // trusting attendance.extra_day_eligible's roster-driven flag.
-  const extraWorkingDaysCount = ledger.extraWorkingDaysCount || 0;
-
   const totalWorkedHours = useMemo(() => {
     return fmt2(ledger.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
   }, [ledger]);
@@ -649,6 +630,37 @@ export default function Timesheet({ branchFilter, role }) {
     const totalRequired = ledger.reduce((sum, row) => sum + rowRequiredHours(row, policy), 0);
     return { totalRequired: fmt2(totalRequired), variance: fmt2(totalWorkedHours - totalRequired) };
   }, [selectedEmp, ledger, totalWorkedHours]);
+
+  // OT and short hours mirror payroll (payrollRules.js OT_SHORT_MIN_HOURS,
+  // PayrollAutomation.jsx buildPayrollRows): both are driven by the month's
+  // NET position (worked - required = requiredHoursSummary.variance), and
+  // neither counts until |net| reaches the threshold. Past it, OT is paid
+  // rounded DOWN to the nearest half hour; the Management "Short Hours"
+  // deduction kicks in (payroll sizes it from the per-day short total --
+  // shown here as the net shortfall, close enough for a timesheet estimate,
+  // and only for Management since operational staff's short days are
+  // handled as Late / Half Day / Early Out). totalShort / totalOT are the
+  // raw daily-column sums, kept for reference but not what's paid/docked.
+  const shortSummary = useMemo(() => {
+    const totalShort = fmt2(ledger.reduce((s, r) => s + Number(r.short_hours || r.short_hour || 0), 0));
+    const net = Number(requiredHoursSummary.variance || 0);
+    const isManagement = selectedEmp?.staff_level === "Management";
+    const deductibleShort = (isManagement && net <= -OT_SHORT_MIN_HOURS) ? fmt2(-net) : 0;
+    return { totalShort, deductibleShort };
+  }, [ledger, requiredHoursSummary, selectedEmp]);
+
+  const otSummary = useMemo(() => {
+    const totalOT = fmt2(ledger.reduce((s, r) => s + Number(r.ot_hours || r.overtime_hours || 0), 0));
+    const net = Number(requiredHoursSummary.variance || 0);
+    const payableOT = (isOtEligible && net >= OT_SHORT_MIN_HOURS) ? Math.floor(net * 2) / 2 : 0;
+    return { totalOT, payableOT };
+  }, [ledger, isOtEligible, requiredHoursSummary]);
+
+  // See getFullyWorkedBlockKeys in attendanceRules.js -- a block worked
+  // straight through with no rest at all (no real Weekly Off, no Leave, no
+  // forgiven Absent), matching what payroll now pays for instead of
+  // trusting attendance.extra_day_eligible's roster-driven flag.
+  const extraWorkingDaysCount = ledger.extraWorkingDaysCount || 0;
 
   function exportExcel() {
     if (!selectedEmp) return;
@@ -685,12 +697,12 @@ export default function Timesheet({ branchFilter, role }) {
       {},
       { Date: "--- SHORT HOURS SUMMARY ---" },
       { Date: "Monthly Short Hours", Day: hoursToHHMM(shortSummary.totalShort) },
-      { Date: "Tolerance", Day: hoursToHHMM(SHORT_TOLERANCE) },
+      { Date: "Net Threshold", Day: hoursToHHMM(OT_SHORT_MIN_HOURS) },
       { Date: "Deductible Short Hours", Day: hoursToHHMM(shortSummary.deductibleShort) },
       {},
       { Date: "--- OT SUMMARY ---" },
       { Date: "Monthly OT", Day: hoursToHHMM(otSummary.totalOT) },
-      { Date: "Tolerance", Day: hoursToHHMM(OT_TOLERANCE) },
+      { Date: "Net Threshold", Day: hoursToHHMM(OT_SHORT_MIN_HOURS) },
       { Date: "OT Eligible", Day: isOtEligible ? "Yes" : "No" },
       { Date: "Payable OT", Day: hoursToHHMM(otSummary.payableOT) },
     ];
@@ -1111,8 +1123,8 @@ export default function Timesheet({ branchFilter, role }) {
                   <span className="font-semibold">{hoursToHHMM(shortSummary.totalShort)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">Tolerance</span>
-                  <span className="text-slate-400">{hoursToHHMM(SHORT_TOLERANCE)}</span>
+                  <span className="text-slate-500">Net Threshold</span>
+                  <span className="text-slate-400">{hoursToHHMM(OT_SHORT_MIN_HOURS)}</span>
                 </div>
                 <div className="h-px bg-slate-100" />
                 <div className="flex items-center justify-between text-sm font-semibold">
@@ -1136,8 +1148,8 @@ export default function Timesheet({ branchFilter, role }) {
                   <span className="font-semibold">{hoursToHHMM(otSummary.totalOT)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">Tolerance</span>
-                  <span className="text-slate-400">{hoursToHHMM(OT_TOLERANCE)}</span>
+                  <span className="text-slate-500">Net Threshold</span>
+                  <span className="text-slate-400">{hoursToHHMM(OT_SHORT_MIN_HOURS)}</span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-500">OT Eligible</span>
