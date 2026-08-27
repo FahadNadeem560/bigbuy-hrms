@@ -11,7 +11,7 @@ import { submitAttendanceStatusChange, fetchPendingStatusChanges } from "../serv
 // Master/GM approval. Same mechanism the Timesheet ledger uses.
 
 const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const EMP_PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, "All"];
 
 const BUCKETS = ["Present", "Off Day", "Leave", "Absent", "Half Day"];
 function toBucket(status) {
@@ -115,6 +115,7 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
   const [designation, setDesignation] = useState("All");
   const [onlyWithAbsence, setOnlyWithAbsence] = useState(false);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [pending, setPending] = useState([]); // pending attendance_adjustments (status changes) for the month
   const [changeCtx, setChangeCtx] = useState(null);
   const [notice, setNotice] = useState("");
@@ -197,9 +198,10 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
       .sort((a, b) => String(a.emp.name || a.emp.id).localeCompare(String(b.emp.name || b.emp.id)));
   }, [employees, statusByEmpDate, dayList, search, effectiveBranch, designation, onlyWithAbsence, pendingByKey]);
 
-  const pageCount = Math.max(1, Math.ceil(registerRows.length / EMP_PAGE_SIZE));
+  const perPage = pageSize === "All" ? Math.max(1, registerRows.length) : pageSize;
+  const pageCount = Math.max(1, Math.ceil(registerRows.length / perPage));
   const safePage = Math.min(page, pageCount);
-  const pagedRows = registerRows.slice((safePage - 1) * EMP_PAGE_SIZE, safePage * EMP_PAGE_SIZE);
+  const pagedRows = registerRows.slice((safePage - 1) * perPage, safePage * perPage);
 
   function onFilterChange(setter) {
     return (value) => { setter(value); setPage(1); };
@@ -264,6 +266,14 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
           {registerRows.length} employee{registerRows.length === 1 ? "" : "s"} · {totalAbsent} absent day{totalAbsent === 1 ? "" : "s"}
           {pending.length > 0 ? ` · ${pending.length} change${pending.length === 1 ? "" : "s"} awaiting approval` : ""}
         </span>
+        <label className="flex items-center gap-1.5 text-slate-500">
+          Rows per page
+          <select value={String(pageSize)}
+            onChange={e => onFilterChange(setPageSize)(e.target.value === "All" ? "All" : Number(e.target.value))}
+            className="rounded-lg border border-slate-200 px-2 py-1 text-xs">
+            {PAGE_SIZE_OPTIONS.map(o => <option key={o} value={String(o)}>{o === "All" ? `All (${registerRows.length})` : o}</option>)}
+          </select>
+        </label>
         {BUCKETS.map(b => (
           <span key={b} className="inline-flex items-center gap-1.5 text-slate-500">
             <span className={`inline-block h-3 w-3 rounded border ${CHIP_CLASS[b]}`} />{b}
@@ -341,7 +351,7 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
         <div className="mt-3 flex items-center justify-between text-sm">
           <Button variant="outline" className="rounded-xl" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Previous</Button>
           <span className="text-slate-500">
-            Page {safePage} of {pageCount} · {(safePage - 1) * EMP_PAGE_SIZE + 1}–{(safePage - 1) * EMP_PAGE_SIZE + pagedRows.length} of {registerRows.length}
+            Page {safePage} of {pageCount} · {(safePage - 1) * perPage + 1}–{(safePage - 1) * perPage + pagedRows.length} of {registerRows.length}
           </span>
           <Button variant="outline" className="rounded-xl" disabled={safePage >= pageCount} onClick={() => setPage(p => Math.min(pageCount, p + 1))}>Next</Button>
         </div>
