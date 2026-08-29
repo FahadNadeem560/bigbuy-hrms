@@ -275,6 +275,27 @@ function SummaryPanel({ month, displayRows }) {
 // ── Payroll Comparison Summary (branch cards, current vs previous month) ──
 function num(v) { return Math.round(Number(v || 0)).toLocaleString(); }
 
+// A loan only deducts from a payroll month that falls on or after the month
+// its repayment starts (loans.start_date), and only for repayment_months
+// installments from there. Guards against a loan disbursed this month (or
+// future-dated) deducting from an earlier month that gets refreshed, and
+// against deducting forever past the agreed term.
+function loanInstallmentDue(loan, payrollMonth) {
+  if (!loan) return false;
+  const startMonth = String(loan.start_date || "").slice(0, 7)
+    || String(loan.disbursed_at || loan.granted_date || loan.loan_date || loan.created_at || "").slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(startMonth)) return true; // no usable start — behave as before
+  if (payrollMonth < startMonth) return false;
+  const term = Number(loan.repayment_months || 0);
+  if (term > 0) {
+    const [sy, sm] = startMonth.split("-").map(Number);
+    const [py, pm] = payrollMonth.split("-").map(Number);
+    const monthsIn = (py * 12 + pm) - (sy * 12 + sm); // 0 on the start month
+    if (monthsIn >= term) return false;
+  }
+  return true;
+}
+
 function prevMonthOf(m) {
   const [y, mo] = String(m || "").split("-").map(Number);
   if (!y || !mo) return m;
@@ -768,13 +789,20 @@ export default function PayrollAutomation({ role, actorName }) {
     const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
     const numberOfWorkingDays = getWorkingDaysInMonth(y, m);
 
+    // Standing Permissions exemptions. classify_attendance_day already keeps a
+    // Half Day / Late off an exempt employee's day, but a row classified
+    // before the flag was set can still carry the old status -- these sets are
+    // the payroll-side backstop so the deduction is dropped regardless.
+    const lateExemptCodes = new Set((employees || []).filter(e => e.late_exempt).map(e => e.employee_code));
+    const halfDayExemptCodes = new Set((employees || []).filter(e => e.half_day_exempt).map(e => e.employee_code));
+
     const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }, { data: taxSlabsData }, { data: taxSettingsData }, { data: leaveBalanceRows }, { data: approvedLeaveRequests }] = await Promise.all([
       fetchAllAttendanceForMonth(fromDate, toDate),
       supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("advances").select("*").eq("advance_month", month).in("status", ["Issued", "Deducted"]),
       supabase.from("one_time_adjustments").select("*").eq("payroll_month", month).eq("status", "Approved"),
-      supabase.from("staff_eligibility_groups").select("code, extra_days_eligible, late_penalty_after_count, late_penalty_days"),
+      supabase.from("staff_eligibility_groups").select("code, extra_days_eligible, overtime_eligible, late_penalty_after_count, late_penalty_days"),
       // Approved Skip Month requests for this month -- exclude these loans'
       // deduction below (LoanManagement.jsx's Skip Month / Approval Queue).
       supabase.from("loan_changes").select("loan_id").eq("change_type", "relief").eq("status", "Approved").eq("effective_month", month),
@@ -850,7 +878,11 @@ export default function PayrollAutomation({ role, actorName }) {
       const s = isOverriddenOff ? "Weekly Off" : (a.attendance_status || a.status || "");
       if (s === "Absent") { attByEmp[c].absentDays++; }
       else if (s === "Weekly Off") { attByEmp[c].weeklyOffDays++; }
-      else if (s === "Half Day" || s === "HalfDay") { attByEmp[c].presentDays++; attByEmp[c].halfDays++; }
+      else if (s === "Half Day" || s === "HalfDay") {
+        attByEmp[c].presentDays++;
+        // Half-day-exempt: counts as a worked day, never docked.
+        if (!halfDayExemptCodes.has(c)) attByEmp[c].halfDays++;
+      }
       else if (s === "Leave") { attByEmp[c].leaveDaysUsed++; }
       else {
         // Present / Late / Early Out / Short Hours (Management) all count as
@@ -867,7 +899,8 @@ export default function PayrollAutomation({ role, actorName }) {
           attByEmp[c].shortHourFractionalDays += Number(a.short_hours || 0) / Number(a.required_hours);
         }
       }
-      if (Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
+      // Late-exempt employees never accrue a late count, so never a late penalty.
+      if (!lateExemptCodes.has(c) && Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
       attByEmp[c].workedHours += Number(a.worked_hours || 0);
       // A day the employee wasn't actually working owed nothing toward the
       // OT-eligibility denominator: a Weekly Off (JS-inferred or real
@@ -955,12 +988,17 @@ export default function PayrollAutomation({ role, actorName }) {
     const rows = await Promise.all(employees.map(async emp => {
       const group = groupByCode[emp.eligibility_group];
       const extraDaysEligible = emp.extra_days_eligible != null ? !!emp.extra_days_eligible : !!group?.extra_days_eligible;
+      // Individual ot_eligible override (Permissions) wins; else the
+      // eligibility group's overtime_eligible default. Previously neither was
+      // read here and OT fell through to the static per-staff-level policy.
+      const overtimeEligible = emp.ot_eligible != null ? !!emp.ot_eligible : !!group?.overtime_eligible;
       const empMapped = {
         id: emp.employee_code, name: emp.full_name, branch: emp.branch,
         dept: emp.department, level: emp.staff_level || "Non-Management",
         salary: emp.salary || 0, status: emp.status, joiningDate: emp.joining_date,
         isAttendanceExempt: !!emp.is_attendance_exempt,
         extraDaysEligible,
+        overtimeEligible,
         // Manually entered by HR via Employees > EOBI (0 by default -- not
         // enrolled, nothing deducted). See payrollRules.js.
         eobiMonthlyDeduction: Number(emp.eobi_monthly_deduction || 0),
@@ -1114,7 +1152,13 @@ export default function PayrollAutomation({ role, actorName }) {
       const loanMatch = (loans || []).find(l =>
         l.employee_code === emp.employee_code || l.employee_id === emp.employee_code
       );
-      if (loanMatch && !skippedLoanIds.has(loanMatch.id)) loanRows.push({ employeeCode: emp.employee_code, monthly: Number(loanMatch.monthly_deduction || 0) });
+      // Gate on the loan's repayment schedule: nothing before its start month,
+      // nothing past its term. A loan disbursed in August must not deduct from
+      // a refreshed July payroll (confirmed: loan for employee 1434,
+      // start_date 2026-08-29).
+      if (loanMatch && !skippedLoanIds.has(loanMatch.id) && loanInstallmentDue(loanMatch, month)) {
+        loanRows.push({ employeeCode: emp.employee_code, monthly: Number(loanMatch.monthly_deduction || 0) });
+      }
       const taxSetting = taxSettingByEmp[emp.employee_code];
       return calculatePayrollForEmployee(empMapped, adj, loanRows, taxSlabsData || [], month, taxSetting);
     }));

@@ -389,7 +389,7 @@ export default function LoanManagement({ role, actorName }) {
   }
 
   const filtered = useMemo(() => loans.filter(l => {
-    const empMatch = !filterEmp || (l.employee_name || l.employee_code || "").toLowerCase().includes(filterEmp.toLowerCase());
+    const empMatch = !filterEmp || `${l.employee_name || ""} ${l.employee_code || ""}`.toLowerCase().includes(filterEmp.toLowerCase());
     const statusMatch = filterStatus === "All" || l.status === filterStatus;
     return empMatch && statusMatch;
   }), [loans, filterEmp, filterStatus]);
@@ -556,7 +556,7 @@ export default function LoanManagement({ role, actorName }) {
 
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
         <div className="flex flex-wrap gap-3">
-          <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search employee..." className="flex-1 min-w-[160px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search by name or employee code..." className="flex-1 min-w-[160px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
             <option value="All">All Status</option><option>Active</option><option>Pending Approval</option><option>Pending Disbursement</option><option>Cleared</option><option>Rejected</option>
           </select>

@@ -196,13 +196,19 @@ export async function mergePersistentPayrollFields(month, payloadRows) {
 // checkTemporaryEmployees()/escalateStaleApprovals() on-app-load pattern.
 // Auto-locks the previous month once the 9th arrives, and re-locks a month
 // Master unlocked once the calendar day changes (Master forgot to re-lock).
+//
+// GATE: only ever touches a month whose payroll has actually been Published.
+// A Draft month is still being worked on — auto-locking it (and, worse,
+// re-locking it a day after Master unlocks to keep editing) just gets in the
+// way. Once payroll is Published for the month, the lock is a real
+// closed-record safeguard and this resumes enforcing it.
 export async function checkAutoLockPreviousMonth(actorName = "System (auto-lock)") {
   const today = new Date();
   if (today.getDate() < 9) return;
   const curMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
   const prevMonth = addMonths(curMonth, -1);
-  const { data: rows } = await supabase.from("payroll").select("id").eq("payroll_month", prevMonth).limit(1);
-  if (!rows || rows.length === 0) return; // nothing generated for that month — nothing to lock
+  const { data: rows } = await supabase.from("payroll").select("id").eq("payroll_month", prevMonth).eq("status", "Published").limit(1);
+  if (!rows || rows.length === 0) return; // not published yet — leave it unlocked for editing
 
   const lock = await getPayrollLock(prevMonth);
   if (!lock) {

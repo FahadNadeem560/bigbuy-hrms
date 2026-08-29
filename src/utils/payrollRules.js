@@ -53,14 +53,23 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   // group has extra_days_eligible = false in staff_eligibility_groups, so extraDaysEligible
   // resolves to false unless an individual employee override explicitly sets it true.
   const extraDaysEligible = employee.extraDaysEligible !== false;
+  // Effective OT eligibility: buildPayrollRows resolves the employee's
+  // individual ot_eligible override / eligibility-group default and passes it
+  // here as employee.overtimeEligible. Only fall back to the static
+  // per-staff-level policy flag when a caller hasn't resolved it (e.g. an old
+  // preview path) -- the Permissions page toggle and the group setting are
+  // the real source of truth and were previously ignored here entirely
+  // (confirmed July 2026: employees 1434 & 853 with ot_eligible = false still
+  // being paid OT because only policy.overtimeEligible was checked).
+  const otEligible = employee.overtimeEligible != null ? !!employee.overtimeEligible : !!policy.overtimeEligible;
 
   // Daily rate = Salary / 30; Hourly rate varies by staff level
   const dailyRate  = monthlySalary / 30;
   const hourlyRate = dailyRate / (employee.level === "Management" ? 9 : 10.5);
 
-  // OT — skip for exempt employees
-  const otHours = (!isExempt && policy.overtimeEligible) ? Number(adjustments.otHours || 0) : 0;
-  const overtimeAmount = (!isExempt && policy.overtimeEligible) ? Math.round(hourlyRate * otHours) : 0;
+  // OT — skip for exempt and non-OT-eligible employees
+  const otHours = (!isExempt && otEligible) ? Number(adjustments.otHours || 0) : 0;
+  const overtimeAmount = (!isExempt && otEligible) ? Math.round(hourlyRate * otHours) : 0;
 
   // Extra working days — skip for exempt employees and for groups/employees not eligible
   // (e.g. MANAGEMENT_ADMIN).
