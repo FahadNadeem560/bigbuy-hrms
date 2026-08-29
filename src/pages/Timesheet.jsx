@@ -10,7 +10,7 @@ import { OT_SHORT_MIN_HOURS } from "../utils/payrollRules.js";
 import { submitAttendanceStatusChange } from "../services/attendanceAdjustmentService.js";
 
 const LATE_WARNING_COUNT = 2;
-const ADJ_TONE = { "Pending Approval": "yellow", "Approved": "green", "Rejected": "red" };
+const ADJ_TONE = { "Pending Approval": "yellow", "Approved": "green", "Applied": "green", "Rejected": "red" };
 const DB_FIELD_MAP = {
   halfDayExempt: "half_day_exempt",
   lateExempt: "late_exempt",
@@ -201,9 +201,9 @@ export default function Timesheet({ branchFilter, role }) {
   const [adjustForm, setAdjustForm] = useState({ in: "", out: "", outDate: "", reason: "" });
   const [adjustSubmitting, setAdjustSubmitting] = useState(false);
 
-  // Manual day-status change (Mark as Weekly Off / Leave / Absent) — submitted
-  // to the Approval Queue (Attendance Corrections) as a pending
-  // attendance_adjustments row, applied to the live record only on approval.
+  // Manual day-status change (Mark as Weekly Off / Leave / Absent) — applied
+  // to the live record immediately and notified to Master + GM (see
+  // submitStatusOverride).
   const [overrideRow, setOverrideRow] = useState(null);
   const [overrideTarget, setOverrideTarget] = useState(null);
   const [overrideReason, setOverrideReason] = useState("");
@@ -357,38 +357,38 @@ export default function Timesheet({ branchFilter, role }) {
     setError("");
   }
 
+  // Per-day HD Exempt / Late Exempt / Gazetted Holiday toggle. Applied to the
+  // live attendance row immediately (no approval queue) and notified to
+  // Master + GM -- same policy as the day-status change flow. RLS already
+  // limits the write to Master/HR (canToggle).
   async function toggleFlag(row, flag, currentValue) {
     if (!row.id || !canToggle) return;
     const newValue = !currentValue;
     const now = new Date().toISOString();
-    const adjStatus = role === "Master" ? "Approved" : "Pending Approval";
     const dbField = DB_FIELD_MAP[flag];
     if (!dbField) return;
+    const label = flag.replace(/([A-Z])/g, " $1").trim();
 
-    const update = { [dbField]: newValue, adjustment_status: adjStatus };
-    if (role === "Master") update.adjustment_approved_by = "Master";
-
+    const update = { [dbField]: newValue, adjustment_status: "Applied", adjustment_approved_by: role };
     const { error: updErr } = await supabase.from("attendance").update(update).eq("id", row.id);
     if (updErr) { setNotice(`Error: ${updErr.message}`); return; }
 
     await supabase.from("audit_logs").insert({
       action: "attendance_toggle", entity: "attendance", entity_id: row.id,
       performed_by: role,
-      details: `${flag} → ${newValue} for ${row.employee_code} on ${row.work_date}. Status: ${adjStatus}`,
+      details: `${flag} → ${newValue} for ${row.employee_code} on ${row.work_date} (applied by ${role})`,
       created_at: now,
     }).then(() => {});
 
-    if (role === "HR") {
-      await supabase.from("notifications").insert({
-        recipient_role: "Master", type: "attendance_adjustment",
-        title: "Attendance Toggle Pending Approval",
-        message: `HR set ${flag} for ${selectedEmp?.full_name} on ${row.work_date}. Awaiting Master approval.`,
-        is_read: false, created_at: now,
-      }).then(() => {});
-    }
+    await Promise.all(["Master", "GM"].map(r => supabase.from("notifications").insert({
+      recipient_role: r, type: "attendance_adjustment", is_read: false,
+      title: "Attendance Flag Changed",
+      message: `${role} ${newValue ? "set" : "cleared"} ${label} for ${selectedEmp?.full_name || row.employee_code} on ${row.work_date}.`,
+      created_at: now,
+    }))).catch(() => {});
 
     setAttendance(prev => prev.map(r => r.id === row.id
-      ? { ...r, [dbField]: newValue, adjustment_status: adjStatus, ...(role === "Master" ? { adjustment_approved_by: "Master" } : {}) }
+      ? { ...r, [dbField]: newValue, adjustment_status: "Applied", adjustment_approved_by: role }
       : r
     ));
 
@@ -403,7 +403,7 @@ export default function Timesheet({ branchFilter, role }) {
       setAttendance(prev => prev.map(r => r.id === row.id ? { ...r, ...reclassified } : r));
     }
 
-    setNotice(`${flag.replace(/([A-Z])/g, " $1").trim()} updated.`);
+    setNotice(`${label} updated. Master and GM notified.`);
     setTimeout(() => setNotice(""), 3000);
   }
 
@@ -990,7 +990,7 @@ export default function Timesheet({ branchFilter, role }) {
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-purple-500 inline-block" /> HD Exempt</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-blue-500 inline-block" /> Late Exempt</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Gazetted Holiday</span>
-                  {role === "HR" && <span className="text-amber-600 font-medium">HR toggles require Master approval.</span>}
+                  <span className="text-slate-400">Toggles apply immediately; Master &amp; GM are notified.</span>
                 </div>
               )}
             </div>
