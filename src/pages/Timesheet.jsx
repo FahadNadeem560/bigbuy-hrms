@@ -536,7 +536,10 @@ export default function Timesheet({ branchFilter, role }) {
   // to agree with what the ledger rows actually show, not the pre-override
   // DB values.
   const lateSummary = useMemo(() => {
-    const lateRows = ledger.filter((r) => Number(r.late_minutes || 0) > 0);
+    // Only days that actually landed as "Late" — a Half Day / Early Out day
+    // that was also a few minutes late is penalized on its own path, not
+    // counted again here (matches PayrollAutomation's late-penalty tally).
+    const lateRows = ledger.filter((r) => (r.attendance_status || r.status) === "Late" && Number(r.late_minutes || 0) > 0);
     const totalLateCount = lateRows.length;
     const totalLateMins = lateRows.reduce((s, r) => s + Number(r.late_minutes || 0), 0);
     const deductibleLates = Math.max(0, totalLateCount - LATE_WARNING_COUNT);

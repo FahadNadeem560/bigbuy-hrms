@@ -896,8 +896,17 @@ export default function PayrollAutomation({ role, actorName }) {
           attByEmp[c].shortHourFractionalDays += Number(a.short_hours || 0) / Number(a.required_hours);
         }
       }
-      // Late-exempt employees never accrue a late count, so never a late penalty.
-      if (!lateExemptCodes.has(c) && Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
+      // Late penalty counts only days whose final status is "Late" -- a day
+      // that also had lateness but landed as Half Day / Absent / Early Out is
+      // already penalized on its own path, and counting its incidental
+      // late_minutes toward the escalating late penalty too is double-dipping
+      // (confirmed: employee 1088, July 2026 -- 11 "Late" days but 13 rows
+      // with late_minutes > 0, because 2 Half Day rows were also a few min
+      // late; floor(13/3)=4 penalty days instead of floor(11/3)=3). This also
+      // makes the deduction match the "Late" count shown on Timesheet.
+      // Late-exempt employees never reach "Late" status, so the flag check is
+      // a redundant-but-cheap guard.
+      if (!lateExemptCodes.has(c) && s === "Late" && Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
       attByEmp[c].workedHours += Number(a.worked_hours || 0);
       // A day the employee wasn't actually working owed nothing toward the
       // OT-eligibility denominator: a Weekly Off (JS-inferred or real
