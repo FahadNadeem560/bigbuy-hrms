@@ -52,7 +52,11 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-const BLANK = { employee: null, amount: "", description: "", shortage_date: "" };
+const CURRENT_MONTH = (() => {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+})();
+const BLANK = { employee: null, amount: "", description: "", shortage_month: CURRENT_MONTH };
 
 export default function Shortages({ role }) {
   const [shortages, setShortages] = useState([]);
@@ -61,12 +65,12 @@ export default function Shortages({ role }) {
   const [form, setForm] = useState(BLANK);
   const [filterEmp, setFilterEmp] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
+  const [filterMonth, setFilterMonth] = useState("");
   const [rejectId, setRejectId] = useState(null);
   const [rejectNote, setRejectNote] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const now = new Date();
-  const payrollMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const payrollMonth = CURRENT_MONTH;
 
   const canEnter = ["Master", "HR", "Head Cashier", "Chief Cashier"].includes(role);
   const canApprove = ["Master", "HR"].includes(role);
@@ -83,23 +87,29 @@ export default function Shortages({ role }) {
   }
 
   async function submitShortage() {
-    if (!form.employee || !form.amount || !form.shortage_date)
-      return setErr("Employee, amount and date are required.");
+    if (!form.employee || !form.amount || !form.shortage_month)
+      return setErr("Employee, amount and month are required.");
+    if (!(Number(form.amount) > 0)) return setErr("Amount must be greater than zero.");
     setErr("");
     const { error } = await supabase.from("shortages").insert({
       employee_code: form.employee.employee_code,
       employee_name: form.employee.full_name,
       amount: Number(form.amount),
       description: form.description,
-      shortage_date: form.shortage_date,
+      // Shortages are tallied per cashier at month-end -- the shortage
+      // belongs to a whole month, not a day. payroll_month is the only field
+      // payroll reads (buildPayrollRows filters shortages on it), so the
+      // selected month drives which month's pay it hits. shortage_date kept
+      // null (legacy per-day column).
+      shortage_date: null,
       entered_by: role,
       entered_by_role: role,
       status: "Pending",
-      payroll_month: payrollMonth,
+      payroll_month: form.shortage_month,
       created_at: new Date().toISOString(),
     });
     if (error) return setErr(error.message);
-    setMsg("Shortage submitted for HR approval.");
+    setMsg(`Shortage submitted for HR approval — will deduct from ${form.shortage_month} payroll.`);
     setForm(BLANK); setShowForm(false); loadAll();
   }
 
@@ -113,7 +123,7 @@ export default function Shortages({ role }) {
       performed_by: role, details: `Shortage of ${money(s?.amount)} approved for ${s?.employee_name}`,
       created_at: new Date().toISOString(),
     }).then(() => {});
-    setMsg("Shortage approved and will be deducted in payroll."); loadAll();
+    setMsg(`Shortage approved — deducts from ${s?.payroll_month || "the target"} payroll on its next generate/refresh.`); loadAll();
   }
 
   async function rejectShortage(id, reason) {
@@ -124,16 +134,17 @@ export default function Shortages({ role }) {
   }
 
   const filtered = useMemo(() => shortages.filter(s => {
-    const empMatch = !filterEmp || (s.employee_name || s.employee_code || "").toLowerCase().includes(filterEmp.toLowerCase());
+    const empMatch = !filterEmp || `${s.employee_name || ""} ${s.employee_code || ""}`.toLowerCase().includes(filterEmp.toLowerCase());
     const statusMatch = filterStatus === "All" || s.status === filterStatus;
-    return empMatch && statusMatch;
-  }), [shortages, filterEmp, filterStatus]);
+    const monthMatch = !filterMonth || s.payroll_month === filterMonth;
+    return empMatch && statusMatch && monthMatch;
+  }), [shortages, filterEmp, filterStatus, filterMonth]);
 
   const statusTone = s => ({ Pending: "yellow", Approved: "green", Rejected: "red" }[s] || "slate");
 
   return (
     <div>
-      <PageTitle title="Shortage Module" subtitle="Record and approve cashier shortage deductions."
+      <PageTitle title="Shortage Module" subtitle="Cashier cash shortages, tallied per cashier at month-end and deducted from that month's payroll."
         action={canEnter && <Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Shortage"}</Button>} />
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
@@ -142,10 +153,10 @@ export default function Shortages({ role }) {
       {showForm && canEnter && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-4">Record Cash Shortage</h2>
-          <p className="text-xs text-slate-500 mb-3">Only cashier employees are shown. Filter by designation containing "cashier".</p>
+          <p className="text-xs text-slate-500 mb-3">Only cashier employees are shown. The shortage is deducted from the selected month's payroll (whenever that month is next generated / refreshed).</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div><p className="text-xs text-slate-500 mb-1">Cashier Employee *</p><EmpPicker employees={employees} value={form.employee} onChange={v => setForm(f => ({ ...f, employee: v }))} /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Date *</p><input type="date" value={form.shortage_date} onChange={e => setForm(f => ({ ...f, shortage_date: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Payroll Month *</p><input type="month" value={form.shortage_month} onChange={e => setForm(f => ({ ...f, shortage_month: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             <div><p className="text-xs text-slate-500 mb-1">Shortage Amount (Rs.) *</p><input type="number" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0" className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             <div><p className="text-xs text-slate-500 mb-1">Description</p><input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Details of shortage..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
           </div>
@@ -155,10 +166,14 @@ export default function Shortages({ role }) {
 
       {/* Filters */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 flex flex-wrap gap-3">
-        <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search employee..." className="flex-1 min-w-[180px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search by name or code..." className="flex-1 min-w-[180px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} title="Filter by payroll month" className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
           <option value="All">All Status</option><option>Pending</option><option>Approved</option><option>Rejected</option>
         </select>
+        {(filterMonth || filterEmp || filterStatus !== "All") && (
+          <button onClick={() => { setFilterMonth(""); setFilterEmp(""); setFilterStatus("All"); }} className="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-50">Clear</button>
+        )}
       </div>
 
       {/* Stats */}
@@ -172,19 +187,18 @@ export default function Shortages({ role }) {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Shortage Ledger</h2><p className="text-xs text-slate-400">{filtered.length} records</p></div>
         <table className="w-full min-w-[800px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee","Date","Amount","Description","Entered By","Month","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
+            <tr>{["Employee","Amount","Description","Entered By","Payroll Month","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0
-              ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No shortage records found.</td></tr>
+              ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No shortage records found.</td></tr>
               : filtered.map(s => (
                 <tr key={s.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-medium">{s.employee_name}<div className="text-xs text-slate-400">{s.employee_code}</div></td>
-                  <td className="px-4 py-3">{s.shortage_date}</td>
                   <td className="px-4 py-3 font-semibold text-red-600">{money(s.amount)}</td>
                   <td className="px-4 py-3 max-w-[160px] truncate text-slate-600">{s.description || "—"}</td>
                   <td className="px-4 py-3 text-slate-500 text-xs">{s.entered_by}</td>
-                  <td className="px-4 py-3 text-slate-500">{s.payroll_month}</td>
+                  <td className="px-4 py-3 text-slate-500 font-medium">{s.payroll_month || "—"}</td>
                   <td className="px-4 py-3"><Badge tone={statusTone(s.status)}>{s.status}</Badge></td>
                   <td className="px-4 py-3">
                     {s.status === "Pending" && canApprove && (
