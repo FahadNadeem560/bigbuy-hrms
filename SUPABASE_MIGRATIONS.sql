@@ -5715,3 +5715,31 @@ DELETE FROM employee_work_rosters WHERE created_by = 'System (backfill 2026-08-2
 
 SELECT * FROM public.generate_employee_work_rosters('2026-07-01','2026-08-22');
 -- =============================================================
+
+-- =============================================================
+-- Migration: reclassify_attendance_row_honor_exempts
+-- Applied: 2026-08-29
+-- reclassify_attendance_row() was never updated when half_day_exempt /
+-- late_exempt / Friday-open handling and single_punch_ok were added to
+-- classify_attendance_day + process_daily_attendance (2026-08 migrations).
+-- It still called the 8-arg classify_attendance_day, so re-running it
+-- (Permissions "reclassify unpublished months", Timesheet per-day toggle,
+-- Approval Queue attendance corrections) never actually applied an exemption
+-- toggled AFTER a month's attendance was first generated.
+-- Confirmed: employee 14, July 2026 -- half_day_exempt + late_exempt both on,
+-- 22 stale "Half Day" rows still driving a Rs.55,000 half-day deduction.
+-- Now mirrors process_daily_attendance: passes the effective employee-or-
+-- per-day exemptions + the Friday flag into the 11-arg classify, applies
+-- single_punch_ok, and writes half_day_exempt_applied / late_exempt_applied
+-- (and extra_day_eligible / gh_eligible) back to the row.
+-- NOTE: a single-punch day (missing in OR out) still classifies as the
+-- group's missing_single_punch_status ("Half Day" + needs review) BEFORE the
+-- exempt branch -- half_day_exempt does not rescue those; single_punch_ok
+-- does, and PayrollAutomation's buildPayrollRows also no longer docks a
+-- half-day-exempt employee for one.
+-- Full function body: see apply_migration reclassify_attendance_row_honor_exempts.
+-- Reprocessing run after (not part of the function): reclassified every
+-- non-locked, non-manual July 2026 attendance row for employees with
+-- half_day_exempt or late_exempt set, plus Management rows still marked
+-- "Half Day".
+-- =============================================================
