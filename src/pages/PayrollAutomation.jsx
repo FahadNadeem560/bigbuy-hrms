@@ -276,24 +276,21 @@ function SummaryPanel({ month, displayRows }) {
 function num(v) { return Math.round(Number(v || 0)).toLocaleString(); }
 
 // A loan only deducts from a payroll month that falls on or after the month
-// its repayment starts (loans.start_date), and only for repayment_months
-// installments from there. Guards against a loan disbursed this month (or
-// future-dated) deducting from an earlier month that gets refreshed, and
-// against deducting forever past the agreed term.
+// its repayment starts (loans.start_date). Guards against a loan disbursed
+// this month, future-dated, or with a typo'd far-future start_date deducting
+// from an earlier month that gets refreshed.
+//
+// Deliberately does NOT stop at start_date + repayment_months: a loan that
+// fell behind schedule (a skipped/short month) still has an outstanding
+// balance to collect, and loans.outstanding_balance isn't reliably kept in
+// sync to trust as the stop signal. Ending a loan is an explicit action
+// (Clear / Early Settle / status change) -- see loanService.js.
 function loanInstallmentDue(loan, payrollMonth) {
   if (!loan) return false;
   const startMonth = String(loan.start_date || "").slice(0, 7)
     || String(loan.disbursed_at || loan.granted_date || loan.loan_date || loan.created_at || "").slice(0, 7);
   if (!/^\d{4}-\d{2}$/.test(startMonth)) return true; // no usable start — behave as before
-  if (payrollMonth < startMonth) return false;
-  const term = Number(loan.repayment_months || 0);
-  if (term > 0) {
-    const [sy, sm] = startMonth.split("-").map(Number);
-    const [py, pm] = payrollMonth.split("-").map(Number);
-    const monthsIn = (py * 12 + pm) - (sy * 12 + sm); // 0 on the start month
-    if (monthsIn >= term) return false;
-  }
-  return true;
+  return payrollMonth >= startMonth;
 }
 
 function prevMonthOf(m) {
@@ -1152,10 +1149,9 @@ export default function PayrollAutomation({ role, actorName }) {
       const loanMatch = (loans || []).find(l =>
         l.employee_code === emp.employee_code || l.employee_id === emp.employee_code
       );
-      // Gate on the loan's repayment schedule: nothing before its start month,
-      // nothing past its term. A loan disbursed in August must not deduct from
-      // a refreshed July payroll (confirmed: loan for employee 1434,
-      // start_date 2026-08-29).
+      // Nothing before the loan's start month. A loan disbursed in August must
+      // not deduct from a refreshed July payroll (confirmed: loan for employee
+      // 1434, start_date 2026-08-29).
       if (loanMatch && !skippedLoanIds.has(loanMatch.id) && loanInstallmentDue(loanMatch, month)) {
         loanRows.push({ employeeCode: emp.employee_code, monthly: Number(loanMatch.monthly_deduction || 0) });
       }
