@@ -39,6 +39,12 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
+// Temporary bypass: July 2026 payroll already closed the period and needs to
+// be published, so adjustments dated to it skip the Master approval queue and
+// apply straight away. Every other month keeps the normal Pending -> approve
+// flow. Remove "2026-07" from this list once July is published.
+const INSTANT_APPLY_MONTHS = ["2026-07"];
+
 const ADJ_TYPES = ["Incentive", "Arrears", "Deduction", "Shortage", "Penalty", "Commission", "Other"];
 const CALC_MODES = ["Full Amount", "As Per Attendance"];
 const BLANK = { employee: null, type: "Incentive", amount: "", reason: "", payroll_month: "", calc_mode: "Full Amount" };
@@ -72,15 +78,23 @@ export default function OneTimeAdjustments({ role }) {
 
   async function submit() {
     if (!form.employee || !form.amount || !form.payroll_month) return setErr("Employee, amount and payroll month are required.");
+    if (!(Number(form.amount) > 0)) return setErr("Amount must be greater than zero.");
     setErr("");
+    const instant = INSTANT_APPLY_MONTHS.includes(form.payroll_month);
+    const now = new Date().toISOString();
     const { error } = await supabase.from("one_time_adjustments").insert({
       employee_code: form.employee.employee_code, employee_name: form.employee.full_name,
       type: form.type, amount: Number(form.amount), reason: form.reason,
-      payroll_month: form.payroll_month, status: "Pending", calc_mode: form.calc_mode,
-      submitted_by: "HR", created_at: new Date().toISOString(),
+      payroll_month: form.payroll_month, calc_mode: form.calc_mode,
+      submitted_by: role,
+      status: instant ? "Approved" : "Pending",
+      ...(instant ? { approved_by: `${role} (auto — ${form.payroll_month} bypass)`, approved_at: now } : {}),
+      created_at: now,
     });
     if (error) return setErr(error.message);
-    setMsg("Adjustment submitted for approval.");
+    setMsg(instant
+      ? `Adjustment applied to ${form.payroll_month} payroll (approval bypassed for this month). Refresh Payroll to pick it up.`
+      : "Adjustment submitted for approval.");
     setForm({ ...BLANK, payroll_month: curMonth }); loadAll();
   }
 
@@ -149,7 +163,14 @@ export default function OneTimeAdjustments({ role }) {
             Submitted adjustments go to the Master approval queue before being applied to payroll.
             "As Per Attendance" scales the amount by the employee's present days ÷ working days for the payroll month, the same way salary is prorated for absences. "Full Amount" applies it unchanged.
           </div>
-          <div className="mt-3"><Button onClick={submit} className="rounded-2xl">Submit for Approval</Button></div>
+          {INSTANT_APPLY_MONTHS.includes(form.payroll_month) && (
+            <div className="mt-2 p-3 bg-amber-50 text-amber-700 rounded-xl text-xs">
+              {form.payroll_month} is a closed period being published — adjustments for this month are <b>applied immediately</b>, skipping the approval queue. Run Refresh Payroll for {form.payroll_month} afterwards.
+            </div>
+          )}
+          <div className="mt-3"><Button onClick={submit} className="rounded-2xl">
+            {INSTANT_APPLY_MONTHS.includes(form.payroll_month) ? `Apply to ${form.payroll_month} Payroll` : "Submit for Approval"}
+          </Button></div>
         </div>
       )}
 
