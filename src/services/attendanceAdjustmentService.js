@@ -49,25 +49,23 @@ export async function applyAttendanceStatusChange({ employeeCode, date, adjusted
       review_status: "Locked", is_manual_entry: true, manual_entry_by: actorRole,
       adjustment_status: `Leave (manual): ${reason}`, adjustment_approved_by: actorRole,
     };
-  } else { // "Present" -- misclassified Absent, a manual entry, or reverting a
-           // mistaken Weekly Off / Leave back to a normal worked day.
-    const ci = existing?.check_in ? new Date(existing.check_in) : null;
-    const co = existing?.check_out ? new Date(existing.check_out) : null;
-    // Only hand the row back to the classifier when there's a real in/out
-    // pair to recompute from (>= 10 min apart). A missing punch, or a single
-    // punch logged as both in and out (co === ci), would just reclassify
-    // straight back to Absent/Half Day -- in that case HR is asserting a full
-    // worked day, so set it manually at full hours and lock it.
-    const validPair = ci && co && (co - ci) >= 10 * 60 * 1000;
-    update = validPair
-      ? { is_weekly_off: false, review_status: "Calculated", is_manual_entry: false,
-          adjustment_status: `Marked Present (manual): ${reason}`, adjustment_approved_by: actorRole }
-      : { attendance_status: "Present", status: "Present",
-          worked_hours: Number(existing?.required_hours || 0), actual_hours: Number(existing?.required_hours || 0),
-          short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
-          is_weekly_off: false, needs_review: false, exception_reason: null,
-          review_status: "Locked", is_manual_entry: true, manual_entry_by: actorRole,
-          adjustment_status: `Marked Present (manual): ${reason}`, adjustment_approved_by: actorRole };
+  } else { // "Present" -- HR is asserting this was a full worked day (a
+           // misclassified Absent, a mistaken Weekly Off / Leave, or a short-
+           // punch day they want to count in full).
+    // Always a locked manual full-hours Present -- never handed back to the
+    // classifier. If the row still had punches the classifier disagreed with
+    // (e.g. only 3h of a 9h shift), reclassifying would just re-mark it Absent
+    // and silently undo the override (confirmed: emp 1760, 24 Jul 2026 --
+    // "Marked Present" was reverted to Absent by reclassify, deduction stayed).
+    // To recompute from real punches instead, use Adjust Time.
+    update = {
+      attendance_status: "Present", status: "Present",
+      worked_hours: Number(existing?.required_hours || 0), actual_hours: Number(existing?.required_hours || 0),
+      short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
+      is_weekly_off: false, needs_review: false, exception_reason: null,
+      review_status: "Locked", is_manual_entry: true, manual_entry_by: actorRole,
+      adjustment_status: `Marked Present (manual): ${reason}`, adjustment_approved_by: actorRole,
+    };
   }
 
   let rowId = existing?.id || null;
@@ -80,7 +78,9 @@ export async function applyAttendanceStatusChange({ employeeCode, date, adjusted
     rowId = inserted?.id || null;
   }
 
-  // Present with real punches -- hand back to the classifier to recompute.
+  // Kept for the "Present" branch's earlier reclassify-from-punches behaviour;
+  // that path is gone (a Present override is always a locked manual entry now),
+  // so this is currently a no-op guard. Left in case a future branch wants it.
   if (adjustedStatus === "Present" && rowId && !update.is_manual_entry) {
     await supabase.rpc("reclassify_attendance_row", { p_attendance_id: rowId });
   }
