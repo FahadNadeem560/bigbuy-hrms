@@ -17,6 +17,24 @@ const DB_FIELD_MAP = {
   isGazettedHoliday: "is_gazetted_holiday",
 };
 
+// Day-status overrides offered for a given current status. Every status can be
+// changed (a mistaken Weekly Off / Leave must always be revertable); only a
+// roster-driven Gazetted Holiday is left alone (it has its own toggle).
+const OVERRIDE_TARGETS_BY_STATUS = {
+  "Weekly Off":      ["Present", "Absent", "Leave"],
+  "Leave":           ["Present", "Absent", "Weekly Off"],
+  "Absent":          ["Present", "Weekly Off", "Leave"],
+  "Half Day":        ["Present", "Weekly Off", "Leave", "Absent"],
+};
+const DEFAULT_OVERRIDE_TARGETS = ["Weekly Off", "Leave", "Absent"]; // a normally worked day
+function overrideTargetsFor(status) {
+  if (status === "Gazetted Holiday") return [];
+  return OVERRIDE_TARGETS_BY_STATUS[status] || DEFAULT_OVERRIDE_TARGETS;
+}
+const OVERRIDE_TARGET_COLOR = {
+  "Present": "text-sky-600", "Weekly Off": "text-purple-600", "Leave": "text-blue-600", "Absent": "text-red-600",
+};
+
 function fmt2(n) {
   return Math.round(Number(n || 0) * 100) / 100;
 }
@@ -923,21 +941,13 @@ export default function Timesheet({ branchFilter, role }) {
                             {row.late_exempt_applied && (
                               <span className="block mt-0.5 text-[10px] text-blue-600" title="Late Exempt kept this day off the Late status.">Late Exempt</span>
                             )}
-                            {canToggle && !["Weekly Off", "Leave", "Gazetted Holiday"].includes(status) && (
-                              pendingAdjByDate[row.work_date] ? (
-                                <span className="block mt-1 text-[10px] text-amber-600 print:hidden">Change pending approval</span>
-                              ) : (
-                                <span className="block mt-1 space-x-2 print:hidden">
-                                  {["Absent", "Half Day"].includes(status) && (
-                                    <button onClick={() => openOverrideModal(row, "Present")} className="text-[10px] text-sky-600 underline">Present</button>
-                                  )}
-                                  <button onClick={() => openOverrideModal(row, "Weekly Off")} className="text-[10px] text-purple-600 underline">Weekly Off</button>
-                                  <button onClick={() => openOverrideModal(row, "Leave")} className="text-[10px] text-blue-600 underline">Leave</button>
-                                  {status !== "Absent" && (
-                                    <button onClick={() => openOverrideModal(row, "Absent")} className="text-[10px] text-red-600 underline">Absent</button>
-                                  )}
-                                </span>
-                              )
+                            {canToggle && !row.is_synthetic && overrideTargetsFor(status).length > 0 && (
+                              <span className="block mt-1 space-x-2 print:hidden">
+                                {overrideTargetsFor(status).map(t => (
+                                  <button key={t} onClick={() => openOverrideModal(row, t)}
+                                    className={`text-[10px] underline ${OVERRIDE_TARGET_COLOR[t] || "text-slate-600"}`}>{t}</button>
+                                ))}
+                              </span>
                             )}
                           </td>
                           {canToggle && (

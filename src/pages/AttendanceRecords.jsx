@@ -5,10 +5,10 @@ import { submitAttendanceStatusChange, fetchPendingStatusChanges } from "../serv
 
 // Employee-wise monthly attendance register: one row per employee, a chip
 // per calendar day of the selected month showing that day's status, plus
-// per-employee tallies. A worked ("Present") day can be flagged for change
-// to Weekly Off / Leave / Absent — the request goes to the Approval Queue
-// (Attendance Corrections) and only touches the live record + payroll after
-// Master/GM approval. Same mechanism the Timesheet ledger uses.
+// per-employee tallies. Any day's status can be changed (Present <-> Weekly
+// Off / Leave / Absent, in any direction) — the change is applied to the
+// live record immediately and Master + GM are notified; payroll picks it up
+// on its next Refresh. Same mechanism the Timesheet ledger uses.
 
 const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, "All"];
@@ -39,12 +39,16 @@ const COUNT_TONE = {
   "Half Day": "text-violet-700",
 };
 
-// A worked day can be re-flagged to one of these.
-// What a given day can be re-flagged to, by its current bucket.
+// What a given day can be changed to, keyed by its current bucket (see
+// toBucket — "Weekly Off" is the "Off Day" bucket). Every bucket is
+// changeable, including Off Day / Leave, so a mistaken Weekly Off or Leave
+// can always be reverted.
 const TARGETS_FROM = {
   "Present":  ["Weekly Off", "Leave", "Absent"],
   "Half Day": ["Present", "Weekly Off", "Leave", "Absent"],
   "Absent":   ["Present", "Weekly Off", "Leave"],
+  "Off Day":  ["Present", "Absent", "Leave"],
+  "Leave":    ["Present", "Absent", "Weekly Off"],
 };
 const CHANGEABLE_BUCKETS = Object.keys(TARGETS_FROM);
 
