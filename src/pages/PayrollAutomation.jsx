@@ -786,12 +786,18 @@ export default function PayrollAutomation({ role, actorName }) {
     const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
     const numberOfWorkingDays = getWorkingDaysInMonth(y, m);
 
-    // Standing Permissions exemptions. classify_attendance_day already keeps a
-    // Half Day / Late off an exempt employee's day, but a row classified
-    // before the flag was set can still carry the old status -- these sets are
-    // the payroll-side backstop so the deduction is dropped regardless.
+    // Standing Permissions exemptions (employee level). classify_attendance_day
+    // keeps a Half Day / Late off an exempt employee's day, but a row
+    // classified before the flag was set -- OR a single-punch day, which
+    // classifies as "Half Day" + review BEFORE the exempt branch even runs --
+    // can still carry the deductible status. Combined with the per-day
+    // attendance.half_day_exempt / late_exempt flags (Timesheet toggle) in
+    // isHalfDayExempt/isLateExempt below, this is the payroll-side backstop so
+    // the deduction is dropped regardless of which flag was set.
     const lateExemptCodes = new Set((employees || []).filter(e => e.late_exempt).map(e => e.employee_code));
     const halfDayExemptCodes = new Set((employees || []).filter(e => e.half_day_exempt).map(e => e.employee_code));
+    const isHalfDayExempt = (code, row) => halfDayExemptCodes.has(code) || row?.half_day_exempt === true;
+    const isLateExempt = (code, row) => lateExemptCodes.has(code) || row?.late_exempt === true;
 
     const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }, { data: taxSlabsData }, { data: taxSettingsData }, { data: leaveBalanceRows }, { data: approvedLeaveRequests }] = await Promise.all([
       fetchAllAttendanceForMonth(fromDate, toDate),
@@ -877,8 +883,9 @@ export default function PayrollAutomation({ role, actorName }) {
       else if (s === "Weekly Off") { attByEmp[c].weeklyOffDays++; }
       else if (s === "Half Day" || s === "HalfDay") {
         attByEmp[c].presentDays++;
-        // Half-day-exempt: counts as a worked day, never docked.
-        if (!halfDayExemptCodes.has(c)) attByEmp[c].halfDays++;
+        // Half-day-exempt (employee flag or per-day toggle): counts as a
+        // worked day, never docked.
+        if (!isHalfDayExempt(c, a)) attByEmp[c].halfDays++;
       }
       else if (s === "Leave") { attByEmp[c].leaveDaysUsed++; }
       else {
@@ -906,7 +913,7 @@ export default function PayrollAutomation({ role, actorName }) {
       // makes the deduction match the "Late" count shown on Timesheet.
       // Late-exempt employees never reach "Late" status, so the flag check is
       // a redundant-but-cheap guard.
-      if (!lateExemptCodes.has(c) && s === "Late" && Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
+      if (!isLateExempt(c, a) && s === "Late" && Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
       attByEmp[c].workedHours += Number(a.worked_hours || 0);
       // A day the employee wasn't actually working owed nothing toward the
       // OT-eligibility denominator: a Weekly Off (JS-inferred or real
