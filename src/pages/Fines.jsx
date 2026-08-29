@@ -42,7 +42,11 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
-const BLANK_FORM = { employee: null, fine_type: "Late Coming Fine", amount: "", reason: "", fine_date: "" };
+const CURRENT_MONTH = (() => {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+})();
+const BLANK_FORM = { employee: null, fine_type: "Late Coming Fine", amount: "", reason: "", payroll_month: CURRENT_MONTH };
 
 export default function Fines({ role }) {
   const [fines, setFines] = useState([]);
@@ -51,12 +55,12 @@ export default function Fines({ role }) {
   const [form, setForm] = useState(BLANK_FORM);
   const [filterEmp, setFilterEmp] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
+  const [filterMonth, setFilterMonth] = useState("");
   const [rejectId, setRejectId] = useState(null);
   const [rejectNote, setRejectNote] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const now = new Date();
-  const payrollMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const payrollMonth = CURRENT_MONTH;
 
   const canIssue = ["Master", "HR", "Supervisor", "Manager"].includes(role);
   const canApprove = ["Master", "HR", "Finance", "GM"].includes(role);
@@ -73,8 +77,9 @@ export default function Fines({ role }) {
   }
 
   async function submitFine() {
-    if (!form.employee || !form.amount || !form.reason || !form.fine_date)
-      return setErr("Employee, amount, reason and date are required.");
+    if (!form.employee || !form.amount || !form.reason || !form.payroll_month)
+      return setErr("Employee, amount, reason and payroll month are required.");
+    if (!(Number(form.amount) > 0)) return setErr("Amount must be greater than zero.");
     setErr("");
     const { error } = await supabase.from("fines").insert({
       employee_code: form.employee.employee_code,
@@ -85,11 +90,15 @@ export default function Fines({ role }) {
       issued_by: role,
       issued_by_role: role,
       status: "Pending",
-      payroll_month: payrollMonth,
+      // The month the fine deducts from -- the only date payroll reads
+      // (buildPayrollRows filters fines on payroll_month). Was hard-coded to
+      // whatever month the record happened to be entered in, so a fine for a
+      // prior month landed on the current month's pay.
+      payroll_month: form.payroll_month,
       created_at: new Date().toISOString(),
     });
     if (error) return setErr(error.message);
-    setMsg("Fine submitted for approval.");
+    setMsg(`Fine submitted for approval — deducts from ${form.payroll_month} payroll.`);
     setForm(BLANK_FORM); setShowForm(false); loadAll();
   }
 
@@ -107,7 +116,7 @@ export default function Fines({ role }) {
       action_type: "fine_approved", performed_by: role,
       details: `Fine ${id} of ${money(fine?.amount)} approved for ${fine?.employee_name}`,
     }).then(() => {});
-    setMsg("Fine approved and will be deducted in payroll."); loadAll();
+    setMsg(`Fine approved — deducts from ${fine?.payroll_month || "the target"} payroll on its next generate/refresh.`); loadAll();
   }
 
   async function rejectFine(id, reason) {
@@ -118,16 +127,17 @@ export default function Fines({ role }) {
   }
 
   const filtered = useMemo(() => fines.filter(f => {
-    const empMatch = !filterEmp || (f.employee_name || f.employee_code || "").toLowerCase().includes(filterEmp.toLowerCase());
+    const empMatch = !filterEmp || `${f.employee_name || ""} ${f.employee_code || ""}`.toLowerCase().includes(filterEmp.toLowerCase());
     const statusMatch = filterStatus === "All" || f.status === filterStatus;
-    return empMatch && statusMatch;
-  }), [fines, filterEmp, filterStatus]);
+    const monthMatch = !filterMonth || f.payroll_month === filterMonth;
+    return empMatch && statusMatch && monthMatch;
+  }), [fines, filterEmp, filterStatus, filterMonth]);
 
   const statusTone = s => ({ Pending: "yellow", Approved: "green", Rejected: "red" }[s] || "slate");
 
   return (
     <div>
-      <PageTitle title="Fines & Penalties" subtitle="Issue, review and approve employee fines."
+      <PageTitle title="Fines & Penalties" subtitle="Issue, review and approve employee fines — each deducted from its selected payroll month."
         action={canIssue && <Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Fine"}</Button>} />
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
@@ -144,7 +154,7 @@ export default function Fines({ role }) {
               </select>
             </div>
             <div><p className="text-xs text-slate-500 mb-1">Amount (Rs.) *</p><input type="number" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0" className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
-            <div><p className="text-xs text-slate-500 mb-1">Date *</p><input type="date" value={form.fine_date} onChange={e => setForm(f => ({ ...f, fine_date: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Payroll Month *</p><input type="month" value={form.payroll_month} onChange={e => setForm(f => ({ ...f, payroll_month: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             <div className="md:col-span-2"><p className="text-xs text-slate-500 mb-1">Reason *</p><textarea value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} rows={2} placeholder="Reason for fine..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             {role === "HR" && <div className="md:col-span-2 p-3 bg-amber-50 text-amber-700 text-xs rounded-xl">Note: Fines issued by HR require GM or Master approval.</div>}
           </div>
@@ -154,10 +164,14 @@ export default function Fines({ role }) {
 
       {/* Filters */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 flex flex-wrap gap-3">
-        <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search employee..." className="flex-1 min-w-[180px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Search by name or code..." className="flex-1 min-w-[180px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+        <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} title="Filter by payroll month" className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
           <option value="All">All Status</option><option>Pending</option><option>Approved</option><option>Rejected</option>
         </select>
+        {(filterMonth || filterEmp || filterStatus !== "All") && (
+          <button onClick={() => { setFilterMonth(""); setFilterEmp(""); setFilterStatus("All"); }} className="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-50">Clear</button>
+        )}
       </div>
 
       {/* Summary cards */}
@@ -172,7 +186,7 @@ export default function Fines({ role }) {
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Fine Ledger</h2><p className="text-xs text-slate-400">{filtered.length} records</p></div>
         <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Employee","Fine Type","Amount","Reason","Issued By","Month","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
+            <tr>{["Employee","Fine Type","Amount","Reason","Issued By","Payroll Month","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0
@@ -184,7 +198,7 @@ export default function Fines({ role }) {
                   <td className="px-4 py-3 font-semibold text-red-600">{money(f.amount)}</td>
                   <td className="px-4 py-3 max-w-[160px] truncate text-slate-600">{f.reason}</td>
                   <td className="px-4 py-3 text-slate-500 text-xs">{f.issued_by}<br /><span className="text-slate-300">{f.issued_by_role}</span></td>
-                  <td className="px-4 py-3 text-slate-500">{f.payroll_month}</td>
+                  <td className="px-4 py-3 text-slate-500 font-medium">{f.payroll_month || "—"}</td>
                   <td className="px-4 py-3"><Badge tone={statusTone(f.status)}>{f.status}</Badge>{f.approved_by && <div className="text-xs text-slate-400 mt-0.5">{f.approved_by}</div>}</td>
                   <td className="px-4 py-3">
                     {f.status === "Pending" && canApprove && (
