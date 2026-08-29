@@ -6,6 +6,7 @@ import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage } fr
 import { approvePaymentStatusRequest, rejectPaymentStatusRequest, PAYMENT_STATUS_LABELS, requiresMasterOnly } from "../services/payrollControlService.js";
 import { approveIncrement as approveIncrementSvc, rejectIncrement as rejectIncrementSvc } from "../services/incrementService.js";
 import { approveLoanRequest, rejectLoanRequest, approveLoanChange, rejectLoanChange, fetchLoanGuaranteeDocuments } from "../services/loanService.js";
+import { applyAttendanceStatusChange } from "../services/attendanceAdjustmentService.js";
 
 // Hierarchy-routed requests carry dynamic stage names ("Pending Floor
 // Manager Approval", "Pending Owner Approval", ...) so this can't be a fixed
@@ -295,101 +296,19 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
 
   // ── Attendance correction actions (single-stage: Master/GM approve or reject) ──
 
-  // A manual day-status change (Present -> Leave / Weekly Off / Absent), queued
-  // from the Timesheet ledger or Attendance > Records via
-  // submitAttendanceStatusChange. Applied to the live row here on approval,
-  // mirroring the instant-apply logic those pages used to run inline, then
-  // locked so the next ZKT re-sync can't overwrite it. Payroll picks it up on
-  // its next Refresh.
+  // A manual day-status change (Present -> Leave / Weekly Off / Absent). New
+  // ones now apply instantly from Timesheet / Attendance > Records (see
+  // attendanceAdjustmentService.submitAttendanceStatusChange); this path only
+  // drains the handful queued before that switch. Same shared apply logic.
   async function applyStatusChange(item) {
-    const target = item.adjusted_status;
-    const reason = item.reason || "";
-    const by = item.adjusted_by || "HR";
-    const { data: existing } = await supabase.from("attendance").select("id, required_hours, check_in, check_out")
-      .eq("employee_code", item.employee_code).eq("attendance_date", item.attendance_date).maybeSingle();
-
-    let update;
-    if (target === "Weekly Off") {
-      update = {
-        attendance_status: "Weekly Off", is_weekly_off: true,
-        required_hours: 0, short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
-        needs_review: false, exception_reason: null,
-        review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
-        adjustment_status: `Weekly Off (approved): ${reason}`, adjustment_approved_by: role,
-      };
-    } else if (target === "Absent") {
-      update = {
-        attendance_status: "Absent",
-        worked_hours: 0, actual_hours: 0, short_hours: Number(existing?.required_hours || 0),
-        late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
-        needs_review: false, exception_reason: null,
-        review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
-        adjustment_status: `Absent (approved): ${reason}`, adjustment_approved_by: role,
-      };
-    } else if (target === "Leave") {
-      update = {
-        attendance_status: "Leave", status: "Leave",
-        check_in: null, check_out: null, first_check_in: null, last_check_out: null,
-        worked_hours: 0, actual_hours: 0, short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
-        needs_review: false, exception_reason: null,
-        review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
-        adjustment_status: `Leave (approved): ${reason}`, adjustment_approved_by: role,
-      };
-    } else { // "Present" — the day was worked (misclassified Absent, or a manual entry)
-      const hasPunch = !!(existing?.check_in || existing?.check_out);
-      update = hasPunch
-        // real punches exist: unlock and let the server classifier recompute from them
-        ? {
-            review_status: "Calculated", is_manual_entry: false,
-            adjustment_status: `Marked Present (approved): ${reason}`, adjustment_approved_by: role,
-          }
-        // no punches: HR is asserting a full worked day — set it manually, full hours
-        : {
-            attendance_status: "Present", status: "Present",
-            worked_hours: Number(existing?.required_hours || 0), actual_hours: Number(existing?.required_hours || 0),
-            short_hours: 0, late_minutes: 0, early_out_minutes: 0, overtime_hours: 0, ot_hours: 0,
-            is_weekly_off: false, needs_review: false, exception_reason: null,
-            review_status: "Locked", is_manual_entry: true, manual_entry_by: by,
-            adjustment_status: `Marked Present (approved): ${reason}`, adjustment_approved_by: role,
-          };
-    }
-
-    let rowId = existing?.id || null;
-    if (existing) {
-      await supabase.from("attendance").update(update).eq("id", existing.id);
-    } else {
-      const { data: inserted } = await supabase.from("attendance").insert({
-        employee_code: item.employee_code, work_date: item.attendance_date, attendance_date: item.attendance_date,
-        ...update,
-      }).select("id").single();
-      rowId = inserted?.id || null;
-    }
-    // Only reclassify when we handed the row back to the classifier (Present
-    // with real punches) — a manual full-day Present must stay as set.
-    if (target === "Present" && rowId && !update.is_manual_entry) {
-      await supabase.rpc("reclassify_attendance_row", { p_attendance_id: rowId });
-    }
-
-    // Leave must also count against the employee's leave balance — LeaveManagement
-    // only sums Approved leave_requests, it never reads attendance_status='Leave'.
-    if (target === "Leave") {
-      const emp = empMap[item.employee_code];
-      const now = new Date().toISOString();
-      const { data: lr } = await supabase.from("leave_requests").insert({
-        employee_id: item.employee_code, employee_code: item.employee_code,
-        employee_name: emp?.full_name || item.employee_code, leave_type: "Annual",
-        from_date: item.attendance_date, to_date: item.attendance_date, days: 1,
-        reason: `Marked as Leave (approved attendance change). ${reason}`,
-        applied_date: item.attendance_date, status: "Approved",
-        approved_by: role, approved_at: now,
-        approval_trail: [{ level: null, approver: role, action: "Approved (attendance change)", timestamp: now }],
-      }).select().single();
-      if (lr) {
-        await supabase.from("leave_approvals").insert({
-          leave_request_id: lr.id, stage: "Attendance Change", actor_role: role, actor_name: actorName || role, action: "Approved",
-        }).then(() => {});
-      }
-    }
+    await applyAttendanceStatusChange({
+      employeeCode: item.employee_code,
+      date: item.attendance_date,
+      adjustedStatus: item.adjusted_status,
+      reason: item.reason || "",
+      actorRole: role,
+      employeeName: empMap[item.employee_code]?.full_name || item.employee_name || null,
+    });
   }
 
   async function approveAttCorr(id) {

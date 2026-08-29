@@ -140,7 +140,7 @@ function StatusOverrideModal({ row, target, reason, setReason, onSubmit, onClose
         <h3 className="font-bold text-slate-800 mb-1">Mark as {target} — {row.work_date}</h3>
         <p className="text-xs text-slate-400 mb-4">
           {OVERRIDE_BLURB[target] || `Flags this day to become ${target}.`}{" "}
-          Goes to the Approval Queue (Attendance Corrections); it only updates the record and payroll after Master/GM approval.
+          Applied to the record immediately; Master and GM are notified. Payroll picks it up on its next Refresh.
         </p>
         <div>
           <p className="text-xs text-slate-500 mb-1">Reason</p>
@@ -149,7 +149,7 @@ function StatusOverrideModal({ row, target, reason, setReason, onSubmit, onClose
         </div>
         <div className="flex gap-2 mt-5">
           <Button onClick={onSubmit} disabled={submitting} className="rounded-xl flex-1">
-            {submitting ? "Submitting…" : "Submit for approval"}
+            {submitting ? "Applying…" : "Apply change"}
           </Button>
           <Button variant="outline" onClick={onClose} className="rounded-xl flex-1">Cancel</Button>
         </div>
@@ -414,11 +414,10 @@ export default function Timesheet({ branchFilter, role }) {
   }
 
   // Case-by-case day status change: Weekly Off / Leave / Absent on a worked
-  // day (or Weekly Off / Leave on an Absent day). Submitted to the Approval
-  // Queue (Attendance Corrections) as a pending attendance_adjustments row —
-  // ApprovalQueue.applyStatusChange writes it to the live record and locks
-  // it only after Master/GM approval, which is what then reaches payroll.
-  // Same mechanism Attendance > Records uses.
+  // day (or Weekly Off / Leave on an Absent day). Applied to the live record
+  // immediately (attendanceAdjustmentService.submitAttendanceStatusChange
+  // locks the row and notifies Master + GM); payroll picks it up on its next
+  // Refresh. Same mechanism Attendance > Records uses.
   async function submitStatusOverride() {
     if (!overrideRow || !selectedEmp || !overrideTarget) return;
     if (!overrideReason.trim()) { setNotice("Enter a reason for the change."); return; }
@@ -435,15 +434,16 @@ export default function Timesheet({ branchFilter, role }) {
       originalCheckOut: row.check_out || row.last_check_out || null,
       reason: overrideReason.trim(),
       actor: role,
+      employeeName: selectedEmp.full_name,
     });
 
     setOverrideSubmitting(false);
     if (!res.ok) { setNotice(`Error: ${res.reason}`); return; }
 
     setOverrideRow(null); setOverrideTarget(null); setOverrideReason("");
-    setPendingAdjByDate(prev => ({ ...prev, [row.work_date]: true }));
-    setNotice(`${row.work_date}: change to ${overrideTarget} sent for approval.`);
+    setNotice(`${row.work_date}: changed to ${overrideTarget}. Master and GM notified.`);
     setTimeout(() => setNotice(""), 4000);
+    loadTimesheet(selectedEmp);
   }
 
   const isOtEligible = useMemo(() => {

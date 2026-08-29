@@ -68,11 +68,11 @@ function ChangeModal({ ctx, onClose, onSubmitted }) {
     const res = await submitAttendanceStatusChange({
       employeeCode: ctx.empCode, date: ctx.date,
       originalStatus: ctx.originalStatus || ctx.bucket, adjustedStatus: target,
-      reason, actor: ctx.actor,
+      reason, actor: ctx.actor, employeeName: ctx.name,
     });
     setBusy(false);
     if (!res.ok) { setErr(res.reason); return; }
-    onSubmitted(`${ctx.date}: change to ${target} sent for approval.`);
+    onSubmitted({ msg: `${ctx.date}: changed to ${target}.`, empCode: ctx.empCode, date: ctx.date, target });
     onClose();
   }
 
@@ -81,8 +81,8 @@ function ChangeModal({ ctx, onClose, onSubmitted }) {
       <div className="bg-white rounded-2xl p-6 shadow-xl w-full max-w-md">
         <h3 className="font-bold text-slate-800">Change {ctx.dateLabel} — {ctx.name}</h3>
         <p className="text-xs text-slate-400 mt-1 mb-4">
-          Currently <span className="font-medium text-slate-600">{ctx.bucket}</span>. This is submitted to the Approval Queue
-          (Attendance Corrections); it only updates the record and payroll after Master/GM approval.
+          Currently <span className="font-medium text-slate-600">{ctx.bucket}</span>. This is applied to the record
+          immediately and reaches payroll on its next Refresh; Master and GM are notified.
         </p>
         <div className="flex flex-wrap gap-2 mb-4">
           {options.map(t => (
@@ -99,7 +99,7 @@ function ChangeModal({ ctx, onClose, onSubmitted }) {
         {err && <p className="text-xs text-rose-600 mt-2">{err}</p>}
         <div className="flex gap-2 mt-5">
           <Button onClick={submit} disabled={busy} className="rounded-xl flex-1">
-            {busy ? "Submitting…" : "Submit for approval"}
+            {busy ? "Applying…" : "Apply change"}
           </Button>
           <Button variant="outline" onClick={onClose} className="rounded-xl flex-1">Cancel</Button>
         </div>
@@ -119,8 +119,14 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
   const [pending, setPending] = useState([]); // pending attendance_adjustments (status changes) for the month
   const [changeCtx, setChangeCtx] = useState(null);
   const [notice, setNotice] = useState("");
+  // Instant-applied status changes this session — overlaid on the register
+  // immediately since the parent-owned `rows` prop only refetches on reload.
+  const [applied, setApplied] = useState({}); // "empCode|date" -> new status
 
-  const canRequest = ["Master", "HR", "GM", "Branch Manager"].includes(role);
+  // Instant-apply writes straight to the attendance record, which RLS limits
+  // to Master / HR (GM & Branch Manager can't write attendance directly) --
+  // GM is a notify recipient instead.
+  const canRequest = ["Master", "HR"].includes(role);
 
   const [year, mon] = month.split("-").map(Number);
   const daysInMonth = new Date(year, mon, 0).getDate();
@@ -151,9 +157,6 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
     return () => { live = false; };
   }, [monthStart, monthEnd]);
 
-  function reloadPending() {
-    fetchPendingStatusChanges(monthStart, monthEnd).then(setPending).catch(() => {});
-  }
 
   // { "empCode|date": adjusted_status } for pending changes
   const pendingByKey = useMemo(
@@ -183,12 +186,16 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
       })
       .map(e => {
         const dayStatuses = statusByEmpDate[e.id] || {};
-        const days = dayList.map(d => ({
-          ...d,
-          raw: dayStatuses[d.date] || "",
-          bucket: toBucket(dayStatuses[d.date]),
-          pendingTo: pendingByKey[`${e.id}|${d.date}`] || null,
-        }));
+        const days = dayList.map(d => {
+          const appliedTo = applied[`${e.id}|${d.date}`] || null;
+          const raw = appliedTo || dayStatuses[d.date] || "";
+          return {
+            ...d,
+            raw,
+            bucket: toBucket(raw),
+            pendingTo: pendingByKey[`${e.id}|${d.date}`] || null,
+          };
+        });
         const counts = Object.fromEntries(BUCKETS.map(b => [b, 0]));
         for (const d of days) if (d.bucket) counts[d.bucket]++;
         return { emp: e, days, counts, hasData: days.some(d => d.bucket) };
@@ -196,7 +203,7 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
       .filter(r => r.hasData)
       .filter(r => !onlyWithAbsence || r.counts.Absent > 0)
       .sort((a, b) => String(a.emp.name || a.emp.id).localeCompare(String(b.emp.name || b.emp.id)));
-  }, [employees, statusByEmpDate, dayList, search, effectiveBranch, designation, onlyWithAbsence, pendingByKey]);
+  }, [employees, statusByEmpDate, dayList, search, effectiveBranch, designation, onlyWithAbsence, pendingByKey, applied]);
 
   const perPage = pageSize === "All" ? Math.max(1, registerRows.length) : pageSize;
   const pageCount = Math.max(1, Math.ceil(registerRows.length / perPage));
@@ -360,7 +367,10 @@ export default function AttendanceRecords({ rows = [], employees = [], branchFil
       <ChangeModal
         ctx={changeCtx}
         onClose={() => setChangeCtx(null)}
-        onSubmitted={(msg) => { setNotice(msg); setTimeout(() => setNotice(""), 5000); reloadPending(); }}
+        onSubmitted={({ msg, empCode, date, target }) => {
+          setNotice(msg); setTimeout(() => setNotice(""), 5000);
+          setApplied(a => ({ ...a, [`${empCode}|${date}`]: target }));
+        }}
       />
     </div>
   );
