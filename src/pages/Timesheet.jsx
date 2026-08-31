@@ -232,11 +232,21 @@ export default function Timesheet({ branchFilter, role }) {
   useEffect(() => {
     let q = supabase
       .from("employees")
-      .select("employee_code, full_name, department, branch, staff_level, ot_eligible, status, joining_date, last_working_day")
+      .select("employee_code, full_name, department, branch, staff_level, eligibility_group, ot_eligible, extra_days_eligible, status, joining_date, last_working_day")
       .order("full_name");
     if (branchFilter) q = q.eq("branch", branchFilter);
     q.then(({ data }) => setEmployees(data || []));
   }, [branchFilter]);
+
+  // Payroll resolves OT / Extra-Day eligibility from the employee's
+  // eligibility_group defaults (staff_eligibility_groups), with the per-employee
+  // flag as an override -- Timesheet must use the same source or its Payable OT
+  // and EWD figures won't match the payslip.
+  const [eligGroups, setEligGroups] = useState({});
+  useEffect(() => {
+    supabase.from("staff_eligibility_groups").select("code, overtime_eligible, extra_days_eligible")
+      .then(({ data }) => setEligGroups(Object.fromEntries((data || []).map(g => [g.code, g]))));
+  }, []);
 
   useEffect(() => {
     function handleClick(e) {
@@ -464,12 +474,24 @@ export default function Timesheet({ branchFilter, role }) {
     loadTimesheet(selectedEmp);
   }
 
+  // Same resolution order as PayrollAutomation.buildPayrollRows: per-employee
+  // override wins, else the eligibility group's default, else (only if the group
+  // isn't loaded/set) the static staff-level policy.
   const isOtEligible = useMemo(() => {
     if (!selectedEmp) return false;
     if (selectedEmp.ot_eligible != null) return !!selectedEmp.ot_eligible;
+    const group = eligGroups[selectedEmp.eligibility_group];
+    if (group) return !!group.overtime_eligible;
     const policy = STAFF_LEVEL_POLICIES[selectedEmp.staff_level];
     return policy ? !!policy.overtimeEligible : false;
-  }, [selectedEmp]);
+  }, [selectedEmp, eligGroups]);
+
+  const isExtraDaysEligible = useMemo(() => {
+    if (!selectedEmp) return false;
+    if (selectedEmp.extra_days_eligible != null) return !!selectedEmp.extra_days_eligible;
+    const group = eligGroups[selectedEmp.eligibility_group];
+    return group ? !!group.extra_days_eligible : true;
+  }, [selectedEmp, eligGroups]);
 
   const ledger = useMemo(() => {
     if (!selectedEmp || !fromDate || !toDate) return [];
@@ -572,21 +594,34 @@ export default function Timesheet({ branchFilter, role }) {
   }, [ledger]);
 
   const totalWorkedHours = useMemo(() => {
-    return fmt2(ledger.reduce((s, r) => s + Number(r.actual_hours ?? r.hours_worked ?? 0), 0));
+    // Payroll (buildPayrollRows) sums `worked_hours`; keep the same primary
+    // column here so the two never disagree on total time.
+    return fmt2(ledger.reduce((s, r) => s + Number(r.worked_hours ?? r.actual_hours ?? r.hours_worked ?? 0), 0));
   }, [ledger]);
 
+  // Statuses a synthetic (filled-in) row can carry where no work was owed.
   const EXEMPT_REQUIRED_HOURS_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave", "Absent"];
+  // Payroll's required-hours accumulator (buildPayrollRows) adds
+  // `attendance.required_hours` for every row EXCEPT a real Weekly Off or Absent
+  // (an override-to-Weekly-Off is already relabelled on the ledger row). It does
+  // NOT special-case Leave/Gazetted for real rows, so neither do we.
+  const PAYROLL_REQUIRED_EXCLUDED = ["Weekly Off", "Absent"];
   function rowRequiredHours(row, policy) {
-    if (!policy) return 0;
     const status = row.attendance_status || row.status;
+    // Real attendance row: use the server-classified value payroll reads.
+    if (!row.is_synthetic && row.required_hours != null) {
+      return PAYROLL_REQUIRED_EXCLUDED.includes(status) ? 0 : (Number(row.required_hours) || 0);
+    }
+    // Synthetic / legacy row with no stored required_hours -- fall back to the
+    // staff-level policy.
+    if (!policy) return 0;
     if (EXEMPT_REQUIRED_HOURS_STATUSES.includes(status)) return 0;
     const isFriday = new Date(`${row.work_date}T00:00:00`).getDay() === 5;
     return isFriday ? policy.fridayHours : policy.requiredHours;
   }
 
   const requiredHoursSummary = useMemo(() => {
-    const policy = STAFF_LEVEL_POLICIES[selectedEmp?.staff_level];
-    if (!policy) return { totalRequired: 0, variance: 0 };
+    const policy = STAFF_LEVEL_POLICIES[selectedEmp?.staff_level] || null;
     const totalRequired = ledger.reduce((sum, row) => sum + rowRequiredHours(row, policy), 0);
     return { totalRequired: fmt2(totalRequired), variance: fmt2(totalWorkedHours - totalRequired) };
   }, [selectedEmp, ledger, totalWorkedHours]);
@@ -604,10 +639,12 @@ export default function Timesheet({ branchFilter, role }) {
   const shortSummary = useMemo(() => {
     const totalShort = fmt2(ledger.reduce((s, r) => s + Number(r.short_hours || r.short_hour || 0), 0));
     const net = Number(requiredHoursSummary.variance || 0);
-    const isManagement = selectedEmp?.staff_level === "Management";
-    const deductibleShort = (isManagement && net <= -OT_SHORT_MIN_HOURS) ? fmt2(-net) : 0;
+    // Payroll only sizes a "Short Hours" deduction from days actually classified
+    // "Short Hours" (Management/Admin group only) -- gate on that, not staff_level.
+    const hasShortHoursDays = ledger.some(r => (r.attendance_status || r.status) === "Short Hours");
+    const deductibleShort = (hasShortHoursDays && net <= -OT_SHORT_MIN_HOURS) ? fmt2(-net) : 0;
     return { totalShort, deductibleShort };
-  }, [ledger, requiredHoursSummary, selectedEmp]);
+  }, [ledger, requiredHoursSummary]);
 
   const otSummary = useMemo(() => {
     const totalOT = fmt2(ledger.reduce((s, r) => s + Number(r.ot_hours || r.overtime_hours || 0), 0));
@@ -619,8 +656,10 @@ export default function Timesheet({ branchFilter, role }) {
   // See getFullyWorkedBlockKeys in attendanceRules.js -- a block worked
   // straight through with no rest at all (no real Weekly Off, no Leave, no
   // forgiven Absent), matching what payroll now pays for instead of
-  // trusting attendance.extra_day_eligible's roster-driven flag.
-  const extraWorkingDaysCount = ledger.extraWorkingDaysCount || 0;
+  // trusting attendance.extra_day_eligible's roster-driven flag. Zeroed for
+  // employees whose group/override isn't Extra-Day eligible, exactly as
+  // payrollRules.js does before pricing it.
+  const extraWorkingDaysCount = isExtraDaysEligible ? (ledger.extraWorkingDaysCount || 0) : 0;
 
   function exportExcel() {
     if (!selectedEmp) return;
@@ -1126,11 +1165,15 @@ export default function Timesheet({ branchFilter, role }) {
               </div>
               <div className="space-y-2.5 print:space-y-1">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">Weekly Offs Worked</span>
+                  <span className="text-slate-500">Payable EWD</span>
                   <Badge tone={extraWorkingDaysCount > 0 ? "blue" : "slate"}>{extraWorkingDaysCount}</Badge>
                 </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-500">Extra Day Eligible</span>
+                  <Badge tone={isExtraDaysEligible ? "green" : "slate"}>{isExtraDaysEligible ? "Yes" : "No"}</Badge>
+                </div>
                 <div className="h-px bg-slate-100" />
-                <p className="text-xs text-slate-400">Counts only weekly-off days the employee actually punched in on — this is what payroll pays EWD for.</p>
+                <p className="text-xs text-slate-400">Full 7-day blocks worked with no rest taken — this is what payroll pays EWD for. Zero when the employee's group isn't Extra-Day eligible.</p>
               </div>
             </div>
           </div>

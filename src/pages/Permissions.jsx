@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Badge, PageTitle } from "../components/ui.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
+import { reclassifyUnpublishedMonths } from "../services/eligibilityService.js";
 
 const STAFF_LEVELS = ["Management", "Floor Management", "Non-Management"];
 
@@ -88,35 +89,11 @@ export default function Permissions({ employees, role }) {
 
   // Flipping half_day_exempt/late_exempt here only changes the *employee*
   // row -- classify_attendance_day only reads it the next time a day gets
-  // (re)classified (a future ZKT sync, or an explicit reclassify call), so
-  // the toggle alone leaves every already-computed attendance row exactly
-  // as it was. Reclassify every day back to the earliest month payroll is
-  // still tracking as Draft, so the change lands wherever payroll hasn't
-  // been finalized yet -- but skip any month whose payroll is already
-  // Published, since that's a closed/paid record and shouldn't silently
-  // move under it. If a month has no payroll row at all yet, it's treated
-  // as unpublished (eligible) rather than skipped.
-  async function reclassifyUnpublishedMonths(employeeCode) {
-    const { data: payrollMeta } = await supabase.from("payroll").select("payroll_month, status");
-    const trackedMonths = Array.from(new Set((payrollMeta || []).map(p => p.payroll_month))).sort();
-    const publishedMonths = new Set((payrollMeta || []).filter(p => p.status === "Published").map(p => p.payroll_month));
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const earliestMonth = trackedMonths[0] || currentMonth;
-    const fromDate = `${earliestMonth}-01`;
-
-    const { data: rows, error } = await supabase.from("attendance")
-      .select("id, work_date")
-      .eq("employee_code", employeeCode)
-      .gte("work_date", fromDate);
-    if (error || !rows?.length) return;
-
-    const eligible = rows.filter(r => !publishedMonths.has(r.work_date.slice(0, 7)));
-    let updated = 0;
-    for (const row of eligible) {
-      const { error: rpcErr } = await supabase.rpc("reclassify_attendance_row", { p_attendance_id: row.id });
-      if (!rpcErr) updated++;
-    }
+  // (re)classified. reclassifyUnpublishedMonths (shared with the Employee
+  // form's staff-level change) re-runs every open month so the toggle
+  // actually lands; Published months are left untouched.
+  async function reclassifyAndReport(employeeCode) {
+    const { updated } = await reclassifyUnpublishedMonths(employeeCode);
     say(`Saved. Reclassified ${updated} day(s) across unpublished months.`);
   }
 
@@ -163,14 +140,14 @@ export default function Permissions({ employees, role }) {
     const next = !e.halfDayExempt;
     if (!(await saveField(e.id, { half_day_exempt: next }, { halfDayExempt: next }))) return;
     logAudit(next ? "half_day_exempt_enabled" : "half_day_exempt_disabled", e.id, `Half Day Exempt ${next ? "enabled" : "disabled"}.`);
-    reclassifyUnpublishedMonths(e.id);
+    reclassifyAndReport(e.id);
   }
 
   async function toggleLateExempt(e) {
     const next = !e.lateExempt;
     if (!(await saveField(e.id, { late_exempt: next }, { lateExempt: next }))) return;
     logAudit(next ? "late_exempt_enabled" : "late_exempt_disabled", e.id, `Late Exempt ${next ? "enabled" : "disabled"}.`);
-    reclassifyUnpublishedMonths(e.id);
+    reclassifyAndReport(e.id);
   }
 
   async function toggleAttendanceExempt(e) {

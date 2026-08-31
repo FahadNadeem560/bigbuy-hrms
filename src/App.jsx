@@ -30,6 +30,7 @@ import { calculatePayrollForEmployee } from "./utils/payrollRules.js";
 import { readImportFile, validateEmployeeImportRows } from "./utils/importHelpers.js";
 import { STAFF_LEVEL_POLICIES } from "./config/staffPolicies.js";
 import { fetchEmployees, createEmployee, updateEmployeeByCode, importEmployeeMasterBatch, getNextEmployeeId, getNextTempId } from "./services/employeeService.js";
+import { groupForStaffLevel, reclassifyUnpublishedMonths } from "./services/eligibilityService.js";
 import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
 import { escalateStaleApprovals } from "./services/leaveApprovalService.js";
@@ -244,6 +245,9 @@ export default function BigBuyHRMS({ profile }) {
     const payload = {
       employee_code: code, full_name: newEmployee.fullName, designation: newEmployee.designation,
       department: newEmployee.department, branch: newEmployee.branch, staff_level: newEmployee.level,
+      // Keep the eligibility group (attendance classifier + payroll) in lockstep
+      // with the staff level -- see eligibilityService.js.
+      eligibility_group: groupForStaffLevel(newEmployee.level),
       employee_type: newEmployee.employeeType || "Permanent", salary: Number(newEmployee.salary || 0),
       phone: newEmployee.phone, whatsapp_number: newEmployee.phone,
       cnic: newEmployee.cnic, fathers_name: newEmployee.fathersName, fathers_cnic: newEmployee.fathersCnic,
@@ -271,11 +275,17 @@ export default function BigBuyHRMS({ profile }) {
 
   async function updateEmployee() {
     if (!editingEmployee) return;
+    const prevLevel = employees.find(e => e.id === editingEmployee.id)?.level || null;
+    const levelChanged = prevLevel && prevLevel !== editingEmployee.level;
     try {
       await updateEmployeeByCode(editingEmployee.id, {
         full_name: editingEmployee.name, department: editingEmployee.dept,
         designation: editingEmployee.designation === "-" ? null : editingEmployee.designation,
         branch: editingEmployee.branch, staff_level: editingEmployee.level,
+        // Staff level and eligibility group are one axis (see
+        // eligibilityService.js) -- writing the level here also moves the group
+        // that the attendance classifier and payroll actually read.
+        eligibility_group: groupForStaffLevel(editingEmployee.level),
         salary: Number(editingEmployee.salary || 0), status: editingEmployee.status,
         cnic: editingEmployee.cnic, fathers_name: editingEmployee.fathersName, fathers_cnic: editingEmployee.fathersCnic,
         cnic_issue_date: editingEmployee.cnicIssueDate || null, cnic_expiry_date: editingEmployee.cnicExpiryDate || null,
@@ -287,6 +297,11 @@ export default function BigBuyHRMS({ profile }) {
         bank_name: editingEmployee.bankName, account_number: editingEmployee.accountNumber, iban: editingEmployee.iban,
         weekly_off_day: editingEmployee.weeklyOffDay !== "" && editingEmployee.weeklyOffDay != null ? editingEmployee.weeklyOffDay : null,
       });
+      if (levelChanged) {
+        setMessage(`Staff level changed ${prevLevel} → ${editingEmployee.level}. Recalculating attendance for open payroll months…`);
+        const { updated } = await reclassifyUnpublishedMonths(editingEmployee.id);
+        setMessage(`Staff level changed ${prevLevel} → ${editingEmployee.level}. Reclassified ${updated} attendance day(s) across open months — Refresh Payroll for any affected month to pick up the new figures.`);
+      }
       await loadEmployees(); setEditingEmployee(null);
     } catch (err) { setError(`Update failed: ${err.message}`); }
   }
