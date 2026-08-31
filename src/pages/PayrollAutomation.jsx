@@ -851,7 +851,21 @@ export default function PayrollAutomation({ role, actorName }) {
     // "day off" means the same thing on both the earning and deduction
     // side of payroll instead of trusting the roster for one and a
     // behavior-based guess for the other.
-    const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate });
+    // Per-employee tenure window so a block that predates a mid-month joiner
+    // (or follows a mid-month leaver) isn't credited an EWD just because the
+    // days outside their tenure have no attendance row -- see
+    // getFullyWorkedBlockKeys. joining_date / last_working_day are only trusted
+    // when they actually fall in this month, mirroring the proration guard
+    // further down (a stale/rehire date from a later stint would otherwise
+    // wrongly suppress every block).
+    const employmentBounds = Object.fromEntries((employees || []).map(e => [
+      e.employee_code,
+      {
+        start: (e.joining_date && e.joining_date >= fromDate && e.joining_date <= toDate) ? e.joining_date : null,
+        end: (e.status === "Resigned" && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate) ? e.last_working_day : null,
+      },
+    ]));
+    const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds });
 
     // Attendance is generated daily for every employee regardless of
     // resignation status (confirmed: a resigned employee's post-departure

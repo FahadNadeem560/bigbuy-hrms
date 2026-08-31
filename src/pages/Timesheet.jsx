@@ -232,7 +232,7 @@ export default function Timesheet({ branchFilter, role }) {
   useEffect(() => {
     let q = supabase
       .from("employees")
-      .select("employee_code, full_name, department, branch, staff_level, ot_eligible, status")
+      .select("employee_code, full_name, department, branch, staff_level, ot_eligible, status, joining_date, last_working_day")
       .order("full_name");
     if (branchFilter) q = q.eq("branch", branchFilter);
     q.then(({ data }) => setEmployees(data || []));
@@ -502,7 +502,14 @@ export default function Timesheet({ branchFilter, role }) {
     // (see PayrollAutomation.jsx for why) so Extra Working Days and the
     // Absent-to-Weekly-Off override never disagree about what counted as a
     // block's rest day.
-    const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
+    const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
+      rangeStart: fromDate, rangeEnd: toDate,
+      // Don't credit an EWD for a block that predates the employee's joining
+      // date (or follows their last working day) -- see getFullyWorkedBlockKeys.
+      // Guarded to dates inside the viewing window, matching PayrollAutomation.
+      employmentStart: (selectedEmp.joining_date && selectedEmp.joining_date >= fromDate && selectedEmp.joining_date <= toDate) ? selectedEmp.joining_date : null,
+      employmentEnd: (selectedEmp.status === "Resigned" && selectedEmp.last_working_day && selectedEmp.last_working_day >= fromDate && selectedEmp.last_working_day <= toDate) ? selectedEmp.last_working_day : null,
+    });
     base.forEach((row) => {
       if (overrideDates.has(row.work_date)) {
         // The DB row's short_hours/late/OT were computed for "Absent"

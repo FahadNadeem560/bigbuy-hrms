@@ -218,8 +218,17 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // employeeKey) -- there's no single "the" date to credit, so count
 // `.size` (optionally after filtering by employee prefix) rather than
 // looking up individual dates.
+// employmentBounds: `{ [employee_code]: { start, end } }` for the multi-employee
+// (payroll) caller; employmentStart / employmentEnd: scalars for a single-employee
+// caller (Timesheet). A block is only "fully worked" if the employee was actually
+// employed for every day of it -- a block that starts before joining_date (or ends
+// after last_working_day) is only "clean" because the days outside their tenure
+// have no attendance row at all, so treat it like a window-truncated block and
+// don't credit it. Without this a mid-month joiner earns a spurious EWD for the
+// partial calendar block they joined in (confirmed: employee 3052, joined
+// 2026-07-02 -- July's 1-7 block had rows only for the 2nd-7th and paid 1 EWD).
 export function getFullyWorkedBlockKeys(rows, opts = {}) {
-  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, employmentBounds = null, employmentStart = null, employmentEnd = null } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
 
   // Forgiven lone absences count toward the same quota as real Weekly Offs
@@ -239,6 +248,13 @@ export function getFullyWorkedBlockKeys(rows, opts = {}) {
     if (rangeStart || rangeEnd) {
       if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return false;
     }
+    // Block must sit entirely within the employee's tenure (see comment above).
+    const code = week.empPart ? week.empPart.slice(0, -1) : null;
+    const bounds = employmentBounds && code != null ? employmentBounds[code] : null;
+    const empStart = bounds ? bounds.start : employmentStart;
+    const empEnd = bounds ? bounds.end : employmentEnd;
+    if (empStart && fmtDate(week.blockStart) < empStart) return false;
+    if (empEnd && fmtDate(week.blockEnd) > empEnd) return false;
     return true;
   });
   // Earliest block first, so once the running count hits quota the earlier
