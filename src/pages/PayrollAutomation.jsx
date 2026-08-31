@@ -175,6 +175,7 @@ function PayslipModal({ row, month, onClose }) {
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Earnings</h3>
             <ERow label="Basic Salary" value={row.basicSalary} />
             <ERow label="Extra Working Days Amount" value={row.extraWorkingDaysAmount} />
+            {!!row.ghWorkedAmount && <ERow label={`Gazetted Holiday Worked (${row.ghWorkedDays} day${row.ghWorkedDays === 1 ? "" : "s"})`} value={row.ghWorkedAmount} />}
             <ERow label="OT Amount" value={row.overtimeAmount} />
             <ERow label="Commission" value={row.commissionAddOn} />
             <ERow label="Fuel Allowance" value={row.fuelAllowance} />
@@ -350,7 +351,7 @@ function plainCode(code) {
 // in from employees.branch via employee_code, same as displayRows does above.
 async function fetchBranchAggregates(month, codeToBranch) {
   const { data } = await supabase.from("payroll").select(
-    "employee_code, gross_salary, fuel_allowance, overtime_amount, extra_working_days_amount, leave_adjustment, arrears, commission_addon, other_amount, total_earnings, advance_deduction, loan_deduction, late_deduction, half_day_deduction, fine_deduction, eobi_deduction, tax_deduction, other_deductions, total_deductions, net_salary"
+    "employee_code, gross_salary, fuel_allowance, overtime_amount, extra_working_days_amount, gh_worked_amount, leave_adjustment, arrears, commission_addon, other_amount, total_earnings, advance_deduction, loan_deduction, late_deduction, half_day_deduction, fine_deduction, eobi_deduction, tax_deduction, other_deductions, total_deductions, net_salary"
   ).eq("payroll_month", month).limit(2000);
   const byBranch = {};
   (data || []).forEach(r => {
@@ -362,7 +363,7 @@ async function fetchBranchAggregates(month, codeToBranch) {
     b.totalEarnings += Number(r.total_earnings || 0);
     b.fuelAllowance += Number(r.fuel_allowance || 0);
     b.overtime += Number(r.overtime_amount || 0);
-    b.extraWorkingDays += Number(r.extra_working_days_amount || 0);
+    b.extraWorkingDays += Number(r.extra_working_days_amount || 0) + Number(r.gh_worked_amount || 0);
     b.leaveAdjustment += Number(r.leave_adjustment || 0);
     b.arrears += Number(r.arrears || 0);
     b.commission += Number(r.commission_addon || 0);
@@ -805,7 +806,7 @@ export default function PayrollAutomation({ role, actorName }) {
       supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
       supabase.from("advances").select("*").eq("advance_month", month).in("status", ["Issued", "Deducted"]),
       supabase.from("one_time_adjustments").select("*").eq("payroll_month", month).eq("status", "Approved"),
-      supabase.from("staff_eligibility_groups").select("code, extra_days_eligible, overtime_eligible, late_penalty_after_count, late_penalty_days"),
+      supabase.from("staff_eligibility_groups").select("code, extra_days_eligible, overtime_eligible, gazetted_holiday_eligible, late_penalty_after_count, late_penalty_days"),
       // Approved Skip Month requests for this month -- exclude these loans'
       // deduction below (LoanManagement.jsx's Skip Month / Approval Queue).
       supabase.from("loan_changes").select("loan_id").eq("change_type", "relief").eq("status", "Approved").eq("effective_month", month),
@@ -887,14 +888,22 @@ export default function PayrollAutomation({ role, actorName }) {
     (att || []).forEach(a => {
       const c = a.employee_code;
       if (!attByEmp[c]) attByEmp[c] = {
-        presentDays: 0, absentDays: 0, halfDays: 0, weeklyOffDays: 0,
-        lateCount: 0, otHours: 0, extraWorkingDays: 0, leaveDaysUsed: 0, numberOfWorkingDays,
+        presentDays: 0, absentDays: 0, halfDays: 0, weeklyOffDays: 0, ghDays: 0,
+        lateCount: 0, otHours: 0, extraWorkingDays: 0, ghWorkedDaysRaw: 0, leaveDaysUsed: 0, numberOfWorkingDays,
         workedHours: 0, requiredHours: 0, shortHourFractionalDays: 0, netShortHours: 0,
       };
       const isOverriddenOff = weeklyOffOverrides.has(`${c}|${a.work_date}`);
       const s = isOverriddenOff ? "Weekly Off" : (a.attendance_status || a.status || "");
+      // Gazetted Holiday actually worked -- a working status on a holiday row.
+      // Group/individual eligibility is applied later where `group` is known;
+      // here we just count the days. Half Day worked = half a day.
+      if (a.is_gazetted_holiday && !isOverriddenOff) {
+        if (s === "Present" || s === "Late" || s === "Early Out" || s === "Short Hours") attByEmp[c].ghWorkedDaysRaw += 1;
+        else if (s === "Half Day" || s === "HalfDay") attByEmp[c].ghWorkedDaysRaw += 0.5;
+      }
       if (s === "Absent") { attByEmp[c].absentDays++; }
       else if (s === "Weekly Off") { attByEmp[c].weeklyOffDays++; }
+      else if (s === "Gazetted Holiday") { attByEmp[c].ghDays++; }
       else if (s === "Half Day" || s === "HalfDay") {
         attByEmp[c].presentDays++;
         // Half-day-exempt (employee flag or per-day toggle): counts as a
@@ -942,7 +951,10 @@ export default function PayrollAutomation({ role, actorName }) {
       // July 2026: 3 real Weekly Off days + 1 Absent day's required hours
       // were being added on top, pushing net OT to a large negative and
       // zeroing it out instead of the ~9h actually earned on days worked.
-      if (!isOverriddenOff && s !== "Weekly Off" && s !== "Absent") attByEmp[c].requiredHours += Number(a.required_hours || 0);
+      // "Gazetted Holiday" excluded too -- a paid public holiday owed no work,
+      // so counting its required hours would suppress the month's real OT the
+      // same way an Absent/Weekly Off day would (see comment above).
+      if (!isOverriddenOff && s !== "Weekly Off" && s !== "Absent" && s !== "Gazetted Holiday") attByEmp[c].requiredHours += Number(a.required_hours || 0);
     });
 
     // One entry per block earned (see getFullyWorkedBlockKeys) -- every
@@ -1019,6 +1031,8 @@ export default function PayrollAutomation({ role, actorName }) {
       // eligibility group's overtime_eligible default. Previously neither was
       // read here and OT fell through to the static per-staff-level policy.
       const overtimeEligible = emp.ot_eligible != null ? !!emp.ot_eligible : !!group?.overtime_eligible;
+      // Same resolution for the "worked a gazetted holiday" +1-day credit.
+      const ghEligible = emp.gazetted_holiday_eligible != null ? !!emp.gazetted_holiday_eligible : !!group?.gazetted_holiday_eligible;
       const empMapped = {
         id: emp.employee_code, name: emp.full_name, branch: emp.branch,
         dept: emp.department, level: emp.staff_level || "Non-Management",
@@ -1040,6 +1054,8 @@ export default function PayrollAutomation({ role, actorName }) {
       const oneTimeAdj = oneTimeAdjByEmp[emp.employee_code] || {};
       const adj = {
         ...(attByEmp[emp.employee_code] || { numberOfWorkingDays }),
+        // Holiday-worked +1-day credit only for GH-eligible groups/employees.
+        ghWorkedDays: ghEligible ? Number(attByEmp[emp.employee_code]?.ghWorkedDaysRaw || 0) : 0,
         commissionAddOn: oneTimeAdj.commissionAddOn || 0,
         fineDeduction: (fineByEmp[emp.employee_code] || 0) + (oneTimeAdj.fineDeduction || 0),
         shortageDeduction: (shortageByEmp[emp.employee_code] || 0) + (oneTimeAdj.shortageDeduction || 0),
@@ -1303,6 +1319,7 @@ export default function PayrollAutomation({ role, actorName }) {
       late_count: r.lateCount,
       leave_days_used: r.leaveDaysUsed,
       extra_working_days: r.extraWorkingDays,
+      gh_worked_days: r.ghWorkedDays,
       overtime_amount: r.overtimeAmount,
       commission_addon: r.commissionAddOn,
       arrears: r.arrears,
@@ -1310,6 +1327,7 @@ export default function PayrollAutomation({ role, actorName }) {
       fuel_allowance: r.fuelAllowance,
       other_amount: r.otherEarnings,
       extra_working_days_amount: r.extraWorkingDaysAmount,
+      gh_worked_amount: r.ghWorkedAmount,
       leave_adjustment: r.leaveAdjustment,
       total_earnings: r.totalEarnings,
       late_deduction: r.lateDeduction,
@@ -1427,9 +1445,10 @@ export default function PayrollAutomation({ role, actorName }) {
       "Working Days": r.numberOfWorkingDays, "Days Present": r.presentDays, "Days Absent": r.absentDays,
       "Worked Hours": roundN(r.workedHours, 2), "Required Hours": roundN(r.requiredHours, 1),
       "OT Hours": roundN(r.otHours, 2), "Leave Days": r.leaveDaysUsed, "Extra Working Days": r.extraWorkingDays,
+      "Gazetted Holiday Worked": r.ghWorkedDays,
       "Basic Salary": r.basicSalary, "OT Amount": r.overtimeAmount,
       "Commission": r.commissionAddOn, "Fuel Allowance": r.fuelAllowance, "Other Earnings": r.otherEarnings,
-      "Extra WD Amount": r.extraWorkingDaysAmount, "Total Earnings": r.totalEarnings,
+      "Extra WD Amount": r.extraWorkingDaysAmount, "GH Worked Amount": r.ghWorkedAmount, "Total Earnings": r.totalEarnings,
       "Late Deduction": r.lateDeduction, "Short Hour Deduction": r.shortHourDeduction,
       "Absent Deduction": r.absentDeduction, "Half Day Deduction": r.halfDayDeduction, "Fine": r.fineDeduction, "Shortage": r.shortageDeduction,
       "Advance": r.advanceDeduction, "Loan Deduction": r.loanDeduction,
@@ -1457,9 +1476,10 @@ export default function PayrollAutomation({ role, actorName }) {
     const fuelAllowance        = r.fuelAllowance || r.fuel_allowance || r.fuel || 0;
     const otherEarnings        = r.otherEarnings || r.other_earnings || r.otherAmount || r.other_amount || 0;
     const extraWorkingDaysAmount = r.extraWorkingDaysAmount || r.extra_working_days_amount || 0;
+    const ghWorkedAmount = r.ghWorkedAmount || r.gh_worked_amount || 0;
     const leaveAdjustment = r.leaveAdjustment || r.leave_adjustment || 0;
     const totalEarnings = basicSalary + overtimeAmount + commissionAddOn +
-      fuelAllowance + otherEarnings + extraWorkingDaysAmount + leaveAdjustment +
+      fuelAllowance + otherEarnings + extraWorkingDaysAmount + ghWorkedAmount + leaveAdjustment +
       (r.arrears || 0) + (r.absentAdjustment || r.absent_adjustment || 0);
 
     const lateDeduction        = r.lateDeduction || r.late_deduction || 0;
@@ -1494,8 +1514,9 @@ export default function PayrollAutomation({ role, actorName }) {
       lateCount: r.lateCount || r.late_count || 0,
       leaveDaysUsed: r.leaveDaysUsed || r.leave_days_used || 0,
       extraWorkingDays: r.extraWorkingDays || r.extra_working_days || 0,
+      ghWorkedDays: r.ghWorkedDays || r.gh_worked_days || 0,
       basicSalary, overtimeAmount, commissionAddOn, fuelAllowance,
-      otherEarnings, extraWorkingDaysAmount, leaveAdjustment, totalEarnings,
+      otherEarnings, extraWorkingDaysAmount, ghWorkedAmount, leaveAdjustment, totalEarnings,
       lateDeduction, shortHourDeduction, absentDeduction, halfDayDeduction,
       fineDeduction, shortageDeduction, advanceDeduction, loanDeduction,
       taxDeduction, eobiDeduction, otherDeductions, totalDeductions,

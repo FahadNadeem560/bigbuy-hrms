@@ -206,6 +206,7 @@ export default function Timesheet({ branchFilter, role }) {
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [attendance, setAttendance] = useState([]);
   const [roster, setRoster] = useState([]);
+  const [holidayDates, setHolidayDates] = useState(() => new Set());
   const [leaveData, setLeaveData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -232,7 +233,7 @@ export default function Timesheet({ branchFilter, role }) {
   useEffect(() => {
     let q = supabase
       .from("employees")
-      .select("employee_code, full_name, department, branch, staff_level, eligibility_group, ot_eligible, extra_days_eligible, status, joining_date, last_working_day")
+      .select("employee_code, full_name, department, branch, staff_level, eligibility_group, ot_eligible, extra_days_eligible, gazetted_holiday_eligible, status, joining_date, last_working_day")
       .order("full_name");
     if (branchFilter) q = q.eq("branch", branchFilter);
     q.then(({ data }) => setEmployees(data || []));
@@ -244,7 +245,7 @@ export default function Timesheet({ branchFilter, role }) {
   // and EWD figures won't match the payslip.
   const [eligGroups, setEligGroups] = useState({});
   useEffect(() => {
-    supabase.from("staff_eligibility_groups").select("code, overtime_eligible, extra_days_eligible")
+    supabase.from("staff_eligibility_groups").select("code, overtime_eligible, extra_days_eligible, gazetted_holiday_eligible")
       .then(({ data }) => setEligGroups(Object.fromEntries((data || []).map(g => [g.code, g]))));
   }, []);
 
@@ -295,6 +296,14 @@ export default function Timesheet({ branchFilter, role }) {
         .gte("roster_date", from)
         .lte("roster_date", to);
       setRoster(rst || []);
+
+      const { data: gh } = await supabase
+        .from("gazetted_holidays")
+        .select("holiday_date")
+        .eq("is_active", true)
+        .gte("holiday_date", from)
+        .lte("holiday_date", to);
+      setHolidayDates(new Set((gh || []).map(h => h.holiday_date)));
 
       const { data: lv } = await supabase
         .from("leaves")
@@ -493,6 +502,13 @@ export default function Timesheet({ branchFilter, role }) {
     return group ? !!group.extra_days_eligible : true;
   }, [selectedEmp, eligGroups]);
 
+  const isGhEligible = useMemo(() => {
+    if (!selectedEmp) return false;
+    if (selectedEmp.gazetted_holiday_eligible != null) return !!selectedEmp.gazetted_holiday_eligible;
+    const group = eligGroups[selectedEmp.eligibility_group];
+    return group ? !!group.gazetted_holiday_eligible : false;
+  }, [selectedEmp, eligGroups]);
+
   const ledger = useMemo(() => {
     if (!selectedEmp || !fromDate || !toDate) return [];
     const byDate = {};
@@ -508,9 +524,10 @@ export default function Timesheet({ branchFilter, role }) {
         const rosterEntry = rosterByDate[date];
         // Weekly off is no longer roster-driven (the roster table isn't kept
         // current) — see the Mon-Fri single-absence rule applied below.
-        // Gazetted holidays still come from the roster since that's a
-        // separate, explicitly-marked concept.
-        const status = rosterEntry?.is_gazetted_holiday ? "Gazetted Holiday" : "Absent";
+        // Gazetted holidays come from the roster OR the company-wide
+        // gazetted_holidays table (Attendance ▸ Holidays).
+        const isHoliday = rosterEntry?.is_gazetted_holiday || holidayDates.has(date);
+        const status = isHoliday ? "Gazetted Holiday" : "Absent";
         return { work_date: date, attendance_status: status, is_synthetic: true };
       })
       .filter(Boolean);
@@ -564,7 +581,7 @@ export default function Timesheet({ branchFilter, role }) {
     // every existing consumer treats it as a plain row array.
     base.extraWorkingDaysCount = fullyWorkedBlockKeys.size;
     return base;
-  }, [selectedEmp, attendance, roster, fromDate, toDate]);
+  }, [selectedEmp, attendance, roster, holidayDates, fromDate, toDate]);
 
   const STATUS_ORDER = ["Present", "Late", "Half Day", "Short Hours", "Early Out", "Absent", "Weekly Off", "Gazetted Holiday", "Leave"];
   const statusCounts = useMemo(() => {
@@ -602,10 +619,10 @@ export default function Timesheet({ branchFilter, role }) {
   // Statuses a synthetic (filled-in) row can carry where no work was owed.
   const EXEMPT_REQUIRED_HOURS_STATUSES = ["Weekly Off", "Gazetted Holiday", "Leave", "Absent"];
   // Payroll's required-hours accumulator (buildPayrollRows) adds
-  // `attendance.required_hours` for every row EXCEPT a real Weekly Off or Absent
-  // (an override-to-Weekly-Off is already relabelled on the ledger row). It does
-  // NOT special-case Leave/Gazetted for real rows, so neither do we.
-  const PAYROLL_REQUIRED_EXCLUDED = ["Weekly Off", "Absent"];
+  // `attendance.required_hours` for every row EXCEPT a real Weekly Off, Absent
+  // or Gazetted Holiday (an override-to-Weekly-Off is already relabelled on the
+  // ledger row). It does NOT special-case Leave for real rows, so neither do we.
+  const PAYROLL_REQUIRED_EXCLUDED = ["Weekly Off", "Absent", "Gazetted Holiday"];
   function rowRequiredHours(row, policy) {
     const status = row.attendance_status || row.status;
     // Real attendance row: use the server-classified value payroll reads.
@@ -660,6 +677,19 @@ export default function Timesheet({ branchFilter, role }) {
   // employees whose group/override isn't Extra-Day eligible, exactly as
   // payrollRules.js does before pricing it.
   const extraWorkingDaysCount = isExtraDaysEligible ? (ledger.extraWorkingDaysCount || 0) : 0;
+
+  // Gazetted holidays the employee actually worked -> +1 day each (½ for a
+  // Half Day) in payroll, for GH-eligible groups. Mirrors buildPayrollRows.
+  const ghWorkedSummary = useMemo(() => {
+    let days = 0;
+    ledger.forEach((r) => {
+      if (!r.is_gazetted_holiday) return;
+      const s = r.attendance_status || r.status;
+      if (s === "Present" || s === "Late" || s === "Early Out" || s === "Short Hours") days += 1;
+      else if (s === "Half Day" || s === "HalfDay") days += 0.5;
+    });
+    return { workedDays: days, payableDays: isGhEligible ? days : 0 };
+  }, [ledger, isGhEligible]);
 
   function exportExcel() {
     if (!selectedEmp) return;
@@ -1173,7 +1203,16 @@ export default function Timesheet({ branchFilter, role }) {
                   <Badge tone={isExtraDaysEligible ? "green" : "slate"}>{isExtraDaysEligible ? "Yes" : "No"}</Badge>
                 </div>
                 <div className="h-px bg-slate-100" />
-                <p className="text-xs text-slate-400">Full 7-day blocks worked with no rest taken — this is what payroll pays EWD for. Zero when the employee's group isn't Extra-Day eligible.</p>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-500">Gazetted Holiday Worked</span>
+                  <Badge tone={ghWorkedSummary.workedDays > 0 ? "blue" : "slate"}>{ghWorkedSummary.workedDays}</Badge>
+                </div>
+                <div className="flex items-center justify-between text-sm font-semibold">
+                  <span className="text-slate-700">Payable Holiday Days</span>
+                  <Badge tone={ghWorkedSummary.payableDays > 0 ? "blue" : "slate"}>{ghWorkedSummary.payableDays}</Badge>
+                </div>
+                <div className="h-px bg-slate-100" />
+                <p className="text-xs text-slate-400">EWD = full 7-day blocks worked with no rest taken. A gazetted holiday <em>worked</em> pays +1 day (½ for a Half Day) for GH-eligible groups. Both zero when the group isn't eligible.</p>
               </div>
             </div>
           </div>

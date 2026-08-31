@@ -76,6 +76,14 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
   const extraWorkingDays = (!isExempt && extraDaysEligible) ? Number(adjustments.extraWorkingDays || 0) : 0;
   const extraWorkingDaysAmount = Math.round(dailyRate * extraWorkingDays);
 
+  // Gazetted Holiday worked: an employee whose group (or individual override)
+  // is gazetted-holiday-eligible earns +1 day's pay (½ for a Half Day) for
+  // each public holiday they actually worked -- buildPayrollRows resolves the
+  // eligibility and counts the days, passing ghWorkedDays here. Not eligible
+  // (MANAGEMENT_ADMIN by default) -> normal pay only. Skipped for exempt.
+  const ghWorkedDays = isExempt ? 0 : Number(adjustments.ghWorkedDays || 0);
+  const ghWorkedAmount = Math.round(dailyRate * ghWorkedDays);
+
   const workedHours = Number(adjustments.workedHours || 0);
   const requiredHours = Number(adjustments.requiredHours || 0);
 
@@ -110,6 +118,7 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     fuelAllowance +
     otherEarnings +
     extraWorkingDaysAmount +
+    ghWorkedAmount +
     leaveAdjustment;
 
   // ── Deductions ────────────────────────────────────────────
@@ -204,6 +213,7 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     leaveDaysUsed: Number(adjustments.leaveDaysUsed || 0),
     leaveOffsetDays,
     extraWorkingDays,
+    ghWorkedDays,
     // Earnings
     overtimeAmount,
     commissionAddOn,
@@ -212,6 +222,7 @@ export function calculatePayrollForEmployee(employee, adjustments = {}, loanRows
     fuelAllowance,
     otherEarnings,
     extraWorkingDaysAmount,
+    ghWorkedAmount,
     leaveAdjustment,
     totalEarnings,
     // Deductions

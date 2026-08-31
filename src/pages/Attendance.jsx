@@ -4,12 +4,14 @@ import AttendanceAdjustment from "./AttendanceAdjustment.jsx";
 import MissingPunch from "./MissingPunch.jsx";
 import AttendanceAlerts from "./AttendanceAlerts.jsx";
 import AttendanceRecords from "./AttendanceRecords.jsx";
+import GazettedHolidays from "./GazettedHolidays.jsx";
 
 const TABS = [
   ["records",    "Records"],
   ["timesheet",  "Timesheet"],
   ["adjustments","Adjustments"],
   ["missing",    "Missing Punches"],
+  ["holidays",   "Holidays"],
   ["alerts",     "Alerts"],
 ];
 
@@ -31,6 +33,7 @@ export default function Attendance({ rows, role, branchFilter, employees }) {
       {mainTab === "timesheet"   && <Timesheet branchFilter={branchFilter} role={role} />}
       {mainTab === "adjustments" && <AttendanceAdjustment role={role} />}
       {mainTab === "missing"     && <MissingPunch role={role} />}
+      {mainTab === "holidays"    && <GazettedHolidays role={role} />}
       {mainTab === "alerts"      && <AttendanceAlerts />}
     </div>
   );

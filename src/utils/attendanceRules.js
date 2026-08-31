@@ -70,7 +70,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(blockStart)}`;
     const week = (weeks[weekKey] ||= {
-      absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasWorkedGazettedHoliday: false,
+      absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasGazettedHolidayOff: false,
       hasWorkedDay: false,
       blockStart, blockEnd, empPart, isFullBlock,
     });
@@ -98,6 +98,14 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
       week.hasRealWeeklyOff = true;
       monthlyWeeklyOffCount[empPart] = (monthlyWeeklyOffCount[empPart] || 0) + 1;
     } else if (status === "Leave") week.hasLeave = true;
+    else if (status === "Gazetted Holiday") {
+      // A paid public-holiday day off the employee didn't work -- like a
+      // Weekly Off / Leave, it means the block wasn't worked straight
+      // through, so no Extra Working Day is owed for "no rest taken". (A
+      // holiday the employee DID work keeps a working status and is paid its
+      // own +1 day directly in payroll, not through the block heuristic.)
+      week.hasGazettedHolidayOff = true;
+    }
     else if (status === "Absent") {
       week.hasAnyAbsent = true;
       // Only a true no-show (no check-in AND no check-out at all) on a
@@ -109,11 +117,6 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
       // real short-attendance day as if it were their day off.
       if (dow !== 0 && dow !== 6 && !row[checkInKey] && !row[checkOutKey]) week.absentRows.push(row);
     }
-    // A real Gazetted Holiday actually worked is independent of the
-    // personal weekly-off quota -- it's a distinct kind of day off, so it
-    // stays compensable even in a block where the monthly quota gate below
-    // would otherwise suppress an EWD credit.
-    if (row.is_gazetted_holiday && row[checkInKey] && row[checkOutKey]) week.hasWorkedGazettedHoliday = true;
   });
   return { weeks, monthlyWeeklyOffCount };
 }
@@ -197,9 +200,13 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // entitlement elsewhere -- even unevenly, e.g. worked through one week and
 // were given 2 off days back-to-back the next to make up for it -- a block
 // with no off day of its own was already compensated and doesn't separately
-// earn a bonus. A block only earns EWD past the quota if it contains a real
-// Gazetted Holiday actually worked, since that's compensable independent of
-// the personal weekly-off quota.
+// earn a bonus.
+//
+// A block containing a "Gazetted Holiday" status day (a paid public holiday
+// the employee did NOT work) is excluded like a Weekly Off / Leave block --
+// the employee got a paid rest day that block. A holiday the employee DID
+// work keeps a working status and is paid its own +1 day directly in
+// buildPayrollRows (gh_worked_amount), not through this heuristic.
 //
 // "Already received" counts a forgiven absence (getWeeklyOffOverrideKeys)
 // the same as a real Weekly Off -- both are an unpaid rest day the employee
@@ -244,7 +251,7 @@ export function getFullyWorkedBlockKeys(rows, opts = {}) {
   Object.keys(forgivenCount).forEach((k) => { runningCount[k] = (runningCount[k] || 0) + forgivenCount[k]; });
 
   const candidates = Object.values(weeks).filter((week) => {
-    if (!week.isFullBlock || week.hasRealWeeklyOff || week.hasLeave || week.hasAnyAbsent) return false;
+    if (!week.isFullBlock || week.hasRealWeeklyOff || week.hasLeave || week.hasAnyAbsent || week.hasGazettedHolidayOff) return false;
     if (rangeStart || rangeEnd) {
       if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return false;
     }
@@ -265,10 +272,8 @@ export function getFullyWorkedBlockKeys(rows, opts = {}) {
   const blockKeys = new Set();
   candidates.forEach((week) => {
     const used = runningCount[week.empPart] || 0;
-    if (used >= MONTHLY_WEEKLY_OFF_QUOTA && !week.hasWorkedGazettedHoliday) return;
-    // A worked Gazetted Holiday is compensable independent of the quota, so
-    // crediting it never consumes a slot other blocks are still competing for.
-    if (!week.hasWorkedGazettedHoliday) runningCount[week.empPart] = used + 1;
+    if (used >= MONTHLY_WEEKLY_OFF_QUOTA) return;
+    runningCount[week.empPart] = used + 1;
     blockKeys.add(`${week.empPart}${fmtDate(week.blockStart)}`);
   });
   return blockKeys;
