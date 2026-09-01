@@ -76,6 +76,10 @@ function SettlementSlipModal({ row, onClose }) {
   if (!row) return null;
   const isTerm = row.separation_type === "termination";
   const sepDate = isTerm ? row.termination_date : row.resignation_date;
+  // Rows bulk-imported when F&F was moved out of payroll (Aug 2026) only carry
+  // the money totals — no per-day / notice / rate detail was ever captured.
+  const legacy = !Number(row.daily_rate) && !Number(row.salary) && !Number(row.pending_salary)
+    && !row.days_present && !row.weekly_offs && Number(row.gross_earnings) > 0;
   const ERow = ({ label, value, always }) => (always || value) ? (
     <div className="flex justify-between py-1.5 border-b border-slate-100">
       <span className="text-slate-500 text-sm">{label}</span>
@@ -121,8 +125,16 @@ function SettlementSlipModal({ row, onClose }) {
             <IRow label="Settled By" value={`${row.settled_by || "—"}${row.settled_at ? ` · ${new Date(row.settled_at).toLocaleDateString()}` : ""}`} />
           </div>
 
+          {legacy && (
+            <div className="p-3 rounded-xl bg-amber-50 text-amber-700 text-sm">
+              Imported record — only the settlement totals were carried over. Per-day,
+              notice-period and rate detail was not captured for settlements processed
+              before this screen existed.
+            </div>
+          )}
+
           {/* Notice period — resignation only */}
-          {!isTerm && (
+          {!isTerm && !legacy && (
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Notice Period</h3>
               <IRow label="Required (calendar days)" value={row.notice_required_days} />
@@ -139,6 +151,7 @@ function SettlementSlipModal({ row, onClose }) {
           )}
 
           {/* Days */}
+          {!legacy && (
           <div className="bg-blue-50 rounded-xl px-4 py-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-blue-400 mb-2">Days & Rate</h3>
             <div className="grid grid-cols-3 gap-2 text-xs mb-2">
@@ -154,12 +167,13 @@ function SettlementSlipModal({ row, onClose }) {
             {isTerm && <IRow label="Salary Payable" value={row.salary_payable === false ? "No — withheld" : "Yes"} />}
             <IRow label="Daily Rate (Salary / 30)" value={money(dr)} />
           </div>
+          )}
 
           {/* Earnings */}
           <div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Earnings</h3>
-            <ERow label={`Pending Salary (${row.payout_days ?? row.paid_days} × ${money(dr)})`} value={row.pending_salary} always />
-            <ERow label="Leave Encashment" value={row.leave_encashment} always />
+            {!legacy && <ERow label={`Pending Salary (${row.payout_days ?? row.paid_days} × ${money(dr)})`} value={row.pending_salary} always />}
+            {!legacy && <ERow label="Leave Encashment" value={row.leave_encashment} always />}
             <div className="flex justify-between py-2 mt-1 bg-emerald-50 rounded-xl px-3">
               <span className="font-bold text-sm text-emerald-800">Gross Earnings</span>
               <span className="font-bold text-sm text-emerald-800">{money(row.gross_earnings)}</span>
@@ -171,7 +185,8 @@ function SettlementSlipModal({ row, onClose }) {
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Deductions</h3>
             <DRow label="Outstanding Loans" value={row.loan_balance} />
             <DRow label="Short Notice Penalty" value={row.notice_penalty} />
-            {!row.loan_balance && !row.notice_penalty && <p className="text-sm text-slate-400 py-1.5">None</p>}
+            {legacy && <p className="text-sm text-slate-400 py-1.5">Breakdown not captured for this imported record.</p>}
+            {!legacy && !row.loan_balance && !row.notice_penalty && <p className="text-sm text-slate-400 py-1.5">None</p>}
             <div className="flex justify-between py-2 mt-1 bg-red-50 rounded-xl px-3">
               <span className="font-bold text-sm text-red-800">Total Deductions</span>
               <span className="font-bold text-sm text-red-800">– {money(row.total_deductions)}</span>
