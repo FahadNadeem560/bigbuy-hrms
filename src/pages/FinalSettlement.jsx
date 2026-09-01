@@ -11,6 +11,18 @@ const NOTICE_CALENDAR_DAYS = {
   "Management":       45,
 };
 
+// Payout modes offered once a Master override is engaged on a resignation:
+//  - worked       : pay only the days actually worked in the notice window (default, pre-existing behaviour)
+//  - full_period  : pay the whole required notice period as if it had been served in full
+//  - custom       : pay an explicit number of days chosen by the Master
+const PAYOUT_MODE_LABELS = {
+  worked: "Pay for days worked",
+  full_period: "Pay full notice period (served or not)",
+  custom: "Custom — choose the number of days to pay",
+};
+
+function firstOfMonth(dateStr) { return dateStr ? dateStr.slice(0, 7) + "-01" : ""; }
+
 // Simple inclusive calendar day count
 function calendarDaysBetween(startStr, endStr) {
   if (!startStr || !endStr) return 0;
@@ -56,6 +68,137 @@ function EmpPicker({ employees, value, onChange }) {
   );
 }
 
+// ─── Settlement Slip ──────────────────────────────────────────────────────
+// Full detail of one processed settlement — the F&F equivalent of the payroll
+// payslip. Reads straight off the stored final_settlements row (nothing is
+// recomputed here; the figures are exactly what was locked in at settlement).
+function SettlementSlipModal({ row, onClose }) {
+  if (!row) return null;
+  const isTerm = row.separation_type === "termination";
+  const sepDate = isTerm ? row.termination_date : row.resignation_date;
+  const ERow = ({ label, value, always }) => (always || value) ? (
+    <div className="flex justify-between py-1.5 border-b border-slate-100">
+      <span className="text-slate-500 text-sm">{label}</span>
+      <span className="text-sm text-emerald-700">{money(value || 0)}</span>
+    </div>
+  ) : null;
+  const DRow = ({ label, value }) => value ? (
+    <div className="flex justify-between py-1.5 border-b border-slate-100">
+      <span className="text-slate-500 text-sm">{label}</span>
+      <span className="text-sm text-red-500">– {money(value)}</span>
+    </div>
+  ) : null;
+  const IRow = ({ label, value }) => (
+    <div className="flex justify-between py-1.5 border-b border-slate-100">
+      <span className="text-slate-500 text-sm">{label}</span>
+      <span className="text-sm text-slate-700 text-right">{value ?? "—"}</span>
+    </div>
+  );
+  const dr = Number(row.daily_rate || 0);
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 bg-white rounded-t-2xl px-6 pt-6 pb-3 border-b border-slate-100 flex justify-between items-start">
+          <div>
+            <h2 className="font-bold text-slate-800 text-lg">Final Settlement — {row.payroll_month}</h2>
+            <p className="text-sm text-slate-500">{row.employee_name} · {row.employee_code}</p>
+            <div className="flex gap-2 mt-1">
+              {row.staff_level && <span className="text-xs text-slate-400">{row.staff_level}</span>}
+              <Badge tone={isTerm ? "yellow" : "slate"}>{isTerm ? "Termination" : "Resignation"}</Badge>
+              <Badge tone={row.payment_status === "FnF" ? "blue" : "red"}>{row.payment_status === "FnF" ? "F&F" : "No F&F"}</Badge>
+            </div>
+          </div>
+          <Button variant="outline" onClick={onClose} className="rounded-xl text-xs">Close</Button>
+        </div>
+        <div className="px-6 py-4 space-y-5">
+          {/* Separation */}
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Separation</h3>
+            <IRow label={isTerm ? "Termination Date" : "Resignation Date"} value={sepDate} />
+            <IRow label="Last Working Day" value={row.last_working_day} />
+            <IRow label="Branch / Department" value={`${row.branch || "—"} / ${row.department || "—"}`} />
+            {row.resignation_reason && <IRow label="Reason" value={row.resignation_reason} />}
+            <IRow label="Settled By" value={`${row.settled_by || "—"}${row.settled_at ? ` · ${new Date(row.settled_at).toLocaleDateString()}` : ""}`} />
+          </div>
+
+          {/* Notice period — resignation only */}
+          {!isTerm && (
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Notice Period</h3>
+              <IRow label="Required (calendar days)" value={row.notice_required_days} />
+              <IRow label="Served (calendar days)" value={row.notice_served_days} />
+              <IRow label="Notice Complete" value={row.notice_complete ? "Yes" : "No"} />
+              <IRow label="Absconding" value={row.is_absconding ? "Yes — 7+ consecutive absents" : "No"} />
+              {row.override_applied && (
+                <>
+                  <IRow label="Master Override" value={`Yes · ${row.override_by || "Master"}`} />
+                  {row.override_reason && <IRow label="Override Reason" value={row.override_reason} />}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Days */}
+          <div className="bg-blue-50 rounded-xl px-4 py-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-blue-400 mb-2">Days & Rate</h3>
+            <div className="grid grid-cols-3 gap-2 text-xs mb-2">
+              {[["Present", row.days_present], ["Weekly Offs", row.weekly_offs], ["Absent", row.absent_days]].map(([l, v]) => (
+                <div key={l} className="text-center bg-white rounded-lg py-1.5 px-2">
+                  <div className="font-semibold text-slate-700">{Math.round(Number(v) || 0)}</div>
+                  <div className="text-slate-400 leading-tight">{l}</div>
+                </div>
+              ))}
+            </div>
+            <IRow label="Days Paid" value={`${row.payout_days ?? row.paid_days} day(s)`} />
+            <IRow label="Payout Basis" value={PAYOUT_MODE_LABELS[row.payout_mode] || PAYOUT_MODE_LABELS.worked} />
+            {isTerm && <IRow label="Salary Payable" value={row.salary_payable === false ? "No — withheld" : "Yes"} />}
+            <IRow label="Daily Rate (Salary / 30)" value={money(dr)} />
+          </div>
+
+          {/* Earnings */}
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Earnings</h3>
+            <ERow label={`Pending Salary (${row.payout_days ?? row.paid_days} × ${money(dr)})`} value={row.pending_salary} always />
+            <ERow label="Leave Encashment" value={row.leave_encashment} always />
+            <div className="flex justify-between py-2 mt-1 bg-emerald-50 rounded-xl px-3">
+              <span className="font-bold text-sm text-emerald-800">Gross Earnings</span>
+              <span className="font-bold text-sm text-emerald-800">{money(row.gross_earnings)}</span>
+            </div>
+          </div>
+
+          {/* Deductions */}
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Deductions</h3>
+            <DRow label="Outstanding Loans" value={row.loan_balance} />
+            <DRow label="Short Notice Penalty" value={row.notice_penalty} />
+            {!row.loan_balance && !row.notice_penalty && <p className="text-sm text-slate-400 py-1.5">None</p>}
+            <div className="flex justify-between py-2 mt-1 bg-red-50 rounded-xl px-3">
+              <span className="font-bold text-sm text-red-800">Total Deductions</span>
+              <span className="font-bold text-sm text-red-800">– {money(row.total_deductions)}</span>
+            </div>
+          </div>
+
+          {/* Net */}
+          <div className="bg-slate-50 rounded-xl px-4 py-4 flex justify-between items-center">
+            <span className="font-bold text-base text-slate-900">Net Payable</span>
+            <span className="font-bold text-xl text-slate-900">{money(row.net_payable)}</span>
+          </div>
+
+          {/* Payment */}
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Payment</h3>
+            <IRow label="Status" value={row.payment_status === "FnF" ? "F&F — payable" : "No F&F — nothing owed"} />
+            <IRow label="Paid" value={row.is_paid
+              ? `Yes · ${row.paid_by || "—"}${row.paid_at ? ` · ${new Date(row.paid_at).toLocaleDateString()}` : ""}`
+              : "Not yet paid"} />
+          </div>
+        </div>
+        <div className="px-6 pb-6"><Button onClick={() => window.print()} variant="outline" className="w-full rounded-2xl">Print</Button></div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Settlements Ledger ────────────────────────────────────────────────────
 // Every processed settlement, entirely separate from the regular monthly
 // payroll table (see final_settlements / loadBase in PayrollAutomation.jsx).
@@ -68,6 +211,7 @@ function SettlementsLedger({ role }) {
   const [branchFilter, setBranchFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [marking, setMarking] = useState(null);
+  const [slip, setSlip] = useState(null);
   const [err, setErr] = useState("");
 
   const canMarkPaid = ["Master", "Finance"].includes(role);
@@ -114,6 +258,7 @@ function SettlementsLedger({ role }) {
 
   return (
     <div>
+      <SettlementSlipModal row={slip} onClose={() => setSlip(null)} />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         {[
           ["F&F Settlements", totals.fnfCount],
@@ -147,6 +292,8 @@ function SettlementsLedger({ role }) {
       {loading
         ? <p className="text-slate-400 text-sm">Loading settlements...</p>
         : (
+          <>
+          <p className="text-xs text-slate-400 mb-2">Click a row for the full settlement slip.</p>
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full min-w-[1000px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
@@ -158,7 +305,7 @@ function SettlementsLedger({ role }) {
                 {filtered.length === 0
                   ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
                   : filtered.map(r => (
-                    <tr key={r.id} className="hover:bg-slate-50">
+                    <tr key={r.id} onClick={() => setSlip(r)} className="hover:bg-slate-50 cursor-pointer">
                       <td className="px-4 py-3 font-medium">{r.employee_name} <span className="text-xs text-slate-400">({r.employee_code})</span></td>
                       <td className="px-4 py-3">
                         <Badge tone={r.separation_type === "termination" ? "yellow" : "slate"}>
@@ -174,7 +321,7 @@ function SettlementsLedger({ role }) {
                       <td className="px-4 py-3">
                         {r.is_paid ? <Badge tone="green">Paid</Badge> : <span className="text-slate-400 text-xs">Unpaid</span>}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         {r.payment_status === "FnF" && !r.is_paid && canMarkPaid && (
                           <Button onClick={() => markPaid(r)} disabled={marking === r.id} className="rounded-lg text-xs py-1 px-2">
                             {marking === r.id ? "Marking…" : "Mark Paid"}
@@ -186,22 +333,11 @@ function SettlementsLedger({ role }) {
               </tbody>
             </table>
           </div>
+          </>
         )}
     </div>
   );
 }
-
-// Payout modes offered once a Master override is engaged on a resignation:
-//  - worked       : pay only the days actually worked in the notice window (default, pre-existing behaviour)
-//  - full_period  : pay the whole required notice period as if it had been served in full
-//  - custom       : pay an explicit number of days chosen by the Master
-const PAYOUT_MODE_LABELS = {
-  worked: "Pay for days worked",
-  full_period: "Pay full notice period (served or not)",
-  custom: "Custom — choose the number of days to pay",
-};
-
-function firstOfMonth(dateStr) { return dateStr ? dateStr.slice(0, 7) + "-01" : ""; }
 
 export default function FinalSettlement({ role }) {
   const [innerTab, setInnerTab] = useState("process");
