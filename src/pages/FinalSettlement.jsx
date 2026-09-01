@@ -150,16 +150,21 @@ function SettlementsLedger({ role }) {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full min-w-[1000px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Employee", "Branch", "Department", "Last Working Day", "Month", "Status", "Net Payable", "Paid", "Action"].map(h =>
+                <tr>{["Employee", "Type", "Branch", "Department", "Last Working Day", "Month", "Status", "Net Payable", "Paid", "Action"].map(h =>
                   <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.length === 0
-                  ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
+                  ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
                   : filtered.map(r => (
                     <tr key={r.id} className="hover:bg-slate-50">
                       <td className="px-4 py-3 font-medium">{r.employee_name} <span className="text-xs text-slate-400">({r.employee_code})</span></td>
+                      <td className="px-4 py-3">
+                        <Badge tone={r.separation_type === "termination" ? "yellow" : "slate"}>
+                          {r.separation_type === "termination" ? "Termination" : "Resignation"}
+                        </Badge>
+                      </td>
                       <td className="px-4 py-3">{r.branch || "—"}</td>
                       <td className="px-4 py-3">{r.department || "—"}</td>
                       <td className="px-4 py-3">{r.last_working_day || "—"}</td>
@@ -186,19 +191,45 @@ function SettlementsLedger({ role }) {
   );
 }
 
+// Payout modes offered once a Master override is engaged on a resignation:
+//  - worked       : pay only the days actually worked in the notice window (default, pre-existing behaviour)
+//  - full_period  : pay the whole required notice period as if it had been served in full
+//  - custom       : pay an explicit number of days chosen by the Master
+const PAYOUT_MODE_LABELS = {
+  worked: "Pay for days worked",
+  full_period: "Pay full notice period (served or not)",
+  custom: "Custom — choose the number of days to pay",
+};
+
+function firstOfMonth(dateStr) { return dateStr ? dateStr.slice(0, 7) + "-01" : ""; }
+
 export default function FinalSettlement({ role }) {
   const [innerTab, setInnerTab] = useState("process");
   const [employees, setEmployees] = useState([]);
   const [selEmp, setSelEmp] = useState(null);
-  const [resignDate, setResignDate] = useState("");
+  const [sepType, setSepType] = useState("resignation"); // "resignation" | "termination"
+  const [resignDate, setResignDate] = useState("");      // resignation date OR termination date
   const [lastDay, setLastDay] = useState("");
   const [resignReason, setResignReason] = useState("");
   const [loanBalance, setLoanBalance] = useState(0);
   const [attendanceData, setAttendanceData] = useState([]);
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
+  const [payoutMode, setPayoutMode] = useState("worked");
+  const [customDays, setCustomDays] = useState("");
+  const [salaryNotPayable, setSalaryNotPayable] = useState(false); // termination only
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+
+  const isTermination = sepType === "termination";
+
+  function resetForm() {
+    setSelEmp(null); setSepType("resignation");
+    setResignDate(""); setLastDay(""); setResignReason("");
+    setLoanBalance(0); setAttendanceData([]);
+    setOverrideMode(false); setOverrideReason("");
+    setPayoutMode("worked"); setCustomDays(""); setSalaryNotPayable(false);
+  }
 
   useEffect(() => {
     supabase.from("employees")
@@ -215,18 +246,34 @@ export default function FinalSettlement({ role }) {
     }
   }, [selEmp]);
 
+  // The window whose attendance the settlement pays for.
+  //  - Resignation : resignation date → last working day (the notice window served).
+  //  - Termination : start of the final month (or joining date, if the employee
+  //                  joined mid-month) → last working day. Termination is
+  //                  employer-initiated with no notice period, so the pending
+  //                  amount is simply the unpaid part of the final month.
+  const winStart = useMemo(() => {
+    if (isTermination) {
+      if (!lastDay) return "";
+      const ms = firstOfMonth(lastDay);
+      return (selEmp?.joining_date && selEmp.joining_date > ms) ? selEmp.joining_date : ms;
+    }
+    return resignDate;
+  }, [isTermination, lastDay, resignDate, selEmp]);
+  const winEnd = lastDay;
+
   useEffect(() => {
-    if (selEmp && resignDate && lastDay) {
+    if (selEmp && winStart && winEnd) {
       supabase.from("attendance").select("attendance_status, work_date")
         .eq("employee_code", selEmp.employee_code)
-        .gte("work_date", resignDate)
-        .lte("work_date", lastDay)
+        .gte("work_date", winStart)
+        .lte("work_date", winEnd)
         .order("work_date")
         .then(({ data }) => setAttendanceData(data || []));
     } else {
       setAttendanceData([]);
     }
-  }, [selEmp, resignDate, lastDay]);
+  }, [selEmp, winStart, winEnd]);
 
   const noticeRequired = useMemo(() => {
     if (!selEmp) return 0;
@@ -236,6 +283,7 @@ export default function FinalSettlement({ role }) {
   const noticeDaysServed = useMemo(() => calendarDaysBetween(resignDate, lastDay), [resignDate, lastDay]);
   const noticeRemaining = Math.max(0, noticeRequired - noticeDaysServed);
   const noticeComplete = noticeDaysServed >= noticeRequired;
+  const windowCalendarDays = useMemo(() => calendarDaysBetween(winStart, winEnd), [winStart, winEnd]);
 
   const attendanceSummary = useMemo(() => {
     const PRESENT_STATUSES = ["Present", "Late", "Half Day", "Gazetted Holiday"];
@@ -244,7 +292,7 @@ export default function FinalSettlement({ role }) {
     // getWeeklyOffOverrideKeys for the shared Mon-Fri single-absence rule
     // (also applied on Timesheet and Payroll so "Absent" means the same
     // thing, and costs the same deduction, everywhere).
-    const overrideDates = getWeeklyOffOverrideKeys(attendanceData, { rangeStart: resignDate, rangeEnd: lastDay });
+    const overrideDates = getWeeklyOffOverrideKeys(attendanceData, { rangeStart: winStart, rangeEnd: winEnd });
     let daysPresent = 0, weeklyOffs = 0, absentDays = 0;
     for (const a of attendanceData) {
       const s = overrideDates.has(a.work_date) ? "Weekly Off" : (a.attendance_status || "");
@@ -253,9 +301,10 @@ export default function FinalSettlement({ role }) {
       else if (s === "Absent") absentDays++;
     }
     return { daysPresent, weeklyOffs, absentDays };
-  }, [attendanceData]);
+  }, [attendanceData, winStart, winEnd]);
 
   const isAbsconding = useMemo(() => {
+    if (isTermination) return false;
     const sorted = [...attendanceData].sort((a, b) => b.work_date?.localeCompare(a.work_date));
     let consecutive = 0;
     for (const a of sorted) {
@@ -267,103 +316,148 @@ export default function FinalSettlement({ role }) {
       }
     }
     return false;
-  }, [attendanceData]);
+  }, [attendanceData, isTermination]);
+
+  const customDaysNum = Math.max(0, Math.min(62, Math.round(Number(customDays) || 0)));
 
   const settlement = useMemo(() => {
     if (!selEmp) return null;
     const salary = Number(selEmp.salary || 0);
     const dailyRate = salary / 30;
     const { daysPresent, weeklyOffs, absentDays } = attendanceSummary;
-    const paidDays = daysPresent + weeklyOffs;
-    const pendingSalary = Math.round(dailyRate * paidDays);
+    const workedPaidDays = daysPresent + weeklyOffs;
+
+    // How many days the pending salary is actually paid for.
+    let effPaidDays, effPayoutMode;
+    if (isTermination) {
+      effPayoutMode = "worked";
+      effPaidDays = salaryNotPayable ? 0 : workedPaidDays;
+    } else if (overrideMode) {
+      effPayoutMode = payoutMode;
+      effPaidDays = payoutMode === "full_period" ? noticeRequired
+        : payoutMode === "custom" ? customDaysNum
+        : workedPaidDays;
+    } else {
+      effPayoutMode = "worked";
+      effPaidDays = workedPaidDays;
+    }
+
+    const pendingSalary = Math.round(dailyRate * effPaidDays);
     const leaveEncashment = 0;
 
-    const blocked = isAbsconding && !overrideMode;
-    const noticePenalty = !noticeComplete && !overrideMode ? salary : 0;
+    // Termination is employer-initiated: no absconding block, no short-notice penalty.
+    const blocked = !isTermination && isAbsconding && !overrideMode;
+    const noticePenalty = (!isTermination && !noticeComplete && !overrideMode) ? salary : 0;
 
     const gross = pendingSalary + leaveEncashment;
     const deductions = loanBalance + noticePenalty;
     const net = Math.max(0, gross - deductions);
 
     return {
-      salary, dailyRate, daysPresent, weeklyOffs, absentDays, paidDays,
+      salary, dailyRate, daysPresent, weeklyOffs, absentDays,
+      workedPaidDays, effPaidDays, effPayoutMode,
       pendingSalary, leaveEncashment, loanBalance, noticePenalty,
       gross, deductions, net, blocked,
     };
-  }, [selEmp, attendanceSummary, loanBalance, noticeComplete, isAbsconding, overrideMode]);
+  }, [selEmp, attendanceSummary, loanBalance, noticeComplete, noticeRequired, isAbsconding,
+      overrideMode, isTermination, salaryNotPayable, payoutMode, customDaysNum]);
 
   async function processSettlement() {
-    if (!selEmp || !resignDate || !lastDay) return setErr("Complete all resignation details first.");
-    if (isAbsconding && !overrideMode) return setErr("Cannot process: absconding case. Master override required.");
+    const dateLabel = isTermination ? "termination" : "resignation";
+    if (!selEmp || !resignDate || !lastDay) return setErr(`Complete all ${dateLabel} details first.`);
+    if (isTermination && lastDay > resignDate) return setErr("Last working day must be on or before the termination date.");
+    if (!isTermination && lastDay < resignDate) return setErr("Last working day cannot be before the resignation date.");
+    if (!isTermination && isAbsconding && !overrideMode) return setErr("Cannot process: absconding case. Master override required.");
+    if (!isTermination && overrideMode && payoutMode === "custom" && !customDays.trim()) return setErr("Enter the number of days to pay for the custom payout.");
     setErr("");
 
-    // Zero out all leave balances on resignation
+    // Leaving the company either way — zero out all leave balances.
     await supabase.from("leaves")
       .update({ annual_balance: 0, remaining_balance: 0, remaining: 0, casual_balance: 0, sick_balance: 0 })
       .eq("employee_id", selEmp.employee_code);
 
-    if (overrideMode) {
+    if (isTermination || overrideMode) {
       await supabase.from("audit_logs").insert({
-        action_type: "settlement_master_override",
-        details: JSON.stringify({ employeeCode: selEmp.employee_code, reason: overrideReason, settlement }),
+        action_type: isTermination ? "settlement_termination" : "settlement_master_override",
+        details: JSON.stringify({
+          employeeCode: selEmp.employee_code,
+          separationType: sepType,
+          reason: isTermination ? (resignReason || null) : overrideReason,
+          salaryPayable: isTermination ? !salaryNotPayable : true,
+          payoutMode: settlement.effPayoutMode, payoutDays: settlement.effPaidDays,
+          settlement,
+        }),
         performed_by: role || "Master", created_at: new Date().toISOString(),
       });
     }
 
     await supabase.from("employees")
-      .update({ status: "Resigned", resignation_date: resignDate, last_working_day: lastDay })
+      .update(isTermination
+        ? { status: "Terminated", termination_date: resignDate, resignation_date: null, last_working_day: lastDay }
+        : { status: "Resigned", resignation_date: resignDate, last_working_day: lastDay })
       .eq("employee_code", selEmp.employee_code);
 
-    // No amount payable, or notice period not served and Master hasn't
-    // overridden it -> No F&F. Otherwise some amount is due -> F&F.
-    // Lives entirely in final_settlements now, not payroll -- a settled
-    // employee is removed from the regular monthly payroll cycle for good
-    // (see PayrollAutomation.jsx's loadBase, which excludes anyone with a
-    // final_settlements row), so Generate/Refresh Payroll can never again
-    // silently recompute and overwrite these figures with a different,
-    // full-month attendance-based day count.
-    const fnfStatus = (settlement.net === 0 || (!noticeComplete && !overrideMode)) ? "No_FnF" : "FnF";
+    // Nothing payable (net 0, or a termination flagged "salary not payable", or a
+    // resignation with notice unserved and no Master override) -> No F&F.
+    // Otherwise some amount is due -> F&F. Lives entirely in final_settlements
+    // now, not payroll -- a settled employee is removed from the regular monthly
+    // payroll cycle for good (see PayrollAutomation.jsx's loadBase, which
+    // excludes anyone with a final_settlements row), so Generate/Refresh Payroll
+    // can never again silently recompute and overwrite these figures.
+    const fnfStatus = (
+      settlement.net === 0 ||
+      (isTermination && salaryNotPayable) ||
+      (!isTermination && !noticeComplete && !overrideMode)
+    ) ? "No_FnF" : "FnF";
     const payrollMonth = lastDay.slice(0, 7);
     const nowIso = new Date().toISOString();
 
     // Remove any regular payroll row already generated for this employee this
-    // month (e.g. Generate Payroll ran before the resignation was processed)
-    // -- the settlement below is now the sole record of what they're owed.
+    // month -- the settlement below is now the sole record of what they're owed.
     await supabase.from("payroll").delete()
       .eq("employee_code", selEmp.employee_code).eq("payroll_month", payrollMonth);
 
     await supabase.from("final_settlements").upsert({
       employee_code: selEmp.employee_code, payroll_month: payrollMonth,
-      resignation_date: resignDate, last_working_day: lastDay, resignation_reason: resignReason || null,
+      separation_type: sepType,
+      resignation_date: isTermination ? null : resignDate,
+      termination_date: isTermination ? resignDate : null,
+      last_working_day: lastDay, resignation_reason: resignReason || null,
       staff_level: selEmp.staff_level, branch: selEmp.branch, department: selEmp.department,
       salary: settlement.salary, daily_rate: settlement.dailyRate,
       days_present: settlement.daysPresent, weekly_offs: settlement.weeklyOffs,
-      absent_days: settlement.absentDays, paid_days: settlement.paidDays,
+      absent_days: settlement.absentDays, paid_days: settlement.effPaidDays,
       pending_salary: settlement.pendingSalary, leave_encashment: settlement.leaveEncashment,
       loan_balance: settlement.loanBalance,
-      notice_required_days: noticeRequired, notice_served_days: noticeDaysServed, notice_complete: noticeComplete,
+      salary_payable: isTermination ? !salaryNotPayable : true,
+      payout_mode: settlement.effPayoutMode, payout_days: settlement.effPaidDays,
+      notice_required_days: isTermination ? null : noticeRequired,
+      notice_served_days: isTermination ? null : noticeDaysServed,
+      notice_complete: isTermination ? true : noticeComplete,
       notice_penalty: settlement.noticePenalty, is_absconding: isAbsconding,
-      override_applied: overrideMode, override_by: overrideMode ? (role || "Master") : null,
-      override_reason: overrideMode ? overrideReason : null,
+      override_applied: !isTermination && overrideMode,
+      override_by: (!isTermination && overrideMode) ? (role || "Master") : null,
+      override_reason: (!isTermination && overrideMode) ? overrideReason : null,
       gross_earnings: settlement.gross, total_deductions: settlement.deductions, net_payable: settlement.net,
       payment_status: fnfStatus, settled_by: role || "Master", settled_at: nowIso, updated_at: nowIso,
     }, { onConflict: "employee_code" });
 
-    setMsg(`Settlement processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}. Recorded as ${fnfStatus === "FnF" ? "F&F" : "No F&F"} for ${payrollMonth}, removed from regular payroll.`);
-    setSelEmp(null);
-    setResignDate("");
-    setLastDay("");
-    setResignReason("");
-    setLoanBalance(0);
-    setAttendanceData([]);
-    setOverrideMode(false);
-    setOverrideReason("");
+    setMsg(`${isTermination ? "Termination" : "Settlement"} processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}. Recorded as ${fnfStatus === "FnF" ? "F&F" : "No F&F"} for ${payrollMonth}, removed from regular payroll.`);
+    resetForm();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  const dateFieldLabel = isTermination ? "Termination Date" : "Resignation Date";
+  const canProcess = selEmp && settlement && !settlement.blocked
+    && resignDate && lastDay
+    && !(isTermination && lastDay > resignDate)
+    && !(!isTermination && lastDay < resignDate)
+    && !(!isTermination && overrideMode && !overrideReason.trim())
+    && !(!isTermination && overrideMode && payoutMode === "custom" && !customDays.trim());
+
   return (
     <div>
-      <PageTitle title="Final Settlement" subtitle="Resignation processing, notice period validation and settlement calculator." />
+      <PageTitle title="Final Settlement" subtitle="Resignation & termination processing, notice-period validation and settlement calculator." />
 
       <div className="flex flex-wrap gap-2 mb-5">
         {[["process", "Process Settlement"], ["ledger", "Settlements Ledger"]].map(([k, l]) => (
@@ -379,15 +473,27 @@ export default function FinalSettlement({ role }) {
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
+      {/* Separation type */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <span className="text-xs text-slate-500 self-center mr-1">Separation type:</span>
+        {[["resignation", "Resignation"], ["termination", "Termination"]].map(([k, l]) => (
+          <button key={k}
+            onClick={() => { setSepType(k); setOverrideMode(false); setPayoutMode("worked"); setCustomDays(""); setSalaryNotPayable(false); setAttendanceData([]); }}
+            className={`px-4 py-1.5 rounded-xl text-sm font-medium transition ${sepType === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-        {/* Resignation Form */}
+        {/* Separation Form */}
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-          <h2 className="font-bold text-slate-800 mb-4">Resignation Details</h2>
+          <h2 className="font-bold text-slate-800 mb-4">{isTermination ? "Termination Details" : "Resignation Details"}</h2>
           <div className="space-y-4">
             <div>
               <p className="text-xs text-slate-500 mb-1">Employee</p>
               <EmpPicker employees={employees} value={selEmp}
-                onChange={v => { setSelEmp(v); setOverrideMode(false); setAttendanceData([]); }} />
+                onChange={v => { setSelEmp(v); setOverrideMode(false); setPayoutMode("worked"); setCustomDays(""); setSalaryNotPayable(false); setAttendanceData([]); }} />
             </div>
             {selEmp && (
               <div className="p-3 bg-slate-50 rounded-xl text-sm text-slate-600">
@@ -395,13 +501,14 @@ export default function FinalSettlement({ role }) {
               </div>
             )}
             <div>
-              <p className="text-xs text-slate-500 mb-1">Resignation Date</p>
+              <p className="text-xs text-slate-500 mb-1">{dateFieldLabel}</p>
               <input type="date" value={resignDate} onChange={e => setResignDate(e.target.value)}
                 className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
             </div>
             <div>
-              <p className="text-xs text-slate-500 mb-1">Last Working Day</p>
+              <p className="text-xs text-slate-500 mb-1">Last Working Day{isTermination ? " (on or before termination date)" : ""}</p>
               <input type="date" value={lastDay} onChange={e => setLastDay(e.target.value)}
+                max={isTermination ? (resignDate || undefined) : undefined}
                 className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
             </div>
             <div>
@@ -409,15 +516,48 @@ export default function FinalSettlement({ role }) {
               <textarea value={resignReason} onChange={e => setResignReason(e.target.value)} rows={2}
                 className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm resize-none" />
             </div>
+            {isTermination && (
+              <label className="flex items-start gap-2 p-3 rounded-xl bg-slate-50 cursor-pointer">
+                <input type="checkbox" className="mt-0.5" checked={salaryNotPayable} onChange={e => setSalaryNotPayable(e.target.checked)} />
+                <span className="text-sm text-slate-700">
+                  <strong>Salary not payable</strong> for the final period
+                  <span className="block text-xs text-slate-500">Leave unticked to pay for the days worked up to the last working day (default).</span>
+                </span>
+              </label>
+            )}
           </div>
         </div>
 
-        {/* Notice Period */}
+        {/* Right panel: notice analysis (resignation) or termination summary */}
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-          <h2 className="font-bold text-slate-800 mb-4">Notice Period Analysis</h2>
+          <h2 className="font-bold text-slate-800 mb-4">{isTermination ? "Termination Summary" : "Notice Period Analysis"}</h2>
           {!selEmp
-            ? <p className="text-slate-400 text-sm">Select an employee to see notice period details.</p>
-            : (
+            ? <p className="text-slate-400 text-sm">Select an employee to see details.</p>
+            : isTermination ? (
+              <div className="space-y-3">
+                <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500">
+                  Employer-initiated. No notice period or short-notice penalty applies. Salary is payable by
+                  default for the days worked up to the last working day.
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Termination Date</span>
+                  <span className="font-semibold">{resignDate || "—"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Last Working Day</span>
+                  <span className="font-semibold">{lastDay || "—"}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Salary Payable</span>
+                  <Badge tone={salaryNotPayable ? "red" : "green"}>{salaryNotPayable ? "No — withheld" : "Yes"}</Badge>
+                </div>
+                {lastDay && resignDate && lastDay > resignDate && (
+                  <div className="p-3 bg-red-50 rounded-xl text-sm text-red-700">
+                    Last working day is after the termination date.
+                  </div>
+                )}
+              </div>
+            ) : (
               <div className="space-y-3">
                 <div className="p-3 bg-slate-50 rounded-xl text-xs text-slate-500">
                   Calendar days counted from resignation date to last working day (inclusive). No day exclusions.
@@ -454,14 +594,37 @@ export default function FinalSettlement({ role }) {
                   </div>
                 )}
                 {role === "Master" && (isAbsconding || !noticeComplete) && (
-                  <div className="border border-slate-200 rounded-xl p-3 space-y-2">
+                  <div className="border border-slate-200 rounded-xl p-3 space-y-3">
                     <div className="flex items-center gap-2">
-                      <input type="checkbox" id="override" checked={overrideMode} onChange={e => setOverrideMode(e.target.checked)} />
+                      <input type="checkbox" id="override" checked={overrideMode}
+                        onChange={e => { setOverrideMode(e.target.checked); if (!e.target.checked) { setPayoutMode("worked"); setCustomDays(""); } }} />
                       <label htmlFor="override" className="text-sm font-semibold text-slate-700">Master Override</label>
                     </div>
                     {overrideMode && (
-                      <input value={overrideReason} onChange={e => setOverrideReason(e.target.value)}
-                        placeholder="Override reason (mandatory)..." className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+                      <>
+                        <input value={overrideReason} onChange={e => setOverrideReason(e.target.value)}
+                          placeholder="Override reason (mandatory)..." className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm" />
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Salary payout</p>
+                          {Object.entries(PAYOUT_MODE_LABELS).map(([k, l]) => (
+                            <label key={k} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                              <input type="radio" name="payoutMode" checked={payoutMode === k} onChange={() => setPayoutMode(k)} />
+                              {l}
+                            </label>
+                          ))}
+                          {payoutMode === "full_period" && (
+                            <p className="text-xs text-slate-500 pl-6">Pays {noticeRequired} days (the full required notice period), regardless of the actual last working day.</p>
+                          )}
+                          {payoutMode === "custom" && (
+                            <div className="pl-6 flex items-center gap-2">
+                              <input type="number" min="0" max="62" value={customDays}
+                                onChange={e => setCustomDays(e.target.value)}
+                                className="w-24 px-3 py-1.5 rounded-lg border border-slate-200 text-sm" />
+                              <span className="text-xs text-slate-500">days to pay ({money(settlement?.dailyRate || 0)}/day)</span>
+                            </div>
+                          )}
+                        </div>
+                      </>
                     )}
                   </div>
                 )}
@@ -478,14 +641,14 @@ export default function FinalSettlement({ role }) {
             : (
               <div className="space-y-4">
                 {/* Attendance Breakdown */}
-                {resignDate && lastDay && (
+                {winStart && winEnd && (
                   <div className="bg-slate-50 rounded-xl p-4">
                     <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-                      Attendance Breakdown ({resignDate} → {lastDay})
+                      Attendance Breakdown ({winStart} → {winEnd})
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-center">
                       <div>
-                        <div className="text-xl font-bold text-slate-800">{noticeDaysServed}</div>
+                        <div className="text-xl font-bold text-slate-800">{windowCalendarDays}</div>
                         <div className="text-xs text-slate-400">Total Calendar Days</div>
                       </div>
                       <div>
@@ -502,7 +665,10 @@ export default function FinalSettlement({ role }) {
                       </div>
                     </div>
                     <div className="mt-3 pt-3 border-t border-slate-200 flex flex-wrap gap-4 text-sm">
-                      <span><span className="text-slate-500">Paid Days (Present + Weekly Offs):</span> <strong>{settlement.paidDays}</strong></span>
+                      <span><span className="text-slate-500">Days Worked (Present + Weekly Offs):</span> <strong>{settlement.workedPaidDays}</strong></span>
+                      <span><span className="text-slate-500">Days Paid:</span> <strong>{settlement.effPaidDays}</strong>
+                        {settlement.effPayoutMode !== "worked" && <span className="text-xs text-amber-600 ml-1">({PAYOUT_MODE_LABELS[settlement.effPayoutMode]})</span>}
+                      </span>
                       <span><span className="text-slate-500">Daily Rate (Salary / 30):</span> <strong>{money(settlement.dailyRate)}</strong></span>
                     </div>
                   </div>
@@ -512,12 +678,12 @@ export default function FinalSettlement({ role }) {
                   <div className="space-y-2.5 text-sm">
                     <h3 className="font-semibold text-slate-700 mb-2">Earnings</h3>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Pending Salary ({settlement.paidDays} paid days × {money(settlement.dailyRate)})</span>
+                      <span className="text-slate-500">Pending Salary ({settlement.effPaidDays} paid days × {money(settlement.dailyRate)})</span>
                       <span className="text-emerald-600">{money(settlement.pendingSalary)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Leave Encashment</span>
-                      <span className="text-slate-400">Rs. 0 (zeroed on resignation)</span>
+                      <span className="text-slate-400">Rs. 0 (zeroed on exit)</span>
                     </div>
                     <div className="flex justify-between font-semibold border-t border-slate-100 pt-2">
                       <span>Gross Earnings</span><span>{money(settlement.gross)}</span>
@@ -529,10 +695,12 @@ export default function FinalSettlement({ role }) {
                       <span className="text-slate-500">Outstanding Loans</span>
                       <span className="text-red-500">{money(settlement.loanBalance)}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Short Notice Penalty</span>
-                      <span className="text-red-500">{money(settlement.noticePenalty)}</span>
-                    </div>
+                    {!isTermination && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Short Notice Penalty</span>
+                        <span className="text-red-500">{money(settlement.noticePenalty)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between font-semibold border-t border-slate-100 pt-2">
                       <span>Total Deductions</span><span className="text-red-500">{money(settlement.deductions)}</span>
                     </div>
@@ -545,9 +713,8 @@ export default function FinalSettlement({ role }) {
               </div>
             )}
           <div className="mt-4">
-            <Button onClick={processSettlement} className="rounded-2xl"
-              disabled={settlement.blocked || (overrideMode && !overrideReason.trim())}>
-              Process Settlement
+            <Button onClick={processSettlement} className="rounded-2xl" disabled={!canProcess}>
+              {isTermination ? "Process Termination" : "Process Settlement"}
             </Button>
           </div>
         </div>

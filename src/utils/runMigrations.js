@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-08-20-v12";
+const MIGRATION_VERSION = "2026-09-02-v13";
 let ran = false;
 
 export async function runMigrations() {
@@ -250,6 +250,58 @@ async function applyIncrementalMigrations() {
     `ALTER TABLE employees ADD COLUMN IF NOT EXISTS late_exempt BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS half_day_exempt_applied BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS late_exempt_applied BOOLEAN DEFAULT FALSE`,
+    // v13: Final Settlement lives in its own final_settlements table now (out
+    // of payroll entirely — see FinalSettlement.jsx). Table was originally
+    // applied live only; mirrored here for reproducibility. Plus termination
+    // support (separation_type / termination_date / salary_payable) and the
+    // Master-override payout modes (payout_mode: worked | full_period | custom).
+    `CREATE TABLE IF NOT EXISTS final_settlements (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      employee_code TEXT NOT NULL UNIQUE,
+      payroll_month TEXT NOT NULL,
+      resignation_date DATE,
+      last_working_day DATE,
+      resignation_reason TEXT,
+      staff_level TEXT,
+      branch TEXT,
+      department TEXT,
+      salary NUMERIC NOT NULL DEFAULT 0,
+      daily_rate NUMERIC NOT NULL DEFAULT 0,
+      days_present INTEGER NOT NULL DEFAULT 0,
+      weekly_offs INTEGER NOT NULL DEFAULT 0,
+      absent_days INTEGER NOT NULL DEFAULT 0,
+      paid_days INTEGER NOT NULL DEFAULT 0,
+      pending_salary NUMERIC NOT NULL DEFAULT 0,
+      leave_encashment NUMERIC NOT NULL DEFAULT 0,
+      loan_balance NUMERIC NOT NULL DEFAULT 0,
+      notice_required_days INTEGER,
+      notice_served_days INTEGER,
+      notice_complete BOOLEAN NOT NULL DEFAULT FALSE,
+      notice_penalty NUMERIC NOT NULL DEFAULT 0,
+      is_absconding BOOLEAN NOT NULL DEFAULT FALSE,
+      override_applied BOOLEAN NOT NULL DEFAULT FALSE,
+      override_by TEXT,
+      override_reason TEXT,
+      gross_earnings NUMERIC NOT NULL DEFAULT 0,
+      total_deductions NUMERIC NOT NULL DEFAULT 0,
+      net_payable NUMERIC NOT NULL DEFAULT 0,
+      payment_status TEXT NOT NULL DEFAULT 'FnF',
+      is_paid BOOLEAN NOT NULL DEFAULT FALSE,
+      paid_at TIMESTAMPTZ,
+      paid_by TEXT,
+      settled_by TEXT,
+      settled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS final_settlements_payroll_month_idx ON public.final_settlements (payroll_month)`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS separation_type TEXT DEFAULT 'resignation'`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS termination_date DATE`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS salary_payable BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS payout_mode TEXT DEFAULT 'worked'`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS payout_days INTEGER`,
+    `ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_date DATE`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON public.final_settlements TO anon, authenticated`,
   ];
 
   for (const sql of stmts) {

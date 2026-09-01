@@ -621,6 +621,8 @@ export default function Employees({ query, setQuery, branch, setBranch, branchLo
         <select value={employeeStatusFilter} onChange={e => setEmployeeStatusFilter(e.target.value)} className="px-4 py-2.5 rounded-2xl border border-slate-200">
           <option value="Active">Active</option>
           <option value="Inactive">Inactive</option>
+          <option value="Resigned">Resigned</option>
+          <option value="Terminated">Terminated</option>
           <option value="All">All</option>
         </select>
       </div>

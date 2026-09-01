@@ -18,10 +18,11 @@ import { deductIssuedAdvancesForMonth } from "../services/advanceService.js";
 import PayrollHold from "./PayrollHold.jsx";
 import CashIncentives from "./CashIncentives.jsx";
 import FinanceReconciliation from "./FinanceReconciliation.jsx";
+import FinalSettlement from "./FinalSettlement.jsx";
 import { queueWhatsappMessage, MESSAGE_TYPES } from "../services/whatsappService.js";
 
 const STATUS_TONES = { Draft: "yellow", Approved: "blue", Published: "green", Locked: "purple", Paid: "green", Completed: "green" };
-const TABS = [["register", "Payroll Register"], ["hold", "Hold & F&F"], ["cash", "Confidential Incentives"], ["finance", "Finance Reconciliation"]];
+const TABS = [["register", "Payroll Register"], ["hold", "Hold & F&F"], ["settlement", "Final Settlement"], ["cash", "Confidential Incentives"], ["finance", "Finance Reconciliation"]];
 
 // ── Publish confirmation modal ────────────────────────────────
 function PublishModal({ month, onConfirm, onCancel }) {
@@ -680,7 +681,7 @@ export default function PayrollAutomation({ role, actorName }) {
     // full month's salary before their first day of work.
     const [{ data: activeEmps }, { data: resignedEmps }, { data: lns }, { data: settled }] = await Promise.all([
       supabase.from("employees").select("*").eq("status", "Active").lte("joining_date", toDate),
-      supabase.from("employees").select("*").eq("status", "Resigned")
+      supabase.from("employees").select("*").in("status", ["Resigned", "Terminated"])
         .gte("last_working_day", fromDate).lte("last_working_day", toDate),
       supabase.from("loans").select("*").eq("status", "Active"),
       supabase.from("final_settlements").select("employee_code"),
@@ -693,6 +694,7 @@ export default function PayrollAutomation({ role, actorName }) {
     // full month's salary for a month they were never actually employed in
     // (confirmed: employee 3082, joining_date 2026-08-03 vs. last_working_day
     // 2026-07-31 -- zero attendance all of July because he hadn't joined yet).
+    // "resignedEmps" now also carries Terminated employees — same treatment.
     const validResignedEmps = (resignedEmps || []).filter(e => !(e.joining_date && e.joining_date > e.last_working_day));
     setEmployees([...(activeEmps || []), ...validResignedEmps].filter(e => !settledCodes.has(e.employee_code)));
     setLoans(lns || []);
@@ -863,7 +865,7 @@ export default function PayrollAutomation({ role, actorName }) {
       e.employee_code,
       {
         start: (e.joining_date && e.joining_date >= fromDate && e.joining_date <= toDate) ? e.joining_date : null,
-        end: (e.status === "Resigned" && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate) ? e.last_working_day : null,
+        end: (["Resigned", "Terminated"].includes(e.status) && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate) ? e.last_working_day : null,
       },
     ]));
     const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds });
@@ -1098,7 +1100,7 @@ export default function PayrollAutomation({ role, actorName }) {
         const startDay = (emp.joining_date && emp.joining_date >= monthStart && emp.joining_date <= monthEnd)
           ? Number(emp.joining_date.slice(8, 10))
           : 1;
-        const lastDayOfMonth = (emp.status === "Resigned" && emp.last_working_day >= fromDate && emp.last_working_day <= toDate)
+        const lastDayOfMonth = (["Resigned", "Terminated"].includes(emp.status) && emp.last_working_day >= fromDate && emp.last_working_day <= toDate)
           ? Number(emp.last_working_day.slice(8, 10))
           : daysInMonth;
         const trackedDates = attDatesByEmp[emp.employee_code] || new Set();
@@ -1641,6 +1643,7 @@ export default function PayrollAutomation({ role, actorName }) {
   const visibleTabs = TABS.filter(([k]) => {
     if (k === "cash") return ["Master", "GM"].includes(role);
     if (k === "hold") return ["Master", "HR", "GM"].includes(role);
+    if (k === "settlement") return ["Master", "HR", "GM", "Finance"].includes(role);
     if (k === "finance") return ["Finance", "Master"].includes(role);
     return true;
   });
@@ -1700,6 +1703,7 @@ export default function PayrollAutomation({ role, actorName }) {
       )}
 
       {tab === "hold" && <PayrollHold role={role} actorName={actorName} month={month} setMonth={setMonth} />}
+      {tab === "settlement" && <FinalSettlement role={role} actorName={actorName} />}
       {tab === "cash" && <CashIncentives role={role} actorName={actorName} month={month} setMonth={setMonth} />}
       {tab === "finance" && <FinanceReconciliation role={role} month={month} setMonth={setMonth} actorName={actorName} />}
 

@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from "react";
 import LoanManagement from "./LoanManagement.jsx";
-import FinalSettlement from "./FinalSettlement.jsx";
 import Advances from "./Advances.jsx";
 
+// Final Settlement moved to the Payroll tab (PayrollAutomation.jsx) — it is a
+// payroll-cycle activity, not a lending one.
 const TABS = [
-  ["loans",      "Loans"],
-  ["advances",   "Salary Advances"],
-  ["settlement", "Final Settlement"],
+  ["loans",    "Loans"],
+  ["advances", "Salary Advances"],
 ];
 
 export default function LoanHub({ role, actorName, initialTab }) {
-  const [tab, setTab] = useState(initialTab || "loans");
-  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
+  const [tab, setTab] = useState(initialTab === "advances" ? "advances" : "loans");
+  useEffect(() => { if (initialTab) setTab(initialTab === "advances" ? "advances" : "loans"); }, [initialTab]);
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-5">
@@ -22,9 +22,8 @@ export default function LoanHub({ role, actorName, initialTab }) {
           </button>
         ))}
       </div>
-      {tab === "loans"      && <LoanManagement role={role} actorName={actorName} />}
-      {tab === "advances"   && <Advances role={role} actorName={actorName} />}
-      {tab === "settlement" && <FinalSettlement role={role} />}
+      {tab === "loans"    && <LoanManagement role={role} actorName={actorName} />}
+      {tab === "advances" && <Advances role={role} actorName={actorName} />}
     </div>
   );
 }
