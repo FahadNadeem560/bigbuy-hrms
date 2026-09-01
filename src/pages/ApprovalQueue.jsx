@@ -102,8 +102,13 @@ const TABS = [
   ["payment-status", "Payment Status"],
 ];
 
-export default function ApprovalQueue({ role, actorName, actorEmployeeCode }) {
-  const [tab, setTab] = useState("leave");
+export default function ApprovalQueue({ role, actorName, actorEmployeeCode, initialTab }) {
+  const [tab, setTab] = useState(
+    initialTab && TABS.some(([k]) => k === initialTab.tab) ? initialTab.tab : "leave"
+  );
+  useEffect(() => {
+    if (initialTab && TABS.some(([k]) => k === initialTab.tab)) setTab(initialTab.tab);
+  }, [initialTab]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");

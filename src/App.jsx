@@ -92,10 +92,17 @@ export default function BigBuyHRMS({ profile }) {
   const now0 = new Date();
   const [incentiveMonth, setIncentiveMonth] = useState(`${now0.getFullYear()}-${String(now0.getMonth() + 1).padStart(2, "0")}`);
   const [loanHubInitialTab, setLoanHubInitialTab] = useState(null);
+  const [approvalQueueInitialTab, setApprovalQueueInitialTab] = useState(null);
+  const [payrollInitialTab, setPayrollInitialTab] = useState(null);
   function handleNotificationNavigate({ tab, filter, subtab }) {
+    if (!tab) return;
     setActive(tab);
     if (filter) setIncrementDueFilter(filter);
-    if (subtab) setLoanHubInitialTab(subtab);
+    if (subtab) {
+      if (tab === "approval-queue") setApprovalQueueInitialTab({ tab: subtab, n: Date.now() });
+      else if (tab === "payroll-automation") setPayrollInitialTab({ tab: subtab, n: Date.now() });
+      else setLoanHubInitialTab(subtab);
+    }
   }
   const role = profile?.role || "Master";
   const userBranch = profile?.branch || null;
@@ -417,7 +424,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "workforce"   && <WorkforceHub role={role} actorName={user.name} branchFilter={branchRestriction} />}
 
       {/* Payroll & Finance */}
-      {active === "payroll-automation" && <PayrollAutomation role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
+      {active === "payroll-automation" && <PayrollAutomation role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} initialTab={payrollInitialTab} />}
       {active === "payroll"            && <Payroll rows={payrollRows} selectedPayslip={selectedPayslip} setSelectedPayslip={setSelectedPayslip} payrollMonth="April 2026" PayslipCard={() => null} />}
       {active === "salary-reports"     && <SalaryReports role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} dueFilter={incrementDueFilter} />}
       {active === "allowances"         && <AllowancesHub role={role} />}
@@ -431,7 +438,7 @@ export default function BigBuyHRMS({ profile }) {
       {active === "shortages" && <Shortages role={role} />}
 
       {/* Approvals */}
-      {active === "approval-queue" && <ApprovalQueue role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} />}
+      {active === "approval-queue" && <ApprovalQueue role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} initialTab={approvalQueueInitialTab} />}
 
       {/* System */}
       {active === "imports"     && <DataManagement selectedFile={selectedFile} setSelectedFile={setSelectedFile} preview={preview} importing={importing} message={message} error={error} onPreview={onPreview} onImport={onImport} employees={employees} payroll={payrollRows} attendance={attendanceRows} loans={demoLoans} />}

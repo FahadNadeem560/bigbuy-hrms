@@ -35,7 +35,7 @@ export async function checkIncrementDueNotifications() {
     for (const role of DUE_NOTIFY_ROLES) {
       const { data: existing } = await supabase.from("notifications").select("id")
         .eq("type", "increment_due_branch").eq("recipient_role", role)
-        .eq("reference_id", branch).gte("created_at", monthStartIso).limit(1);
+        .eq("related_branch", branch).gte("created_at", monthStartIso).limit(1);
       if (existing && existing.length > 0) continue;
 
       const lines = emps.map(e => {
@@ -51,8 +51,7 @@ export async function checkIncrementDueNotifications() {
         recipient_role: role, type: "increment_due_branch",
         title: `${branch}: ${emps.length} employee${emps.length > 1 ? "s" : ""} due for increment review`,
         message: lines.join(" "),
-        reference_id: branch, reference_type: "increment_due_branch",
-        link: branch, is_read: false,
+        related_branch: branch, link: branch, is_read: false,
       }).then(() => {}, () => {});
     }
   }

@@ -467,7 +467,20 @@ export default function EmployeeSelfService({ profile: authProfile }) {
         </div>
         <div className="flex items-center gap-3">
           <div className="text-white [&_button]:text-white [&_button:hover]:bg-slate-800">
-            <NotificationBell role="Employee" employeeCode={session.employee_code} />
+            <NotificationBell role="Employee" employeeCode={session.employee_code}
+              onNavigate={({ type, tab: navTab }) => {
+                const ESS_NAV = {
+                  payroll_verification: "payroll-verify",
+                  payroll: "payslips", payroll_flag: "payslips",
+                  loan_proposed: "loans", loan_decision: "loans",
+                  advance_requested: "loans", advance_issued: "loans", advance_decision: "loans",
+                  leave_approval: "leave",
+                  attendance_status_change: "attendance", attendance_adjustment: "attendance",
+                };
+                const target = ESS_NAV[type]
+                  || ({ "payroll-automation": "payslips", loans: "loans", leave: "leave", attendance: "attendance" })[navTab];
+                if (target && TABS.some(t => t.id === target)) setTab(target);
+              }} />
           </div>
           <button onClick={logout}
             className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm transition text-slate-200">

@@ -584,9 +584,14 @@ function VerificationPanel({ month, role, verifications, flagNotifications, onRe
 }
 
 // ── Main Component ────────────────────────────────────────────
-export default function PayrollAutomation({ role, actorName }) {
+export default function PayrollAutomation({ role, actorName, initialTab }) {
   const now = new Date();
-  const [tab, setTab] = useState("register");
+  const [tab, setTab] = useState(
+    initialTab && TABS.some(([k]) => k === initialTab.tab) ? initialTab.tab : "register"
+  );
+  useEffect(() => {
+    if (initialTab && TABS.some(([k]) => k === initialTab.tab)) setTab(initialTab.tab);
+  }, [initialTab]);
   const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
   const [employees, setEmployees] = useState([]);
   const [loans, setLoans] = useState([]);

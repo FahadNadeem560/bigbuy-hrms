@@ -6,8 +6,12 @@ const TYPE_ICONS = {
   timesheet_signoff: "📋",
   adjustment: "⚙️",
   attendance: "⏱️",
+  attendance_status_change: "⏱️",
+  attendance_adjustment: "⏱️",
   settlement: "🤝",
   payroll: "💰",
+  payroll_verification: "✅",
+  payroll_flag: "🚩",
   increment_due_branch: "📈",
   increment_proposed: "📝",
   increment_decision: "📈",
@@ -17,12 +21,38 @@ const TYPE_ICONS = {
   advance_issued: "💵",
   advance_decision: "💵",
   general: "🔔",
+  test: "🔔",
 };
 
-const ADVANCE_NAV = {
-  advance_requested: { tab: "loans", subtab: "advances" },
-  advance_issued: { tab: "loans", subtab: "advances" },
+// Where a notification takes you when clicked. `subtab` is forwarded to the
+// destination page's inner tab (Loans hub / Approval Queue / Payroll).
+const TYPE_NAV = {
+  attendance_status_change: { tab: "attendance" },
+  attendance_adjustment:    { tab: "attendance" },
+  attendance:               { tab: "attendance" },
+  adjustment:               { tab: "approval-queue", subtab: "adjustments" },
+  leave_approval:           { tab: "approval-queue", subtab: "leave" },
+  timesheet_signoff:        { tab: "approval-queue", subtab: "timesheet" },
+  increment_proposed:       { tab: "approval-queue", subtab: "increments" },
+  increment_decision:       { tab: "salary-reports" },
+  increment_due_branch:     { tab: "salary-reports" },
+  loan_proposed:            { tab: "approval-queue", subtab: "loans" },
+  loan_decision:            { tab: "loans", subtab: "loans" },
+  advance_requested:        { tab: "loans", subtab: "advances" },
+  advance_issued:           { tab: "loans", subtab: "advances" },
+  advance_decision:         { tab: "loans", subtab: "advances" },
+  payroll_verification:     { tab: "payroll-automation" },
+  payroll:                  { tab: "payroll-automation" },
+  payroll_flag:             { tab: "payroll-automation" },
+  settlement:               { tab: "payroll-automation", subtab: "settlement" },
 };
+
+// notification.link sometimes carries a bare page key (e.g. "loans") — trust it
+// only if it names a page we know how to route to.
+const KNOWN_TABS = new Set([
+  "attendance", "approval-queue", "salary-reports", "loans", "payroll-automation",
+  "leave", "workforce", "payroll-extras", "allowances",
+]);
 
 export default function NotificationBell({ role, employeeCode, onNavigate }) {
   const [open, setOpen] = useState(false);
@@ -80,12 +110,18 @@ export default function NotificationBell({ role, employeeCode, onNavigate }) {
 
   function handleClick(n) {
     markRead(n.id);
-    if (n.type === "increment_due_branch" && onNavigate) {
-      onNavigate({ tab: "salary-reports", subview: "increments", filter: { view: "due", branch: n.reference_id || n.link } });
-    } else if (ADVANCE_NAV[n.type] && onNavigate) {
-      onNavigate(ADVANCE_NAV[n.type]);
-    }
     setOpen(false);
+    if (!onNavigate) return;
+
+    if (n.type === "increment_due_branch") {
+      onNavigate({ type: n.type, tab: "salary-reports", filter: { view: "due", branch: n.related_branch || n.link || null } });
+      return;
+    }
+    const nav = TYPE_NAV[n.type];
+    const linkTab = KNOWN_TABS.has(n.link) ? n.link : null;
+    if (nav) onNavigate({ type: n.type, tab: linkTab || nav.tab, subtab: nav.subtab });
+    else if (linkTab) onNavigate({ type: n.type, tab: linkTab });
+    // unknown type with no usable link — nothing sensible to open
   }
 
   return (
