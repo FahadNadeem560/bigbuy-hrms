@@ -564,7 +564,7 @@ export default function Timesheet({ branchFilter, role }) {
     try {
       const [{ data: att, error: attErr }, { data: gh }] = await Promise.all([
         supabase.from("attendance")
-          .select("employee_code, work_date, attendance_status, status, worked_hours, actual_hours, hours_worked, late_minutes, short_hours, ot_hours, overtime_hours, is_synthetic")
+          .select("*")
           .gte("work_date", fromDate).lte("work_date", toDate)
           .order("work_date", { ascending: true }).limit(20000),
         supabase.from("gazetted_holidays").select("holiday_date").eq("is_active", true)
