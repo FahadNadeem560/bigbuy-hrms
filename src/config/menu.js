@@ -12,9 +12,6 @@ export const MENU_ITEMS = [
   // Leave — Finance excluded
   { key: "leave",       label: "Leave",                icon: "🌴", section: "Leave",             roles: ["Master","HR","Employee","GM","Branch Manager"] },
 
-  // Workforce
-  { key: "workforce",   label: "Workforce",            icon: "🏬", section: "Workforce",         roles: ["Master","HR","Finance","GM","Branch Manager"] },
-
   // HR Tools — new modules
   { key: "fines",       label: "Fines & Penalties",    icon: "⚖️", section: "HR Tools",          roles: ["Master","HR","GM"] },
   { key: "shortages",   label: "Shortages",            icon: "🔻", section: "HR Tools",          roles: ["Master","HR","GM"] },

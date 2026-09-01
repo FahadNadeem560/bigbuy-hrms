@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
-import LeaveLiability from "./LeaveLiability.jsx";
 import { calcEarnedLeave } from "../utils/leaveBalance.js";
 import { approveLeaveStage, rejectLeaveStage, canActOnStage, normalizeStage, fetchApprovalTrail, routeInitialApprover, notifyInitialApprover } from "../services/leaveApprovalService.js";
 
@@ -83,7 +82,6 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
   const [reason, setReason] = useState("");
 
   const [historyFilter, setHistoryFilter] = useState({ type: "All", branch: branchFilter || "All", dept: "", from: "", to: "" });
-  const [calMonth, setCalMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [rejectId, setRejectId] = useState(null);
   const [rejectNote, setRejectNote] = useState("");
   const [trailFor, setTrailFor] = useState(null);
@@ -325,21 +323,6 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
     return { ...emp, opening, earnedToDate, used, halfUsed, remaining, lastUpdated };
   }), [employees, requests, balances]);
 
-  const calLeaves = useMemo(() =>
-    requests.filter(r => r.status === "Approved" &&
-      (r.from_date?.slice(0, 7) <= calMonth && r.to_date?.slice(0, 7) >= calMonth)
-    ), [requests, calMonth]);
-
-  const { daysInMonth, firstDay } = useMemo(() => {
-    const [y, m] = calMonth.split("-").map(Number);
-    return { daysInMonth: new Date(y, m, 0).getDate(), firstDay: new Date(y, m - 1, 1).getDay() };
-  }, [calMonth]);
-
-  function dayLeaves(day) {
-    const [y, m] = calMonth.split("-").map(Number);
-    const d = `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    return calLeaves.filter(r => r.from_date <= d && r.to_date >= d);
-  }
 
   // Computed remaining for edit modal preview
   const editRemaining = Number(editForm.opening) - Number(editForm.used) - Number(editForm.halfLeaves) * 0.5;
@@ -353,8 +336,6 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
           ["queue",     `Approval Queue (${pending.length})`, "leave-approval-queue-tab"],
           ["balances",  "Balances",                         "leave-balances-tab"],
           ["history",   "History",                          "leave-history-tab"],
-          ["calendar",  "Calendar",                         "leave-calendar-tab"],
-          ["liability", "Leave Liability",                  "leave-liability-tab"],
         ].map(([k, l, testId]) => (
           <button key={k} onClick={() => setTab(k)} data-testid={testId}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${tab === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{l}</button>
@@ -648,40 +629,6 @@ export default function LeaveManagement({ role, actorName, actorEmployeeCode, br
                   })}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {tab === "liability" && <LeaveLiability />}
-
-      {/* ── Calendar Tab ── */}
-      {tab === "calendar" && (
-        <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-            <h2 className="font-bold text-slate-800">Leave Calendar</h2>
-            <input type="month" value={calMonth} onChange={e => setCalMonth(e.target.value)} className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm" />
-            <Badge tone="blue">{calLeaves.length} approved this month</Badge>
-          </div>
-          <div className="grid grid-cols-7 gap-1 mb-1">
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => (
-              <div key={d} className="text-center text-xs font-semibold text-slate-400 py-2">{d}</div>
-            ))}
-          </div>
-          <div className="grid grid-cols-7 gap-1">
-            {Array.from({ length: firstDay }).map((_, i) => <div key={`b${i}`} />)}
-            {Array.from({ length: daysInMonth }).map((_, i) => {
-              const day = i + 1;
-              const dl = dayLeaves(day);
-              return (
-                <div key={day} className={`rounded-xl p-1.5 min-h-[56px] text-xs border ${dl.length > 0 ? "bg-blue-50 border-blue-200" : "bg-slate-50 border-transparent"}`}>
-                  <div className={`font-semibold mb-0.5 ${dl.length > 0 ? "text-blue-700" : "text-slate-500"}`}>{day}</div>
-                  {dl.slice(0, 2).map((l, li) => (
-                    <div key={li} className={`truncate text-[10px] ${l.leave_type === "Unpaid" ? "text-red-500" : "text-blue-600"}`}>{l.employee_name || l.employee_id}</div>
-                  ))}
-                  {dl.length > 2 && <div className="text-[10px] text-blue-400">+{dl.length - 2}</div>}
-                </div>
-              );
-            })}
           </div>
         </div>
       )}

@@ -12,7 +12,6 @@ import PayrollAutomation from "./pages/PayrollAutomation.jsx";
 import EmployeeProfile from "./pages/EmployeeProfile.jsx";
 import DepartmentManagement from "./pages/DepartmentManagement.jsx";
 import RosterManagement from "./pages/RosterManagement.jsx";
-import WorkforceHub from "./pages/WorkforceHub.jsx";
 import SalaryReports from "./pages/SalaryReports.jsx";
 import AllowancesHub from "./pages/AllowancesHub.jsx";
 import PayrollExtras from "./pages/PayrollExtras.jsx";
@@ -408,7 +407,7 @@ export default function BigBuyHRMS({ profile }) {
 
       {/* Core HR */}
       {active === "dashboard"   && <Dashboard activeEmployees={activeEmployees} attendanceRows={attendanceRows} payrollRows={payrollRows} payrollStatus="Draft" setActive={setActive} role={role} branchFilter={branchRestriction} />}
-      {active === "employees"   && <EmployeesHub {...employeeProps} role={role} />}
+      {active === "employees"   && <EmployeesHub {...employeeProps} role={role} actorName={user.name} branchFilter={branchRestriction} />}
       {active === "departments" && <DepartmentManagement role={role} />}
       {active === "profile"     && <EmployeeProfile role={role} />}
 
@@ -419,9 +418,6 @@ export default function BigBuyHRMS({ profile }) {
 
       {/* Leave */}
       {active === "leave"       && <LeaveManagement role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} branchFilter={branchRestriction} />}
-
-      {/* Workforce */}
-      {active === "workforce"   && <WorkforceHub role={role} actorName={user.name} branchFilter={branchRestriction} />}
 
       {/* Payroll & Finance */}
       {active === "payroll-automation" && <PayrollAutomation role={role} actorName={user.name} actorEmployeeCode={actorEmployeeCode} initialTab={payrollInitialTab} />}

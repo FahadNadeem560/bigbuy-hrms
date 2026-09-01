@@ -260,16 +260,16 @@ export default function Timesheet({ branchFilter, role }) {
   }, []);
 
   const filteredEmps = useMemo(() => {
-    if (!empSearch.trim()) return [];
-    const q = empSearch.toLowerCase();
-    return employees
-      .filter((e) => {
-        const hit = e.full_name?.toLowerCase().includes(q) || e.employee_code?.toLowerCase().includes(q);
-        const deptHit = !department || e.department?.toLowerCase().includes(department.toLowerCase());
-        const branchHit = branch === "All" || e.branch === branch;
-        return hit && deptHit && branchHit;
-      })
-      .slice(0, 12);
+    const q = empSearch.trim().toLowerCase();
+    const list = employees.filter((e) => {
+      const hit = !q || e.full_name?.toLowerCase().includes(q) || e.employee_code?.toLowerCase().includes(q);
+      const deptHit = !department || e.department?.toLowerCase().includes(department.toLowerCase());
+      const branchHit = branch === "All" || e.branch === branch;
+      return hit && deptHit && branchHit;
+    });
+    // Empty search = browse everyone (respecting the dept/branch filters); a
+    // search term narrows to the top matches.
+    return q ? list.slice(0, 12) : list.slice(0, 200);
   }, [employees, empSearch, department, branch]);
 
   async function loadTimesheet(emp, from = fromDate, to = toDate) {
@@ -794,7 +794,7 @@ export default function Timesheet({ branchFilter, role }) {
                 setShowDropdown(true);
               }}
               onFocus={() => { if (!selectedEmp) setShowDropdown(true); }}
-              placeholder="Search by code or name..."
+              placeholder="Search by code or name — or click to browse all…"
               className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm"
             />
             {showDropdown && filteredEmps.length > 0 && (

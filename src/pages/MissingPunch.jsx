@@ -24,10 +24,19 @@ export default function MissingPunch({ role }) {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterBranch, setFilterBranch] = useState("All");
+  const [filterMonth, setFilterMonth] = useState("");
   const [filterFrom, setFilterFrom] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10);
   });
   const [filterTo, setFilterTo] = useState(() => new Date().toISOString().slice(0, 10));
+
+  function applyMonth(value) {
+    setFilterMonth(value);
+    if (!value) return;
+    const [y, m] = value.split("-").map(Number);
+    setFilterFrom(`${value}-01`);
+    setFilterTo(`${value}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`);
+  }
   const [editing, setEditing] = useState(null);
   const [editIn, setEditIn] = useState("");
   const [editOut, setEditOut] = useState("");
@@ -122,13 +131,15 @@ export default function MissingPunch({ role }) {
 
       {/* Filters */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <select value={filterBranch} onChange={e => setFilterBranch(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
             <option value="All">All Branches</option>
             {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
           </select>
-          <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
-          <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          <input type="month" value={filterMonth} onChange={e => applyMonth(e.target.value)}
+            title="Pick a month to set the range" className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          <input type="date" value={filterFrom} onChange={e => { setFilterFrom(e.target.value); setFilterMonth(""); }} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          <input type="date" value={filterTo} onChange={e => { setFilterTo(e.target.value); setFilterMonth(""); }} className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
         </div>
       </div>
 
@@ -163,21 +174,22 @@ export default function MissingPunch({ role }) {
           <p className="text-xs text-slate-400 mt-0.5">{filtered.length} records · {filterFrom} to {filterTo}</p>
         </div>
         {loading ? <p className="px-5 py-8 text-slate-400 text-sm">Loading...</p> : (
-          <table className="w-full min-w-[700px] text-sm">
+          <table className="w-full min-w-[820px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
-              <tr>{["Employee", "Department", "Date", "Check In", "Check Out", "Issue Type", "Action"].map(h => (
+              <tr>{["Code", "Employee", "Department", "Date", "Check In", "Check Out", "Issue Type", "Action"].map(h => (
                 <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
               ))}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0
-                ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No missing punches found for this period.</td></tr>
+                ? <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">No missing punches found for this period.</td></tr>
                 : filtered.map((r, i) => {
                   const emp = empMap[r.employee_code];
                   const issue = issueType(r);
                   return (
                     <tr key={i} className="hover:bg-slate-50/50">
-                      <td className="px-4 py-3 font-medium">{r.employee_code}</td>
+                      <td className="px-4 py-3 text-slate-500">{r.employee_code}</td>
+                      <td className="px-4 py-3 font-medium">{emp?.full_name || "—"}</td>
                       <td className="px-4 py-3 text-slate-500">{emp?.department || "—"}</td>
                       <td className="px-4 py-3">{r.work_date}</td>
                       <td className="px-4 py-3">{r.check_in ? String(r.check_in).slice(11, 16) : <span className="text-red-400">Missing</span>}</td>

@@ -302,7 +302,8 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
   const [bulkType, setBulkType] = useState("percent");
   const [bulkValue, setBulkValue] = useState("");
   const [filterEmp, setFilterEmp] = useState("");
-  const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
+  // Blank = show the full history; pick a month to narrow it.
+  const [filterMonth, setFilterMonth] = useState("");
   const [filterType, setFilterType] = useState("");
   const [monthBranchFilter, setMonthBranchFilter] = useState("");
   const [monthDeptFilter, setMonthDeptFilter] = useState("");
@@ -623,7 +624,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
       />
 
       <div className="flex flex-wrap gap-2 mb-5">
-        {[["monthly", "Monthly View"], ["yearly", "Yearly View"], ["due", "Due for Increment"]].map(([k, l]) => (
+        {[["monthly", "History"], ["yearly", "Yearly View"], ["due", "Due for Increment"]].map(([k, l]) => (
           <button key={k} onClick={() => setView(k)}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition ${view === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
             {l}
@@ -765,6 +766,7 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
         <input value={filterEmp} onChange={e => setFilterEmp(e.target.value)} placeholder="Filter by employee name / code…"
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm w-56" />
         <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)}
+          title="Leave blank to show all months" placeholder="All months"
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
         <select value={monthBranchFilter} onChange={e => setMonthBranchFilter(e.target.value)}
           className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
