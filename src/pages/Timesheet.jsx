@@ -68,6 +68,64 @@ function getDayName(dateStr) {
   return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" });
 }
 
+// Shared ledger builder. Fills every missing day up to today with a synthetic
+// Absent (or Gazetted Holiday) row, applies the Mon-Fri lone-absence -> Weekly
+// Off override, and zeroes short/late/OT on days nothing was owed. Same logic
+// the single-employee `ledger` uses; also drives the All Employees summary.
+// `.extraWorkingDaysCount` is attached to the returned array.
+function buildLedger({ emp, attendance, holidayDates, fromDate, toDate }) {
+  const byDate = {};
+  (attendance || []).forEach((r) => { byDate[r.work_date] = r; });
+  const todayStr = fmtDate(new Date());
+
+  const base = enumerateDates(fromDate, toDate).map((date) => {
+    if (byDate[date]) return { ...byDate[date] };
+    if (date > todayStr) return null;
+    const isHoliday = holidayDates.has(date);
+    return { work_date: date, attendance_status: isHoliday ? "Gazetted Holiday" : "Absent", is_synthetic: true };
+  }).filter(Boolean);
+
+  const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
+  const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
+    rangeStart: fromDate, rangeEnd: toDate,
+    employmentStart: (emp?.joining_date && emp.joining_date >= fromDate && emp.joining_date <= toDate) ? emp.joining_date : null,
+    employmentEnd: (["Resigned", "Terminated"].includes(emp?.status) && emp?.last_working_day && emp.last_working_day >= fromDate && emp.last_working_day <= toDate) ? emp.last_working_day : null,
+  });
+  base.forEach((row) => {
+    if (overrideDates.has(row.work_date)) {
+      row.attendance_status = "Weekly Off";
+      row.short_hours = 0; row.late_minutes = 0; row.ot_hours = 0; row.overtime_hours = 0;
+    } else if (row.attendance_status === "Absent") {
+      row.short_hours = 0;
+    } else if (row.attendance_status === "Weekly Off" || row.attendance_status === "Gazetted Holiday") {
+      row.short_hours = 0; row.late_minutes = 0; row.ot_hours = 0; row.overtime_hours = 0;
+    }
+  });
+  base.extraWorkingDaysCount = fullyWorkedBlockKeys.size;
+  return base;
+}
+
+// Per-employee tallies from a built ledger — used by the All Employees table.
+function summariseLedger(led) {
+  const counts = {};
+  led.forEach((r) => { const s = r.attendance_status || r.status || ""; counts[s] = (counts[s] || 0) + 1; });
+  const lateRows = led.filter((r) => (r.attendance_status || r.status) === "Late" && Number(r.late_minutes || 0) > 0);
+  return {
+    present: (counts.Present || 0) + (counts.Late || 0) + (counts["Half Day"] || 0) + (counts["Short Hours"] || 0) + (counts["Early Out"] || 0),
+    absent: counts.Absent || 0,
+    halfDay: (counts["Half Day"] || 0) + (counts.HalfDay || 0),
+    weeklyOff: counts["Weekly Off"] || 0,
+    leave: counts.Leave || 0,
+    gh: counts["Gazetted Holiday"] || 0,
+    worked: fmt2(led.reduce((s, r) => s + Number(r.worked_hours ?? r.actual_hours ?? r.hours_worked ?? 0), 0)),
+    lateCount: lateRows.length,
+    lateMins: lateRows.reduce((s, r) => s + Number(r.late_minutes || 0), 0),
+    shortHrs: fmt2(led.reduce((s, r) => s + Number(r.short_hours || 0), 0)),
+    otHrs: fmt2(led.reduce((s, r) => s + Number(r.ot_hours ?? r.overtime_hours ?? 0), 0)),
+    ewd: led.extraWorkingDaysCount || 0,
+  };
+}
+
 function Toggle({ value, onChange, tone = "blue" }) {
   const tones = { blue: "bg-blue-500", green: "bg-green-500", purple: "bg-purple-500" };
   return (
@@ -176,6 +234,115 @@ function StatusOverrideModal({ row, target, reason, setReason, onSubmit, onClose
   );
 }
 
+// All Employees — one summary row per employee for the selected period.
+// A scan/print view; per-day detail stays in the single-employee timesheet.
+function AllTimesheets({ rows, loading, fromDate, toDate }) {
+  const totals = rows.reduce((t, r) => ({
+    present: t.present + r.present, absent: t.absent + r.absent, halfDay: t.halfDay + r.halfDay,
+    weeklyOff: t.weeklyOff + r.weeklyOff, leave: t.leave + r.leave, gh: t.gh + r.gh,
+    worked: t.worked + r.worked, lateCount: t.lateCount + r.lateCount, lateMins: t.lateMins + r.lateMins,
+    shortHrs: t.shortHrs + r.shortHrs, otHrs: t.otHrs + r.otHrs, ewd: t.ewd + r.ewd,
+  }), { present: 0, absent: 0, halfDay: 0, weeklyOff: 0, leave: 0, gh: 0, worked: 0, lateCount: 0, lateMins: 0, shortHrs: 0, otHrs: 0, ewd: 0 });
+
+  if (loading) {
+    return <div className="bg-white border border-slate-100 rounded-2xl p-12 text-center text-slate-400 shadow-sm">Building timesheets…</div>;
+  }
+  if (rows.length === 0) {
+    return <div className="bg-white border border-slate-100 rounded-2xl p-12 text-center text-slate-400 shadow-sm">No attendance for this period.</div>;
+  }
+
+  const H = ({ children, className = "" }) => (
+    <th className={`px-3 py-2.5 font-medium text-right sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)] ${className}`}>{children}</th>
+  );
+  const C = ({ children, className = "" }) => <td className={`px-3 py-2 text-right tabular-nums ${className}`}>{children}</td>;
+
+  return (
+    <div id="timesheet-print-root">
+      <style>{`
+        @media print {
+          @page { size: A4 landscape; margin: 8mm; }
+          html, body { font-size: 9px; }
+          body * { visibility: hidden; }
+          #timesheet-print-root, #timesheet-print-root * { visibility: visible; }
+          #timesheet-print-root { position: absolute; top: 0; left: 0; width: 100%; }
+          #timesheet-print-root .max-h-\\[74vh\\] { max-height: none !important; overflow: visible !important; }
+          #timesheet-print-root tr { page-break-inside: avoid; }
+        }
+      `}</style>
+      <div className="hidden print:block mb-2 border-b-2 border-slate-800 pb-2">
+        <h1 className="text-lg font-extrabold">The Big Buy — All Employees Timesheet</h1>
+        <p className="text-xs text-slate-500">Period: {fromDate} to {toDate} · {rows.length} employees · Generated {new Date().toLocaleDateString()}</p>
+      </div>
+      <div className="mb-2 text-xs text-slate-400">
+        {rows.length} employees · {fromDate} to {toDate}. Present counts include Late / Half Day. Short/OT hours are estimates (same rule as the single-employee view).
+      </div>
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[74vh]">
+        <table className="w-full text-sm min-w-[1100px]">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr>
+              <th className="px-3 py-2.5 font-medium text-left sticky top-0 left-0 z-20 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)] min-w-[190px]">Employee</th>
+              <th className="px-3 py-2.5 font-medium text-left sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Branch / Dept</th>
+              <H className="text-emerald-600">Present</H>
+              <H className="text-red-500">Absent</H>
+              <H>Half Day</H>
+              <H className="text-blue-600">Weekly Off</H>
+              <H className="text-amber-600">Leave</H>
+              <H>Gaz. Hol.</H>
+              <H>Worked Hrs</H>
+              <H>Late (n)</H>
+              <H>Late (min)</H>
+              <H>Short Hrs</H>
+              <H>OT Hrs</H>
+              <H>Extra Days</H>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((r) => (
+              <tr key={r.emp.employee_code} className="hover:bg-slate-50">
+                <td className="px-3 py-2 sticky left-0 z-[5] bg-white shadow-[2px_0_4px_rgba(0,0,0,0.05)]">
+                  <div className="font-medium text-slate-800">{r.emp.full_name}</div>
+                  <div className="text-xs text-slate-400">{r.emp.employee_code}</div>
+                </td>
+                <td className="px-3 py-2 text-slate-500 text-xs">{r.emp.branch || "—"}<br />{r.emp.department || "—"}</td>
+                <C className="text-emerald-700 font-medium">{r.present}</C>
+                <C className={r.absent ? "text-red-600 font-medium" : "text-slate-300"}>{r.absent}</C>
+                <C className={r.halfDay ? "" : "text-slate-300"}>{r.halfDay}</C>
+                <C className="text-blue-600">{r.weeklyOff}</C>
+                <C className={r.leave ? "text-amber-600" : "text-slate-300"}>{r.leave}</C>
+                <C className={r.gh ? "" : "text-slate-300"}>{r.gh}</C>
+                <C>{r.worked}</C>
+                <C className={r.lateCount ? "" : "text-slate-300"}>{r.lateCount}</C>
+                <C className={r.lateMins ? "" : "text-slate-300"}>{r.lateMins}</C>
+                <C className={r.shortHrs ? "text-red-500" : "text-slate-300"}>{r.shortHrs}</C>
+                <C className={r.otHrs ? "text-emerald-600" : "text-slate-300"}>{r.otHrs}</C>
+                <C className={r.ewd ? "text-emerald-600" : "text-slate-300"}>{r.ewd}</C>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="bg-slate-100 font-bold border-t-2 border-slate-200">
+              <td className="px-3 py-2.5 sticky left-0 z-[5] bg-slate-100">Total ({rows.length})</td>
+              <td className="px-3 py-2.5" />
+              <C className="text-emerald-700">{totals.present}</C>
+              <C className="text-red-600">{totals.absent}</C>
+              <C>{totals.halfDay}</C>
+              <C className="text-blue-600">{totals.weeklyOff}</C>
+              <C className="text-amber-600">{totals.leave}</C>
+              <C>{totals.gh}</C>
+              <C>{fmt2(totals.worked)}</C>
+              <C>{totals.lateCount}</C>
+              <C>{totals.lateMins}</C>
+              <C className="text-red-500">{fmt2(totals.shortHrs)}</C>
+              <C className="text-emerald-600">{fmt2(totals.otHrs)}</C>
+              <C className="text-emerald-600">{totals.ewd}</C>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function Timesheet({ branchFilter, role }) {
   const [empSearch, setEmpSearch] = useState("");
   const [department, setDepartment] = useState("");
@@ -213,6 +380,11 @@ export default function Timesheet({ branchFilter, role }) {
   const [notice, setNotice] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
+
+  // "All Employees" mode — one summary row per employee for the selected period.
+  const [mode, setMode] = useState("single"); // "single" | "all"
+  const [allRows, setAllRows] = useState([]);
+  const [allLoading, setAllLoading] = useState(false);
 
   // Adj Time In/Out (HR proposes, Master/GM approve via the Approval Queue)
   const [pendingAdjByDate, setPendingAdjByDate] = useState({});
@@ -385,6 +557,53 @@ export default function Timesheet({ branchFilter, role }) {
     if (selectedEmp) loadTimesheet(selectedEmp);
   }
 
+  async function loadAllTimesheets() {
+    if (!fromDate || !toDate) return;
+    setAllLoading(true);
+    setError("");
+    try {
+      const [{ data: att, error: attErr }, { data: gh }] = await Promise.all([
+        supabase.from("attendance")
+          .select("employee_code, work_date, attendance_status, status, worked_hours, actual_hours, hours_worked, late_minutes, short_hours, ot_hours, overtime_hours, is_synthetic")
+          .gte("work_date", fromDate).lte("work_date", toDate)
+          .order("work_date", { ascending: true }).limit(20000),
+        supabase.from("gazetted_holidays").select("holiday_date").eq("is_active", true)
+          .gte("holiday_date", fromDate).lte("holiday_date", toDate),
+      ]);
+      if (attErr) throw attErr;
+      const holidays = new Set((gh || []).map((h) => h.holiday_date));
+      const byEmp = {};
+      (att || []).forEach((r) => { (byEmp[r.employee_code] || (byEmp[r.employee_code] = [])).push(r); });
+
+      const q = empSearch.trim().toLowerCase();
+      const scoped = employees.filter((e) => {
+        const deptHit = !department || e.department?.toLowerCase().includes(department.toLowerCase());
+        const branchHit = branch === "All" || e.branch === branch;
+        const searchHit = !q || e.full_name?.toLowerCase().includes(q) || e.employee_code?.toLowerCase().includes(q);
+        return deptHit && branchHit && searchHit;
+      });
+
+      const rows = scoped
+        .map((emp) => {
+          const led = buildLedger({ emp, attendance: byEmp[emp.employee_code] || [], holidayDates: holidays, fromDate, toDate });
+          return { emp, ...summariseLedger(led) };
+        })
+        .filter((r) => r.present || r.absent || r.weeklyOff || r.leave || r.gh)
+        .sort((a, b) => (a.emp.full_name || "").localeCompare(b.emp.full_name || ""));
+      setAllRows(rows);
+    } catch (e) {
+      setError(e.message);
+      setAllRows([]);
+    } finally {
+      setAllLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (mode === "all") loadAllTimesheets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, fromDate, toDate, branch, department, empSearch, employees]);
+
   function clearSelection() {
     setSelectedEmp(null);
     setAttendance([]);
@@ -511,76 +730,11 @@ export default function Timesheet({ branchFilter, role }) {
 
   const ledger = useMemo(() => {
     if (!selectedEmp || !fromDate || !toDate) return [];
-    const byDate = {};
-    attendance.forEach((r) => { byDate[r.work_date] = r; });
-    const rosterByDate = {};
-    roster.forEach((r) => { rosterByDate[r.roster_date] = r; });
-    const todayStr = fmtDate(new Date());
-
-    const base = enumerateDates(fromDate, toDate)
-      .map((date) => {
-        if (byDate[date]) return { ...byDate[date] };
-        if (date > todayStr) return null;
-        const rosterEntry = rosterByDate[date];
-        // Weekly off is no longer roster-driven (the roster table isn't kept
-        // current) — see the Mon-Fri single-absence rule applied below.
-        // Gazetted holidays come from the roster OR the company-wide
-        // gazetted_holidays table (Attendance ▸ Holidays).
-        const isHoliday = rosterEntry?.is_gazetted_holiday || holidayDates.has(date);
-        const status = isHoliday ? "Gazetted Holiday" : "Absent";
-        return { work_date: date, attendance_status: status, is_synthetic: true };
-      })
-      .filter(Boolean);
-
-    // One employee at a time here, so no employeeKey grouping needed — see
-    // getWeeklyOffOverrideKeys for the shared Mon-Fri single-absence rule
-    // (also applied in PayrollAutomation.jsx and FinalSettlement.jsx so
-    // "Absent" means the same thing, and costs the same deduction, everywhere).
-    const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
-    // Computed from the same pre-override `base` rows as overrideDates above
-    // (see PayrollAutomation.jsx for why) so Extra Working Days and the
-    // Absent-to-Weekly-Off override never disagree about what counted as a
-    // block's rest day.
-    const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
-      rangeStart: fromDate, rangeEnd: toDate,
-      // Don't credit an EWD for a block that predates the employee's joining
-      // date (or follows their last working day) -- see getFullyWorkedBlockKeys.
-      // Guarded to dates inside the viewing window, matching PayrollAutomation.
-      employmentStart: (selectedEmp.joining_date && selectedEmp.joining_date >= fromDate && selectedEmp.joining_date <= toDate) ? selectedEmp.joining_date : null,
-      employmentEnd: (["Resigned", "Terminated"].includes(selectedEmp.status) && selectedEmp.last_working_day && selectedEmp.last_working_day >= fromDate && selectedEmp.last_working_day <= toDate) ? selectedEmp.last_working_day : null,
-    });
-    base.forEach((row) => {
-      if (overrideDates.has(row.work_date)) {
-        // The DB row's short_hours/late/OT were computed for "Absent"
-        // (short by the full required hours) — once the day reads as a
-        // legitimate Weekly Off instead, those figures are stale and would
-        // show e.g. "10.5 short" against a day nothing was owed for.
-        row.attendance_status = "Weekly Off";
-        row.short_hours = 0;
-        row.late_minutes = 0;
-        row.ot_hours = 0;
-        row.overtime_hours = 0;
-      } else if (row.attendance_status === "Absent") {
-        // Absent already costs a full-day deduction on its own; counting the
-        // same day again in short_hours would double-deduct it, same reason
-        // Weekly Off is zeroed above.
-        row.short_hours = 0;
-      } else if (row.attendance_status === "Weekly Off" || row.attendance_status === "Gazetted Holiday") {
-        // Some DB rows already carry "Weekly Off"/"Gazetted Holiday" directly
-        // (not just the derived override above) but still have short_hours
-        // populated from whatever punches existed that day — nothing is owed
-        // on these days, so the same double-deduct fix applies here too.
-        row.short_hours = 0;
-        row.late_minutes = 0;
-        row.ot_hours = 0;
-        row.overtime_hours = 0;
-      }
-    });
-
-    // Attached to the array rather than restructuring `ledger`'s shape --
-    // every existing consumer treats it as a plain row array.
-    base.extraWorkingDaysCount = fullyWorkedBlockKeys.size;
-    return base;
+    // Gazetted holidays come from the company-wide gazetted_holidays table
+    // (Attendance ▸ Holidays) OR a roster row's is_gazetted_holiday flag.
+    const holidays = new Set(holidayDates);
+    roster.forEach((r) => { if (r.is_gazetted_holiday) holidays.add(r.roster_date); });
+    return buildLedger({ emp: selectedEmp, attendance, holidayDates: holidays, fromDate, toDate });
   }, [selectedEmp, attendance, roster, holidayDates, fromDate, toDate]);
 
   const STATUS_ORDER = ["Present", "Late", "Half Day", "Short Hours", "Early Out", "Absent", "Weekly Off", "Gazetted Holiday", "Leave"];
@@ -754,6 +908,21 @@ export default function Timesheet({ branchFilter, role }) {
     XLSX.writeFile(wb, `timesheet_${selectedEmp.employee_code}_${fromDate}_${toDate}.xlsx`);
   }
 
+  function exportAllExcel() {
+    const data = allRows.map((r) => ({
+      Code: r.emp.employee_code, Employee: r.emp.full_name,
+      Department: r.emp.department || "", Branch: r.emp.branch || "",
+      Present: r.present, Absent: r.absent, "Half Day": r.halfDay,
+      "Weekly Off": r.weeklyOff, Leave: r.leave, "Gaz. Holiday": r.gh,
+      "Worked Hrs": r.worked, "Late (count)": r.lateCount, "Late (mins)": r.lateMins,
+      "Short Hrs": r.shortHrs, "OT Hrs": r.otHrs, "Extra Work Days": r.ewd,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "All Timesheets");
+    XLSX.writeFile(wb, `timesheets_all_${fromDate}_${toDate}.xlsx`);
+  }
+
   return (
     <div>
       <AdjustTimeModal
@@ -769,9 +938,18 @@ export default function Timesheet({ branchFilter, role }) {
         title="Employee Timesheet"
         subtitle="Attendance ledger with late, short hours, OT and leave summary."
         action={
-          selectedEmp ? (
+          (mode === "single" && selectedEmp) ? (
             <div className="flex gap-2 print:hidden">
               <Button variant="outline" onClick={exportExcel} className="rounded-2xl">
+                Export Excel
+              </Button>
+              <Button variant="outline" onClick={() => window.print()} className="rounded-2xl">
+                Print / PDF
+              </Button>
+            </div>
+          ) : (mode === "all" && allRows.length > 0) ? (
+            <div className="flex gap-2 print:hidden">
+              <Button variant="outline" onClick={exportAllExcel} className="rounded-2xl">
                 Export Excel
               </Button>
               <Button variant="outline" onClick={() => window.print()} className="rounded-2xl">
@@ -784,6 +962,14 @@ export default function Timesheet({ branchFilter, role }) {
 
       {/* Filter Bar */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4 print:hidden">
+        <div className="flex gap-2 mb-3">
+          {[["single", "Single Employee"], ["all", "All Employees"]].map(([k, l]) => (
+            <button key={k} onClick={() => { setMode(k); if (k === "all") clearSelection(); }}
+              className={`px-4 py-1.5 rounded-xl text-sm font-medium transition ${mode === k ? "bg-slate-950 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
           <div className="relative lg:col-span-2" ref={dropdownRef}>
             <input
@@ -793,11 +979,11 @@ export default function Timesheet({ branchFilter, role }) {
                 setEmpSearch(e.target.value);
                 setShowDropdown(true);
               }}
-              onFocus={() => { if (!selectedEmp) setShowDropdown(true); }}
-              placeholder="Search by code or name — or click to browse all…"
+              onFocus={() => { if (!selectedEmp && mode === "single") setShowDropdown(true); }}
+              placeholder={mode === "all" ? "Filter list by code or name…" : "Search by code or name — or click to browse all…"}
               className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm"
             />
-            {showDropdown && filteredEmps.length > 0 && (
+            {mode === "single" && showDropdown && filteredEmps.length > 0 && (
               <div className="absolute z-20 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-64 overflow-y-auto">
                 {filteredEmps.map((emp) => (
                   <button
@@ -882,21 +1068,23 @@ export default function Timesheet({ branchFilter, role }) {
         <div className="mb-4 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{error}</div>
       )}
 
-      {loading && (
+      {mode === "all" && <AllTimesheets rows={allRows} loading={allLoading} fromDate={fromDate} toDate={toDate} />}
+
+      {mode === "single" && loading && (
         <div className="bg-white border border-slate-100 rounded-2xl p-12 text-center text-slate-400 shadow-sm">
           Loading timesheet...
         </div>
       )}
 
-      {!loading && !selectedEmp && (
+      {mode === "single" && !loading && !selectedEmp && (
         <div className="bg-white border border-slate-100 rounded-2xl p-12 text-center text-slate-400 shadow-sm">
           <div className="text-4xl mb-3">📋</div>
           <p className="font-medium">Search and select an employee to view their timesheet.</p>
-          <p className="text-xs mt-1">Enter an employee code or name in the search box above.</p>
+          <p className="text-xs mt-1">Enter an employee code or name in the search box above, or switch to <strong>All Employees</strong>.</p>
         </div>
       )}
 
-      {!loading && selectedEmp && (
+      {mode === "single" && !loading && selectedEmp && (
         <>
           {/* Print CSS — compact everything (via root font-size, since Tailwind spacing is rem-based)
               so a full month's ledger + summaries + signatures fits on one A4 page. */}
