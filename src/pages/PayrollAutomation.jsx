@@ -247,10 +247,10 @@ function SummaryPanel({ month, displayRows }) {
     </tr>
   );
   return (
-    <div className="mb-4">
-      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
+    <div className="mb-4 max-w-2xl">
+      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Payroll Summary — {month}</h2></div>
-        <table className="w-full text-sm min-w-[480px]">
+        <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <th className="text-left px-4 py-2 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Category</th>
@@ -343,6 +343,22 @@ const LEVEL_OPTIONS = ["Management", "Floor Management", "Non-Management"];
 const PAGE_SIZE_OPTIONS = [25, 50, 100, "All"];
 
 function roundN(v, n) { const f = 10 ** n; return Math.round(Number(v || 0) * f) / f; }
+
+// Quick sanity check for the register: this month's net vs last month's net.
+//  - new        : no prior payroll for this employee (first run / new joiner)
+//  - consistent : within the greater of Rs. 500 or 3% of last pay
+//  - review     : moved more than that — worth an eyeball before publishing
+function deriveCheck(net, lastPay) {
+  const payDelta = Math.round(Number(net || 0) - Number(lastPay || 0));
+  if (!(Number(lastPay) > 0)) return { lastPay: Number(lastPay || 0), payDelta, checkStatus: "new" };
+  const tol = Math.max(500, Number(lastPay) * 0.03);
+  return { lastPay: Number(lastPay), payDelta, checkStatus: Math.abs(payDelta) <= tol ? "consistent" : "review" };
+}
+const CHECK_META = {
+  consistent: { label: "Consistent", tone: "green" },
+  review:     { label: "Review",     tone: "yellow" },
+  new:        { label: "New",        tone: "slate" },
+};
 function plainCode(code) {
   const s = String(code ?? "");
   return /^\d+$/.test(s) ? String(parseInt(s, 10)) : s;
@@ -433,12 +449,24 @@ function ComparisonTable({ cur, prev, month, prevMonth, showDiff }) {
 }
 
 function BranchCard({ branch, cur, prev, month, prevMonth, collapsed, onToggle, total }) {
+  const netDiff = Math.round(Number(cur.netSalary || 0) - Number(prev.netSalary || 0));
   return (
-    <div className={`bg-white rounded-2xl shadow-sm overflow-hidden ${total ? "border-2 border-slate-800" : "border border-slate-200"}`}>
+    <div className={`bg-white rounded-2xl shadow-sm overflow-hidden ${total ? "border-2 border-slate-800" : "border border-slate-200"} ${!collapsed && !total ? "col-span-full" : ""}`}>
       <button onClick={onToggle}
-        className={`w-full flex items-center justify-between px-4 py-3 transition text-left ${total ? "bg-slate-800 hover:bg-slate-700" : "bg-slate-50 hover:bg-slate-100"}`}>
-        <span className={`font-semibold ${total ? "text-white font-bold" : "text-slate-800"}`}>{collapsed ? "▶" : "▼"} {branch}</span>
-        <span className={`text-xs ${total ? "text-slate-300" : "text-slate-500"}`}>Head Count: {cur.headCount} <span className="opacity-50">|</span> {prev.headCount}</span>
+        className={`w-full px-4 py-2.5 transition text-left ${total ? "bg-slate-800 hover:bg-slate-700" : "bg-slate-50 hover:bg-slate-100"}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className={`font-semibold text-sm ${total ? "text-white font-bold" : "text-slate-800"}`}>{collapsed ? "▶" : "▼"} {branch}</span>
+          <span className={`text-[11px] ${total ? "text-slate-300" : "text-slate-500"}`}>HC {cur.headCount}<span className="opacity-40"> / </span>{prev.headCount}</span>
+        </div>
+        <div className="flex items-baseline justify-between gap-2 mt-1">
+          <span className={`text-base font-bold ${total ? "text-white" : "text-slate-900"}`}>{num(cur.netSalary)}</span>
+          <span className={`text-[11px] ${total ? "text-slate-300" : "text-slate-400"}`}>
+            was {num(prev.netSalary)}
+            <span className={`ml-1.5 font-semibold ${netDiff === 0 ? "" : netDiff > 0 ? "text-emerald-500" : "text-red-400"}`}>
+              {netDiff > 0 ? "+" : ""}{num(netDiff)}
+            </span>
+          </span>
+        </div>
       </button>
       {!collapsed && <ComparisonTable cur={cur} prev={prev} month={month} prevMonth={prevMonth} showDiff={total} />}
     </div>
@@ -531,7 +559,7 @@ function BranchComparisonSummary({ month }) {
           <Button variant="outline" onClick={exportExcel} className="rounded-xl text-xs">Export Comparison to Excel</Button>
         </div>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
         {allBranches.map(branch => (
           <BranchCard key={branch} branch={branch} cur={currentByBranch[branch] || emptyAgg()} prev={previousByBranch[branch] || emptyAgg()}
             month={month} prevMonth={prevMonth} collapsed={!expanded.has(branch)} onToggle={() => toggle(branch)} />
@@ -612,6 +640,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
   const [deptFilter, setDeptFilter] = useState("");
   const [levelFilter, setLevelFilter] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("All");
+  const [reviewOnly, setReviewOnly] = useState(false);
   const [sortKey, setSortKey] = useState(null);
   const [sortDir, setSortDir] = useState("asc");
   const [showDetailColumns, setShowDetailColumns] = useState(false);
@@ -624,7 +653,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
   const [marking, setMarking] = useState(false);
 
   function clearFilters() {
-    setSearchText(""); setBranchFilter(""); setDeptFilter(""); setLevelFilter(""); setPaymentStatusFilter("All");
+    setSearchText(""); setBranchFilter(""); setDeptFilter(""); setLevelFilter(""); setPaymentStatusFilter("All"); setReviewOnly(false);
   }
   function toggleSort(key) {
     if (sortKey === key) { setSortDir(d => (d === "asc" ? "desc" : "asc")); }
@@ -1461,6 +1490,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
       "Advance": r.advanceDeduction, "Loan Deduction": r.loanDeduction,
       "Tax": r.taxDeduction, "EOBI": r.eobiDeduction, "Other Deductions": r.otherDeductions,
       "Total Deductions": r.totalDeductions, "Net Pay": r.finalSalary, "Last Pay": r.lastPay,
+      "Δ vs Last Pay": r.checkStatus === "new" ? "" : r.payDelta, "Check": CHECK_META[r.checkStatus].label,
       "Payment Status": PAYMENT_STATUS_LABELS[r.paymentStatus] || r.paymentStatus,
       "Status": r.status || payrollStatus,
     }));
@@ -1529,7 +1559,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
       taxDeduction, eobiDeduction, otherDeductions, totalDeductions,
       finalSalary: totalEarnings - totalDeductions, gross: basicSalary,
       arrears: r.arrears || 0,
-      lastPay: lastPayByCode[code] || 0,
+      ...deriveCheck(totalEarnings - totalDeductions, lastPayByCode[code] || 0),
     };
   }), [payrollRows, payrollStatus, empByCode, lastPayByCode]);
 
@@ -1546,10 +1576,13 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
       if (branchFilter && r.branch !== branchFilter) return false;
       if (deptFilter && r.department !== deptFilter) return false;
       if (levelFilter && r.level !== levelFilter) return false;
+      if (reviewOnly && r.checkStatus !== "review") return false;
       if (q && !(r.name || "").toLowerCase().includes(q) && !(r.employeeCode || "").toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [displayRows, searchText, branchFilter, deptFilter, levelFilter, paymentStatusFilter]);
+  }, [displayRows, searchText, branchFilter, deptFilter, levelFilter, paymentStatusFilter, reviewOnly]);
+
+  const reviewCount = useMemo(() => displayRows.filter(r => r.checkStatus === "review").length, [displayRows]);
 
   const filteredTotals = useMemo(() => filteredRows.reduce((s, r) => ({
     totalBasic: s.totalBasic + r.basicSalary,
@@ -1594,6 +1627,8 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
     totalDeductions: r => r.totalDeductions,
     finalSalary: r => r.finalSalary,
     lastPay: r => r.lastPay,
+    payDelta: r => r.payDelta,
+    checkStatus: r => ({ review: 0, new: 1, consistent: 2 }[r.checkStatus] ?? 3),
     paymentStatus: r => r.paymentStatus,
   };
 
@@ -1817,7 +1852,11 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
               <option value="All">All Payment Status</option>
               {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{PAYMENT_STATUS_LABELS[s]}</option>)}
             </select>
-            {(searchText || branchFilter || deptFilter || levelFilter || paymentStatusFilter !== "All") && (
+            <button onClick={() => setReviewOnly(v => !v)}
+              className={`px-3 py-2 rounded-xl text-sm border transition ${reviewOnly ? "bg-amber-500 text-white border-amber-500" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+              ⚠ Needs review{reviewCount > 0 ? ` (${reviewCount})` : ""}
+            </button>
+            {(searchText || branchFilter || deptFilter || levelFilter || paymentStatusFilter !== "All" || reviewOnly) && (
               <Button variant="outline" onClick={clearFilters} className="rounded-xl text-xs">Clear All Filters</Button>
             )}
             <label className="flex items-center gap-1.5 text-xs text-slate-500 ml-auto cursor-pointer select-none">
@@ -1846,7 +1885,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
             <p className="text-xs text-slate-400 mt-0.5">{filteredRows.length} of {displayRows.length} employees</p>
           </div>
         </div>
-        <table className="w-full text-sm" style={{ minWidth: "1500px" }}>
+        <table className="w-full text-sm" style={{ minWidth: "1620px" }}>
           <thead className="bg-slate-50 text-slate-500">
             <tr>
               <TH sticky="first">#</TH>
@@ -1892,12 +1931,14 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
               <TH className="text-red-500" sortField="totalDeductions">Deductions</TH>
               <TH className="text-slate-900 bg-slate-100" sortField="finalSalary">Net Pay</TH>
               <TH sortField="lastPay">Last Pay</TH>
+              <TH sortField="payDelta">Δ vs Last</TH>
+              <TH sortField="checkStatus">Check</TH>
               <TH sortField="paymentStatus">Status</TH>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {pagedRows.length === 0 ? (
-              <tr><td colSpan={20 + (showDetailColumns ? 16 : 0)} className="px-4 py-8 text-center text-slate-400">
+              <tr><td colSpan={22 + (showDetailColumns ? 16 : 0)} className="px-4 py-8 text-center text-slate-400">
                 {displayRows.length === 0
                   ? (role === "Finance" ? "No published payroll for this month." : 'No payroll data. Click "Generate Payroll" to calculate.')
                   : "No employees match the current filters."}
@@ -1957,7 +1998,11 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
                   )}
                   <TD className="text-red-500">{money(r.totalDeductions)}</TD>
                   <TD className="font-bold text-slate-900 bg-slate-50">{money(r.finalSalary)}</TD>
-                  <TD className="text-slate-500">{money(r.lastPay)}</TD>
+                  <TD className="text-slate-500">{r.lastPay ? money(r.lastPay) : "—"}</TD>
+                  <TD className={r.checkStatus === "review" ? (r.payDelta > 0 ? "text-emerald-600" : "text-red-600") : "text-slate-400"}>
+                    {r.checkStatus === "new" ? "—" : `${r.payDelta > 0 ? "+" : ""}${money(r.payDelta)}`}
+                  </TD>
+                  <TD><Badge tone={CHECK_META[r.checkStatus].tone}>{CHECK_META[r.checkStatus].label}</Badge></TD>
                   <TD onClick={e => e.stopPropagation()}>
                     <div className="flex flex-col gap-0.5 items-start">
                       {canRequestPaymentStatus ? (
