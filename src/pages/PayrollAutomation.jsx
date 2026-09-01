@@ -407,41 +407,41 @@ function ComparisonTable({ cur, prev, month, prevMonth, showDiff }) {
   }
   const cols = showDiff ? 4 : 3;
   return (
-    <table className="w-full text-sm">
-      <thead className="text-slate-400 text-xs">
+    <table className="w-full text-xs">
+      <thead className="text-slate-400 text-[11px]">
         <tr>
-          <th className="text-left px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]"> </th>
-          <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{month}</th>
-          <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{prevMonth}</th>
-          {showDiff && <th className="text-right px-4 py-2 font-medium sticky top-0 z-10 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">Difference</th>}
+          <th className="text-left px-3 py-1.5 font-medium"> </th>
+          <th className="text-right px-3 py-1.5 font-medium">{month}</th>
+          <th className="text-right px-3 py-1.5 font-medium">{prevMonth}</th>
+          {showDiff && <th className="text-right px-3 py-1.5 font-medium">Difference</th>}
         </tr>
       </thead>
       <tbody className="divide-y divide-slate-50">
-        <tr><td colSpan={cols} className="px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50">Earnings</td></tr>
+        <tr><td colSpan={cols} className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50">Earnings</td></tr>
         {EARNING_ROWS.map(([label, key]) => (
           <tr key={key}>
-            <td className="px-4 py-1.5 text-slate-600">{label}</td>
-            <td className="px-4 py-1.5 text-right">{num(cur[key])}</td>
-            <td className="px-4 py-1.5 text-right text-slate-400">{num(prev[key])}</td>
-            {showDiff && <td className="px-4 py-1.5 text-right">{diffCell(cur[key], prev[key])}</td>}
+            <td className="px-3 py-1 text-slate-600">{label}</td>
+            <td className="px-3 py-1 text-right tabular-nums">{num(cur[key])}</td>
+            <td className="px-3 py-1 text-right text-slate-400 tabular-nums">{num(prev[key])}</td>
+            {showDiff && <td className="px-3 py-1 text-right tabular-nums">{diffCell(cur[key], prev[key])}</td>}
           </tr>
         ))}
-        <tr><td colSpan={cols} className="px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50">Deductions</td></tr>
+        <tr><td colSpan={cols} className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50">Deductions</td></tr>
         {DEDUCTION_ROWS.map(([label, key]) => (
           <tr key={key}>
-            <td className="px-4 py-1.5 text-slate-600">{label}</td>
-            <td className="px-4 py-1.5 text-right">{num(cur[key])}</td>
-            <td className="px-4 py-1.5 text-right text-slate-400">{num(prev[key])}</td>
-            {showDiff && <td className="px-4 py-1.5 text-right">{diffCell(cur[key], prev[key])}</td>}
+            <td className="px-3 py-1 text-slate-600">{label}</td>
+            <td className="px-3 py-1 text-right tabular-nums">{num(cur[key])}</td>
+            <td className="px-3 py-1 text-right text-slate-400 tabular-nums">{num(prev[key])}</td>
+            {showDiff && <td className="px-3 py-1 text-right tabular-nums">{diffCell(cur[key], prev[key])}</td>}
           </tr>
         ))}
       </tbody>
       <tfoot>
         <tr className="bg-slate-900">
-          <td className="px-4 py-3 font-bold text-white text-base">Net Salary</td>
-          <td className="px-4 py-3 text-right font-bold text-white text-base">{num(cur.netSalary)}</td>
-          <td className="px-4 py-3 text-right font-bold text-slate-300 text-base">{num(prev.netSalary)}</td>
-          {showDiff && <td className="px-4 py-3 text-right font-bold text-base bg-slate-900">{diffCell(cur.netSalary, prev.netSalary)}</td>}
+          <td className="px-3 py-2 font-bold text-white text-sm">Net Salary</td>
+          <td className="px-3 py-2 text-right font-bold text-white text-sm tabular-nums">{num(cur.netSalary)}</td>
+          <td className="px-3 py-2 text-right font-bold text-slate-300 text-sm tabular-nums">{num(prev.netSalary)}</td>
+          {showDiff && <td className="px-3 py-2 text-right font-bold text-sm bg-slate-900 tabular-nums">{diffCell(cur.netSalary, prev.netSalary)}</td>}
         </tr>
       </tfoot>
     </table>
@@ -468,7 +468,13 @@ function BranchCard({ branch, cur, prev, month, prevMonth, collapsed, onToggle, 
           </span>
         </div>
       </button>
-      {!collapsed && <ComparisonTable cur={cur} prev={prev} month={month} prevMonth={prevMonth} showDiff={total} />}
+      {!collapsed && (
+        <div className="overflow-x-auto">
+          <div className={total ? "max-w-2xl" : "max-w-xl"}>
+            <ComparisonTable cur={cur} prev={prev} month={month} prevMonth={prevMonth} showDiff={total} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
