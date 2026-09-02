@@ -493,3 +493,16 @@ actually consumes it now.
 `attendance_status = 'Leave'` (`review_status = 'Locked'` so ZKT re-sync won't clobber it) for every
 day of the approved range. `PayrollAutomation.jsx` already read `attendance_status === "Leave"` into
 its `leaveDaysUsed` bucket before this change — this was the one missing write-side step.
+
+## Roster generator: fixed-Sunday default for Management / Warehouse with a blank weekly_off_day (2026-09-02, migration roster_generator_default_sunday_for_mgmt_warehouse)
+
+`generate_employee_work_rosters(from,to)` only ever rostered a weekly off for employees with an
+explicit `employees.weekly_off_day`. A blank field is fine for floor / Non-Management staff (their
+day off floats and is handled by the client-side Mon–Fri lone-absence forgiveness in
+`getWeeklyOffOverrideKeys`), but Management and Warehouse get a *fixed Sunday* by policy and that
+forgiveness rule can't cover a Sunday absence — so a blank-field Warehouse/Mgmt employee got no
+weekly off at all (found: emp 3076 Tahir Gull, 0 weekly offs in August). The `matches` CTE now
+derives an effective off-day: explicit `weekly_off_day` wins, else Sunday (0) for
+`staff_level = 'Management' or department ilike '%warehouse%'`, else none. 4/month cap and
+Management/Warehouse cap-exemption unchanged. Also set 3076's `weekly_off_day = '0'` explicitly and
+regenerated Aug–Oct rosters + reprocessed August.
