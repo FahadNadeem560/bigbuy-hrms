@@ -330,6 +330,17 @@ export default function Timesheet({ branchFilter, role }) {
 
   const canToggle = role === "HR" || role === "Master";
 
+  // No adjustment (time correction, day-status override, or per-day flag) may
+  // be made on a date outside the employee's employment window — a pre-hire or
+  // post-exit day isn't theirs to correct. buildLedger already omits those
+  // rows; this is the backstop for the action handlers.
+  function isOutsideEmployment(dateStr) {
+    if (!selectedEmp || !dateStr) return false;
+    if (selectedEmp.joining_date && dateStr < selectedEmp.joining_date) return true;
+    if (["Resigned", "Terminated"].includes(selectedEmp.status) && selectedEmp.last_working_day && dateStr > selectedEmp.last_working_day) return true;
+    return false;
+  }
+
   useEffect(() => {
     let q = supabase
       .from("employees")
@@ -432,6 +443,11 @@ export default function Timesheet({ branchFilter, role }) {
   }
 
   function openAdjustModal(row) {
+    if (isOutsideEmployment(row.work_date)) {
+      setNotice(`${row.work_date} is outside ${selectedEmp.full_name}'s employment dates — no adjustment allowed.`);
+      setTimeout(() => setNotice(""), 4000);
+      return;
+    }
     const curIn = formatTime(row.check_in || row.time_in);
     const curOut = formatTime(row.check_out || row.time_out);
     // Default the out-date to whatever the existing checkout's real date is
@@ -543,6 +559,11 @@ export default function Timesheet({ branchFilter, role }) {
   // limits the write to Master/HR (canToggle).
   async function toggleFlag(row, flag, currentValue) {
     if (!row.id || !canToggle) return;
+    if (isOutsideEmployment(row.work_date)) {
+      setNotice(`${row.work_date} is outside ${selectedEmp.full_name}'s employment dates.`);
+      setTimeout(() => setNotice(""), 4000);
+      return;
+    }
     const newValue = !currentValue;
     const now = new Date().toISOString();
     const dbField = DB_FIELD_MAP[flag];
@@ -588,6 +609,11 @@ export default function Timesheet({ branchFilter, role }) {
   }
 
   function openOverrideModal(row, target) {
+    if (isOutsideEmployment(row.work_date)) {
+      setNotice(`${row.work_date} is outside ${selectedEmp.full_name}'s employment dates — no status change allowed.`);
+      setTimeout(() => setNotice(""), 4000);
+      return;
+    }
     setOverrideRow(row);
     setOverrideTarget(target);
     setOverrideReason("");

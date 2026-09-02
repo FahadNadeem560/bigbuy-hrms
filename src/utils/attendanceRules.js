@@ -308,18 +308,29 @@ export function buildLedger({ emp, attendance, holidayDates, fromDate, toDate })
   const todayStr = fmtDate(new Date());
   const holidays = holidayDates instanceof Set ? holidayDates : new Set(holidayDates || []);
 
-  const base = enumerateDates(fromDate, toDate).map((date) => {
+  // Clamp the ledger to the employment window. A mid-month joiner's pre-hire
+  // days and a leaver's post-exit days are not "Absent" and definitely not a
+  // paid "Gazetted Holiday" — they're simply outside employment, and no
+  // adjustment should be possible on them. Payroll prorates the pre-join
+  // period on its own (preJoinUnpaidDays); the ledger just omits those days.
+  const joinDate = emp?.joining_date || null;
+  const exitDate = (["Resigned", "Terminated"].includes(emp?.status) && emp?.last_working_day) ? emp.last_working_day : null;
+  const effFrom = (joinDate && joinDate > fromDate) ? joinDate : fromDate;
+  const effTo = (exitDate && exitDate < toDate) ? exitDate : toDate;
+  if (effFrom > effTo) { const empty = []; empty.extraWorkingDaysCount = 0; return empty; }
+
+  const base = enumerateDates(effFrom, effTo).map((date) => {
     if (byDate[date]) return { ...byDate[date] };
     if (date > todayStr) return null;
     const isHoliday = holidays.has(date);
     return { work_date: date, attendance_status: isHoliday ? "Gazetted Holiday" : "Absent", is_synthetic: true };
   }).filter(Boolean);
 
-  const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
+  const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: effFrom, rangeEnd: effTo });
   const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
-    rangeStart: fromDate, rangeEnd: toDate,
-    employmentStart: (emp?.joining_date && emp.joining_date >= fromDate && emp.joining_date <= toDate) ? emp.joining_date : null,
-    employmentEnd: (["Resigned", "Terminated"].includes(emp?.status) && emp?.last_working_day && emp.last_working_day >= fromDate && emp.last_working_day <= toDate) ? emp.last_working_day : null,
+    rangeStart: effFrom, rangeEnd: effTo,
+    employmentStart: (joinDate && joinDate >= effFrom && joinDate <= effTo) ? joinDate : null,
+    employmentEnd: (exitDate && exitDate >= effFrom && exitDate <= effTo) ? exitDate : null,
   });
   base.forEach((row) => {
     if (overrideDates.has(row.work_date)) {
