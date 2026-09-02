@@ -1165,7 +1165,10 @@ export default function Timesheet({ branchFilter, role }) {
                             {row.late_exempt_applied && (
                               <span className="block mt-0.5 text-[10px] text-blue-600" title="Late Exempt kept this day off the Late status.">Late Exempt</span>
                             )}
-                            {canToggle && !row.is_synthetic && overrideTargetsFor(status).length > 0 && (
+                            {/* A synthetic row (no biometric record for the day — e.g. a
+                                new joiner not yet on the device) can still be set to a
+                                status: submitAttendanceStatusChange inserts the row. */}
+                            {canToggle && overrideTargetsFor(status).length > 0 && (
                               <span className="block mt-1 space-x-2 print:hidden">
                                 {overrideTargetsFor(status).map(t => (
                                   <button key={t} onClick={() => openOverrideModal(row, t)}
