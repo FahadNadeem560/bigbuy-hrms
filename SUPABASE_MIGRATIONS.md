@@ -506,3 +506,42 @@ derives an effective off-day: explicit `weekly_off_day` wins, else Sunday (0) fo
 `staff_level = 'Management' or department ilike '%warehouse%'`, else none. 4/month cap and
 Management/Warehouse cap-exemption unchanged. Also set 3076's `weekly_off_day = '0'` explicitly and
 regenerated Aug–Oct rosters + reprocessed August.
+
+## Final Settlement rebuild — Phase 2: month lines + atomic RPCs (2026-09-02)
+
+Two migrations, applied via Supabase MCP:
+`fnf_phase2_settlement_lines_and_columns` and `fnf_phase2_settlement_rpcs`.
+
+**New table `final_settlement_lines`** — one row per month (or exit line) behind a settlement
+total: `settlement_id` (FK, ON DELETE CASCADE), `payroll_month`, `line_type`
+(month | released_hold | pay_in_lieu | severance | adjustment), `gross`/`deductions`/`net`,
+day counts, and a `detail` jsonb holding the full engine row. RLS on, policies mirroring
+`final_settlements` (SELECT for Master/HR/Finance/GM/Audit, ALL for Master/HR), and an
+explicit `REVOKE ALL … FROM anon` — this project auto-grants anon on new objects.
+
+**New `final_settlements` columns**: `paid_until_date`, `last_working_day_inclusive`,
+`notice_waived`, `pay_in_lieu_days`, `pay_in_lieu_amount`, `released_hold_amount`,
+`recoverable_at_exit`, `termination_forfeit_mode` (none | worked_days_only | full),
+`settled_through_month`, `window_start`, `window_end`, `is_reversed`, `reversed_by`,
+`reversed_at`, `reversal_reason`, `increment_warning`, `leave_balance_snapshot`.
+
+**`UNIQUE (employee_code)` deliberately left in place.** The plan called for swapping it for a
+partial unique index (`WHERE NOT is_reversed`) so a rehire's second settlement doesn't
+overwrite the first — but `FinalSettlement.jsx` still upserts with `onConflict=employee_code`,
+and PostgREST cannot infer a partial index. The swap happens in Phase 3, in the same change
+that moves the UI onto the RPC.
+
+**Three RPCs**, all SECURITY DEFINER, role-checked inside, `REVOKE`d from public/anon and
+granted to `authenticated` only:
+- `process_final_settlement(p_payload jsonb) → uuid` (Master/HR). One transaction: refuses if a
+  live settlement exists or if any month being settled is already Published/paid in `payroll`;
+  snapshots then zeroes leave balances; deletes every unpaid payroll row from the first settled
+  month onward (the old flow only deleted the last-day month, leaving Draft rows behind);
+  sets the employee's status and separation dates; inserts the header and its lines; audits.
+- `reverse_final_settlement(p_id, p_reason)` (Master). Restores leave from the snapshot, returns
+  the employee to Active with dates cleared, marks the settlement reversed rather than deleting it.
+- `unpay_final_settlement(p_id, p_reason)` (Master). Clears the paid flags.
+
+Note: `audit_logs` only has `action_type, performed_by, details, created_at`. Several existing
+callers insert `action` / `entity` / `entity_id`, which don't exist — those audit writes fail
+silently. These RPCs use the real columns.
