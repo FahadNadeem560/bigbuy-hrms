@@ -43,6 +43,8 @@ export default function MissingPunch({ role, branchFilter }) {
   const [err, setErr] = useState("");
 
   const [filterBranch, setFilterBranch] = useState(branchFilter || "All");
+  const [filterIssue, setFilterIssue] = useState("All");   // All | Missing In | Missing Out
+  const [filterStatus, setFilterStatus] = useState("All"); // All | <attendance_status>
   const now = new Date();
   const [filterMonth, setFilterMonth] = useState(
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
@@ -103,18 +105,32 @@ export default function MissingPunch({ role, branchFilter }) {
   }, [rawRows]);
 
   const inBranch = (code) => filterBranch === "All" || empMap[code]?.branch === filterBranch;
+  const rowStatus = (r) => r.attendance_status || r.status || "—";
+
+  // Every attendance_status present among the branch-scoped single-punch
+  // records, for the Status filter dropdown.
+  const statusOptions = useMemo(() => {
+    const set = new Set();
+    (rawRows || []).forEach((r) => {
+      if (issueType(r) && inBranch(r.employee_code)) set.add(rowStatus(r));
+    });
+    return [...set].sort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawRows, filterBranch, empMap]);
 
   // Detail — one row per genuine single-punch record.
   const detailRows = useMemo(() => {
     return (rawRows || [])
       .map((row) => ({ row, issue: issueType(row) }))
       .filter((x) => x.issue && inBranch(x.row.employee_code))
+      .filter((x) => filterIssue === "All" || x.issue === filterIssue)
+      .filter((x) => filterStatus === "All" || rowStatus(x.row) === filterStatus)
       .sort((a, b) =>
         String(b.row.work_date).localeCompare(String(a.row.work_date)) ||
         String(a.row.employee_code).localeCompare(String(b.row.employee_code))
       );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawRows, filterBranch, empMap]);
+  }, [rawRows, filterBranch, filterIssue, filterStatus, empMap]);
 
   // Summary — one row per employee with attendance activity this period.
   // Missing In / Missing Out are counted straight from the raw records;
@@ -135,20 +151,24 @@ export default function MissingPunch({ role, branchFilter }) {
         });
         const led = buildLedger({ emp, attendance: rows, holidayDates: holidays, fromDate: filterFrom, toDate: filterTo });
         const s = summariseLedger(led);
+        // The Issue filter narrows the "single punch" tally the table sorts
+        // and filters on; the individual Missing In / Out columns still show.
+        const singlePunch = filterIssue === "Missing In" ? missingIn
+          : filterIssue === "Missing Out" ? missingOut
+          : missingIn + missingOut;
         return {
-          emp,
-          missingIn, missingOut, singlePunch: missingIn + missingOut,
+          emp, missingIn, missingOut, singlePunch,
           present: s.present, halfDay: s.halfDay, absent: s.absent,
           weeklyOff: s.weeklyOff, leave: s.leave,
         };
       })
-      .filter((r) => r.singlePunch || r.halfDay || r.absent)
+      .filter((r) => (filterIssue === "All" ? (r.singlePunch || r.halfDay || r.absent) : r.singlePunch))
       .sort((a, b) =>
         b.singlePunch - a.singlePunch || b.absent - a.absent ||
         (a.emp.full_name || "").localeCompare(b.emp.full_name || "")
       );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, rowsByEmp, holidays, filterBranch, filterFrom, filterTo]);
+  }, [employees, rowsByEmp, holidays, filterBranch, filterIssue, filterFrom, filterTo]);
 
   const cards = useMemo(() => {
     const c = { singlePunch: detailRows.length, missingIn: 0, missingOut: 0, halfDay: 0, absent: 0, employees: 0 };
@@ -274,12 +294,24 @@ export default function MissingPunch({ role, branchFilter }) {
 
       {/* Filters */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <select value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}
             disabled={!!branchFilter}
             className="px-4 py-2 rounded-xl border border-slate-200 text-sm disabled:bg-slate-50 disabled:text-slate-500">
             <option value="All">All Branches</option>
             {Object.keys(BRANCH_CODE_MAP).map((b) => <option key={b}>{b}</option>)}
+          </select>
+          <select value={filterIssue} onChange={(e) => setFilterIssue(e.target.value)}
+            className="px-4 py-2 rounded-xl border border-slate-200 text-sm" title="Issue type">
+            <option value="All">All Issues</option>
+            <option value="Missing In">Missing In</option>
+            <option value="Missing Out">Missing Out</option>
+          </select>
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
+            className="px-4 py-2 rounded-xl border border-slate-200 text-sm disabled:bg-slate-50 disabled:text-slate-500"
+            disabled={mode === "summary"} title={mode === "summary" ? "Status filter applies to By Record only" : "Day status"}>
+            <option value="All">All Statuses</option>
+            {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <input type="month" value={filterMonth} onChange={(e) => applyMonth(e.target.value)}
             title="Pick a month to set the range" className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
