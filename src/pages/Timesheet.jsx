@@ -39,6 +39,33 @@ function fmt2(n) {
   return Math.round(Number(n || 0) * 100) / 100;
 }
 
+// PostgREST caps a single response at ~1000 rows regardless of a higher
+// `.limit()`, so a whole-company month of attendance (~8.5k rows) came back
+// truncated to whatever fell in the first page — every employee past the
+// cutoff showed a handful of Present days and the rest synthesized as Absent
+// (see AllTimesheets). Page through with `.range()`, ordered on a key that's
+// unique across the full result set (work_date alone repeats ~300x/day and
+// Postgres won't keep that order stable between the separate requests, so a
+// page boundary inside a date drops or duplicates rows) — same pattern as
+// PayrollAutomation.fetchAllAttendanceForMonth.
+async function fetchAllAttendanceForRange(fromDate, toDate) {
+  const pageSize = 1000;
+  let all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase.from("attendance").select("*")
+      .gte("work_date", fromDate).lte("work_date", toDate)
+      .order("work_date", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 function hoursToHHMM(n) {
   const total = Number(n || 0);
   const sign = total < 0 ? "-" : "";
@@ -562,15 +589,11 @@ export default function Timesheet({ branchFilter, role }) {
     setAllLoading(true);
     setError("");
     try {
-      const [{ data: att, error: attErr }, { data: gh }] = await Promise.all([
-        supabase.from("attendance")
-          .select("*")
-          .gte("work_date", fromDate).lte("work_date", toDate)
-          .order("work_date", { ascending: true }).limit(20000),
+      const [att, { data: gh }] = await Promise.all([
+        fetchAllAttendanceForRange(fromDate, toDate),
         supabase.from("gazetted_holidays").select("holiday_date").eq("is_active", true)
           .gte("holiday_date", fromDate).lte("holiday_date", toDate),
       ]);
-      if (attErr) throw attErr;
       const holidays = new Set((gh || []).map((h) => h.holiday_date));
       const byEmp = {};
       (att || []).forEach((r) => { (byEmp[r.employee_code] || (byEmp[r.employee_code] = [])).push(r); });
