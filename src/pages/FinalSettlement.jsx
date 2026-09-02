@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { getWeeklyOffOverrideKeys } from "../utils/attendanceRules.js";
+import { buildSettlement } from "../services/settlementEngine.js";
+import { processFinalSettlement, fetchSettlementLines } from "../services/finalSettlementService.js";
 
 // Calendar days required per staff level (no exclusions)
 const NOTICE_CALENDAR_DAYS = {
@@ -20,8 +21,6 @@ const PAYOUT_MODE_LABELS = {
   full_period: "Pay full notice period (served or not)",
   custom: "Custom — choose the number of days to pay",
 };
-
-function firstOfMonth(dateStr) { return dateStr ? dateStr.slice(0, 7) + "-01" : ""; }
 
 // Simple inclusive calendar day count
 function calendarDaysBetween(startStr, endStr) {
@@ -73,6 +72,11 @@ function EmpPicker({ employees, value, onChange }) {
 // payslip. Reads straight off the stored final_settlements row (nothing is
 // recomputed here; the figures are exactly what was locked in at settlement).
 function SettlementSlipModal({ row, onClose }) {
+  const [lines, setLines] = useState([]);
+  useEffect(() => {
+    if (!row?.id) { setLines([]); return; }
+    fetchSettlementLines(row.id).then(setLines).catch(() => setLines([]));
+  }, [row?.id]);
   if (!row) return null;
   const isTerm = row.separation_type === "termination";
   const sepDate = isTerm ? row.termination_date : row.resignation_date;
@@ -167,6 +171,27 @@ function SettlementSlipModal({ row, onClose }) {
             {isTerm && <IRow label="Salary Payable" value={row.salary_payable === false ? "No — withheld" : "Yes"} />}
             <IRow label="Daily Rate (Salary / 30)" value={money(dr)} />
           </div>
+          )}
+
+          {/* Which months this settlement actually paid for */}
+          {lines.length > 0 && (
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Period Settled</h3>
+              {(row.window_start || row.settled_through_month) && (
+                <p className="text-xs text-slate-400 mb-2">
+                  Paid up to {row.settled_through_month || "—"} · settling {row.window_start} → {row.window_end}
+                </p>
+              )}
+              {lines.map(l => (
+                <div key={l.id} className="flex justify-between py-1.5 border-b border-slate-100">
+                  <span className="text-slate-500 text-sm">
+                    {l.payroll_month}
+                    {l.line_type !== "month" && <span className="text-xs text-amber-700 ml-1">{l.label || l.line_type}</span>}
+                  </span>
+                  <span className="text-sm text-slate-700">{money(l.net)}</span>
+                </div>
+              ))}
+            </div>
           )}
 
           {/* Earnings */}
@@ -362,8 +387,10 @@ export default function FinalSettlement({ role }) {
   const [resignDate, setResignDate] = useState("");      // resignation date OR termination date
   const [lastDay, setLastDay] = useState("");
   const [resignReason, setResignReason] = useState("");
-  const [loanBalance, setLoanBalance] = useState(0);
   const [attendanceData, setAttendanceData] = useState([]);
+  const [calc, setCalc] = useState(null);
+  const [calcLoading, setCalcLoading] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
   const [payoutMode, setPayoutMode] = useState("worked");
@@ -377,54 +404,18 @@ export default function FinalSettlement({ role }) {
   function resetForm() {
     setSelEmp(null); setSepType("resignation");
     setResignDate(""); setLastDay(""); setResignReason("");
-    setLoanBalance(0); setAttendanceData([]);
+    setAttendanceData([]); setCalc(null);
     setOverrideMode(false); setOverrideReason("");
     setPayoutMode("worked"); setCustomDays(""); setSalaryNotPayable(false);
   }
 
+  // select("*") deliberately: the settlement now runs the real payroll engine,
+  // which reads a dozen fields off the employee row (exemptions, eligibility
+  // group, EOBI, tenure dates...), not just the handful the picker shows.
   useEffect(() => {
-    supabase.from("employees")
-      .select("employee_code, full_name, department, branch, staff_level, salary, joining_date, status")
-      .order("full_name")
+    supabase.from("employees").select("*").order("full_name")
       .then(({ data }) => setEmployees(data || []));
   }, []);
-
-  useEffect(() => {
-    if (selEmp) {
-      supabase.from("loans").select("outstanding_balance")
-        .eq("employee_code", selEmp.employee_code).eq("status", "Active")
-        .then(({ data }) => setLoanBalance((data || []).reduce((s, l) => s + Number(l.outstanding_balance || 0), 0)));
-    }
-  }, [selEmp]);
-
-  // The window whose attendance the settlement pays for.
-  //  - Resignation : resignation date → last working day (the notice window served).
-  //  - Termination : start of the final month (or joining date, if the employee
-  //                  joined mid-month) → last working day. Termination is
-  //                  employer-initiated with no notice period, so the pending
-  //                  amount is simply the unpaid part of the final month.
-  const winStart = useMemo(() => {
-    if (isTermination) {
-      if (!lastDay) return "";
-      const ms = firstOfMonth(lastDay);
-      return (selEmp?.joining_date && selEmp.joining_date > ms) ? selEmp.joining_date : ms;
-    }
-    return resignDate;
-  }, [isTermination, lastDay, resignDate, selEmp]);
-  const winEnd = lastDay;
-
-  useEffect(() => {
-    if (selEmp && winStart && winEnd) {
-      supabase.from("attendance").select("attendance_status, work_date")
-        .eq("employee_code", selEmp.employee_code)
-        .gte("work_date", winStart)
-        .lte("work_date", winEnd)
-        .order("work_date")
-        .then(({ data }) => setAttendanceData(data || []));
-    } else {
-      setAttendanceData([]);
-    }
-  }, [selEmp, winStart, winEnd]);
 
   const noticeRequired = useMemo(() => {
     if (!selEmp) return 0;
@@ -434,25 +425,52 @@ export default function FinalSettlement({ role }) {
   const noticeDaysServed = useMemo(() => calendarDaysBetween(resignDate, lastDay), [resignDate, lastDay]);
   const noticeRemaining = Math.max(0, noticeRequired - noticeDaysServed);
   const noticeComplete = noticeDaysServed >= noticeRequired;
-  const windowCalendarDays = useMemo(() => calendarDaysBetween(winStart, winEnd), [winStart, winEnd]);
+  const customDaysNum = Math.max(0, Math.min(62, Math.round(Number(customDays) || 0)));
 
-  const attendanceSummary = useMemo(() => {
-    const PRESENT_STATUSES = ["Present", "Late", "Half Day", "Gazetted Holiday"];
-    const WEEKLY_OFF_STATUSES = ["Weekly Off", "Day Off", "Off"];
-    // Single employee's data here, so no employeeKey grouping needed — see
-    // getWeeklyOffOverrideKeys for the shared Mon-Fri single-absence rule
-    // (also applied on Timesheet and Payroll so "Absent" means the same
-    // thing, and costs the same deduction, everywhere).
-    const overrideDates = getWeeklyOffOverrideKeys(attendanceData, { rangeStart: winStart, rangeEnd: winEnd });
-    let daysPresent = 0, weeklyOffs = 0, absentDays = 0;
-    for (const a of attendanceData) {
-      const s = overrideDates.has(a.work_date) ? "Weekly Off" : (a.attendance_status || "");
-      if (PRESENT_STATUSES.includes(s)) daysPresent++;
-      else if (WEEKLY_OFF_STATUSES.includes(s)) weeklyOffs++;
-      else if (s === "Absent") absentDays++;
-    }
-    return { daysPresent, weeklyOffs, absentDays };
-  }, [attendanceData, winStart, winEnd]);
+  // Termination is employer-initiated: no short-notice penalty ever.
+  const noticePenalty = (!isTermination && !noticeComplete && !overrideMode)
+    ? Number(selEmp?.salary || 0) : 0;
+
+  // A fixed number of paid days replaces the engine's month totals. Used by
+  // the Master payout override and by "salary not payable" on a termination.
+  const paidDaysOverride = useMemo(() => {
+    if (isTermination) return salaryNotPayable ? 0 : null;
+    if (!overrideMode) return null;
+    if (payoutMode === "full_period") return noticeRequired;
+    if (payoutMode === "custom") return customDaysNum;
+    return null;
+  }, [isTermination, salaryNotPayable, overrideMode, payoutMode, noticeRequired, customDaysNum]);
+
+  // The settlement itself. Resolves the real unpaid window (paid-through
+  // watermark -> last working day) and runs the regular payroll engine over
+  // every month in it, so the leaver's final months cost exactly what they
+  // would have if they'd stayed.
+  useEffect(() => {
+    if (!selEmp || !lastDay) { setCalc(null); return; }
+    let cancelled = false;
+    setCalcLoading(true); setErr("");
+    buildSettlement({
+      employee: selEmp,
+      separationType: sepType,
+      lastWorkingDay: lastDay,
+      noticePenalty,
+      paidDaysOverride,
+    })
+      .then(r => { if (!cancelled) setCalc(r); })
+      .catch(e => { if (!cancelled) { setErr(e.message); setCalc(null); } })
+      .finally(() => { if (!cancelled) setCalcLoading(false); });
+    return () => { cancelled = true; };
+  }, [selEmp, sepType, lastDay, noticePenalty, paidDaysOverride]);
+
+  // Attendance over the resolved window, only for the absconding check.
+  useEffect(() => {
+    if (!selEmp || !calc?.windowStart || !calc?.windowEnd) { setAttendanceData([]); return; }
+    supabase.from("attendance").select("attendance_status, work_date")
+      .eq("employee_code", selEmp.employee_code)
+      .gte("work_date", calc.windowStart).lte("work_date", calc.windowEnd)
+      .order("work_date")
+      .then(({ data }) => setAttendanceData(data || []));
+  }, [selEmp, calc?.windowStart, calc?.windowEnd]);
 
   const isAbsconding = useMemo(() => {
     if (isTermination) return false;
@@ -462,56 +480,12 @@ export default function FinalSettlement({ role }) {
       if ((a.attendance_status || "") === "Absent") {
         consecutive++;
         if (consecutive >= 7) return true;
-      } else {
-        consecutive = 0;
-      }
+      } else consecutive = 0;
     }
     return false;
   }, [attendanceData, isTermination]);
 
-  const customDaysNum = Math.max(0, Math.min(62, Math.round(Number(customDays) || 0)));
-
-  const settlement = useMemo(() => {
-    if (!selEmp) return null;
-    const salary = Number(selEmp.salary || 0);
-    const dailyRate = salary / 30;
-    const { daysPresent, weeklyOffs, absentDays } = attendanceSummary;
-    const workedPaidDays = daysPresent + weeklyOffs;
-
-    // How many days the pending salary is actually paid for.
-    let effPaidDays, effPayoutMode;
-    if (isTermination) {
-      effPayoutMode = "worked";
-      effPaidDays = salaryNotPayable ? 0 : workedPaidDays;
-    } else if (overrideMode) {
-      effPayoutMode = payoutMode;
-      effPaidDays = payoutMode === "full_period" ? noticeRequired
-        : payoutMode === "custom" ? customDaysNum
-        : workedPaidDays;
-    } else {
-      effPayoutMode = "worked";
-      effPaidDays = workedPaidDays;
-    }
-
-    const pendingSalary = Math.round(dailyRate * effPaidDays);
-    const leaveEncashment = 0;
-
-    // Termination is employer-initiated: no absconding block, no short-notice penalty.
-    const blocked = !isTermination && isAbsconding && !overrideMode;
-    const noticePenalty = (!isTermination && !noticeComplete && !overrideMode) ? salary : 0;
-
-    const gross = pendingSalary + leaveEncashment;
-    const deductions = loanBalance + noticePenalty;
-    const net = Math.max(0, gross - deductions);
-
-    return {
-      salary, dailyRate, daysPresent, weeklyOffs, absentDays,
-      workedPaidDays, effPaidDays, effPayoutMode,
-      pendingSalary, leaveEncashment, loanBalance, noticePenalty,
-      gross, deductions, net, blocked,
-    };
-  }, [selEmp, attendanceSummary, loanBalance, noticeComplete, noticeRequired, isAbsconding,
-      overrideMode, isTermination, salaryNotPayable, payoutMode, customDaysNum]);
+  const blocked = !isTermination && isAbsconding && !overrideMode;
 
   async function processSettlement() {
     const dateLabel = isTermination ? "termination" : "resignation";
@@ -520,86 +494,67 @@ export default function FinalSettlement({ role }) {
     if (!isTermination && lastDay < resignDate) return setErr("Last working day cannot be before the resignation date.");
     if (!isTermination && isAbsconding && !overrideMode) return setErr("Cannot process: absconding case. Master override required.");
     if (!isTermination && overrideMode && payoutMode === "custom" && !customDays.trim()) return setErr("Enter the number of days to pay for the custom payout.");
-    setErr("");
+    if (!calc) return setErr("Settlement is still being calculated.");
+    setErr(""); setProcessing(true);
 
-    // Leaving the company either way — zero out all leave balances.
-    await supabase.from("leaves")
-      .update({ annual_balance: 0, remaining_balance: 0, remaining: 0, casual_balance: 0, sick_balance: 0 })
-      .eq("employee_id", selEmp.employee_code);
-
-    if (isTermination || overrideMode) {
-      await supabase.from("audit_logs").insert({
-        action_type: isTermination ? "settlement_termination" : "settlement_master_override",
-        details: JSON.stringify({
-          employeeCode: selEmp.employee_code,
-          separationType: sepType,
-          reason: isTermination ? (resignReason || null) : overrideReason,
-          salaryPayable: isTermination ? !salaryNotPayable : true,
-          payoutMode: settlement.effPayoutMode, payoutDays: settlement.effPaidDays,
-          settlement,
-        }),
-        performed_by: role || "Master", created_at: new Date().toISOString(),
-      });
-    }
-
-    await supabase.from("employees")
-      .update(isTermination
-        ? { status: "Terminated", termination_date: resignDate, resignation_date: null, last_working_day: lastDay }
-        : { status: "Resigned", resignation_date: resignDate, last_working_day: lastDay })
-      .eq("employee_code", selEmp.employee_code);
-
-    // Nothing payable (net 0, or a termination flagged "salary not payable", or a
-    // resignation with notice unserved and no Master override) -> No F&F.
-    // Otherwise some amount is due -> F&F. Lives entirely in final_settlements
-    // now, not payroll -- a settled employee is removed from the regular monthly
-    // payroll cycle for good (see PayrollAutomation.jsx's loadBase, which
-    // excludes anyone with a final_settlements row), so Generate/Refresh Payroll
-    // can never again silently recompute and overwrite these figures.
-    const fnfStatus = (
-      settlement.net === 0 ||
-      (isTermination && salaryNotPayable) ||
-      (!isTermination && !noticeComplete && !overrideMode)
-    ) ? "No_FnF" : "FnF";
-    const payrollMonth = lastDay.slice(0, 7);
-    const nowIso = new Date().toISOString();
-
-    // Remove any regular payroll row already generated for this employee this
-    // month -- the settlement below is now the sole record of what they're owed.
-    await supabase.from("payroll").delete()
-      .eq("employee_code", selEmp.employee_code).eq("payroll_month", payrollMonth);
-
-    await supabase.from("final_settlements").upsert({
-      employee_code: selEmp.employee_code, payroll_month: payrollMonth,
+    // One RPC, one transaction. Zeroing leave, clearing the leftover payroll
+    // rows, flipping the employee's status and writing the settlement used to
+    // be four separate calls from here -- a failure part-way through left the
+    // employee out of payroll with nothing to pay them from.
+    const payload = {
+      employee_code: selEmp.employee_code,
+      payroll_month: lastDay.slice(0, 7),
       separation_type: sepType,
       resignation_date: isTermination ? null : resignDate,
       termination_date: isTermination ? resignDate : null,
-      last_working_day: lastDay, resignation_reason: resignReason || null,
+      last_working_day: lastDay,
+      resignation_reason: resignReason || null,
       staff_level: selEmp.staff_level, branch: selEmp.branch, department: selEmp.department,
-      salary: settlement.salary, daily_rate: settlement.dailyRate,
-      days_present: settlement.daysPresent, weekly_offs: settlement.weeklyOffs,
-      absent_days: settlement.absentDays, paid_days: settlement.effPaidDays,
-      pending_salary: settlement.pendingSalary, leave_encashment: settlement.leaveEncashment,
-      loan_balance: settlement.loanBalance,
+      salary: Number(selEmp.salary || 0), daily_rate: calc.dailyRate,
+      days_present: calc.daysPresent, weekly_offs: calc.weeklyOffs,
+      absent_days: calc.absentDays, paid_days: calc.paidDays,
+      pending_salary: calc.pendingSalary, leave_encashment: 0,
+      loan_balance: calc.loanClosingBalance,
       salary_payable: isTermination ? !salaryNotPayable : true,
-      payout_mode: settlement.effPayoutMode, payout_days: settlement.effPaidDays,
+      payout_mode: paidDaysOverride != null ? payoutMode : "worked",
+      payout_days: calc.paidDays,
       notice_required_days: isTermination ? null : noticeRequired,
       notice_served_days: isTermination ? null : noticeDaysServed,
       notice_complete: isTermination ? true : noticeComplete,
-      notice_penalty: settlement.noticePenalty, is_absconding: isAbsconding,
+      notice_penalty: noticePenalty,
+      is_absconding: isAbsconding,
       override_applied: !isTermination && overrideMode,
       override_by: (!isTermination && overrideMode) ? (role || "Master") : null,
       override_reason: (!isTermination && overrideMode) ? overrideReason : null,
-      gross_earnings: settlement.gross, total_deductions: settlement.deductions, net_payable: settlement.net,
-      payment_status: fnfStatus, settled_by: role || "Master", settled_at: nowIso, updated_at: nowIso,
-    }, { onConflict: "employee_code" });
+      settled_through_month: calc.settledThrough,
+      window_start: calc.windowStart, window_end: calc.windowEnd,
+      released_hold_amount: calc.releasedHold,
+      recoverable_at_exit: calc.recoverableAtExit,
+      gross_earnings: calc.grossEarnings,
+      total_deductions: calc.totalDeductions,
+      net_payable: calc.cashPayable,
+      payment_status: calc.paymentStatus,
+      lines: calc.lines,
+    };
 
-    setMsg(`${isTermination ? "Termination" : "Settlement"} processed for ${selEmp.full_name}. Net payable: ${money(settlement?.net || 0)}. Recorded as ${fnfStatus === "FnF" ? "F&F" : "No F&F"} for ${payrollMonth}, removed from regular payroll.`);
+    try {
+      await processFinalSettlement(payload);
+    } catch (e) {
+      setProcessing(false);
+      return setErr(e.message || "Could not process the settlement.");
+    }
+
+    setProcessing(false);
+    const extra = calc.recoverableAtExit > 0 ? ` (plus ${money(calc.recoverableAtExit)} recoverable at exit)` : "";
+    const label = isTermination ? "Termination" : "Settlement";
+    const fnf = calc.paymentStatus === "FnF" ? "F&F" : "No F&F";
+    setMsg(`${label} processed for ${selEmp.full_name}. Payable: ${money(calc.cashPayable)}${extra}. Recorded as ${fnf} covering ${calc.months.join(", ")}, removed from regular payroll.`);
     resetForm();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   const dateFieldLabel = isTermination ? "Termination Date" : "Resignation Date";
-  const canProcess = selEmp && settlement && !settlement.blocked
+  const canProcess = selEmp && calc && !calcLoading && !blocked
     && resignDate && lastDay
     && !(isTermination && lastDay > resignDate)
     && !(!isTermination && lastDay < resignDate)
@@ -771,7 +726,7 @@ export default function FinalSettlement({ role }) {
                               <input type="number" min="0" max="62" value={customDays}
                                 onChange={e => setCustomDays(e.target.value)}
                                 className="w-24 px-3 py-1.5 rounded-lg border border-slate-200 text-sm" />
-                              <span className="text-xs text-slate-500">days to pay ({money(settlement?.dailyRate || 0)}/day)</span>
+                              <span className="text-xs text-slate-500">days to pay ({money(calc?.dailyRate || 0)}/day)</span>
                             </div>
                           )}
                         </div>
@@ -784,44 +739,64 @@ export default function FinalSettlement({ role }) {
         </div>
       </div>
 
-      {selEmp && settlement && (
+      {selEmp && lastDay && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-4">Settlement Calculator</h2>
-          {settlement.blocked
+          {blocked
             ? <div className="p-4 bg-red-50 rounded-xl text-red-700">Settlement blocked. Master must approve to proceed.</div>
+            : calcLoading || !calc
+            ? <div className="p-4 bg-slate-50 rounded-xl text-slate-500 text-sm">Working out what {selEmp.full_name} is owed…</div>
             : (
               <div className="space-y-4">
-                {/* Attendance Breakdown */}
-                {winStart && winEnd && (
-                  <div className="bg-slate-50 rounded-xl p-4">
-                    <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-                      Attendance Breakdown ({winStart} → {winEnd})
-                    </h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-center">
-                      <div>
-                        <div className="text-xl font-bold text-slate-800">{windowCalendarDays}</div>
-                        <div className="text-xs text-slate-400">Total Calendar Days</div>
-                      </div>
-                      <div>
-                        <div className="text-xl font-bold text-emerald-600">{settlement.daysPresent}</div>
-                        <div className="text-xs text-slate-400">Days Present</div>
-                      </div>
-                      <div>
-                        <div className="text-xl font-bold text-blue-600">{settlement.weeklyOffs}</div>
-                        <div className="text-xs text-slate-400">Weekly Offs</div>
-                      </div>
-                      <div>
-                        <div className="text-xl font-bold text-red-500">{settlement.absentDays}</div>
-                        <div className="text-xs text-slate-400">Absent Days</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 pt-3 border-t border-slate-200 flex flex-wrap gap-4 text-sm">
-                      <span><span className="text-slate-500">Days Worked (Present + Weekly Offs):</span> <strong>{settlement.workedPaidDays}</strong></span>
-                      <span><span className="text-slate-500">Days Paid:</span> <strong>{settlement.effPaidDays}</strong>
-                        {settlement.effPayoutMode !== "worked" && <span className="text-xs text-amber-600 ml-1">({PAYOUT_MODE_LABELS[settlement.effPayoutMode]})</span>}
-                      </span>
-                      <span><span className="text-slate-500">Daily Rate (Salary / 30):</span> <strong>{money(settlement.dailyRate)}</strong></span>
-                    </div>
+                {/* What period is actually being paid, and why */}
+                <div className="bg-blue-50 rounded-xl p-4">
+                  <h3 className="text-xs font-semibold text-blue-500 uppercase tracking-wider mb-2">Unpaid Period</h3>
+                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                    <span><span className="text-slate-500">Paid up to:</span> <strong>{calc.settledThrough || "—"}</strong></span>
+                    <span><span className="text-slate-500">Settling:</span> <strong>{calc.windowStart} → {calc.windowEnd}</strong></span>
+                    <span><span className="text-slate-500">Months:</span> <strong>{calc.months.length ? calc.months.join(", ") : "none"}</strong></span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">
+                    Each month is costed by the regular payroll engine, so the figures match what
+                    payroll would have paid — including exemptions, half days, overtime, EOBI and tax.
+                  </p>
+                  {calc.notes.map((n, i) => (
+                    <p key={i} className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-1.5 mt-2">{n}</p>
+                  ))}
+                </div>
+
+                {/* Per-month breakdown */}
+                {calc.monthLines.length > 0 && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[620px]">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>{["Month", "Present", "Weekly Off", "Absent", "Earnings", "Deductions", "Net"].map(h => (
+                          <th key={h} className={`px-3 py-2 font-medium ${h === "Month" ? "text-left" : "text-right"}`}>{h}</th>
+                        ))}</tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {calc.monthLines.map(l => (
+                          <tr key={l.payroll_month}>
+                            <td className="px-3 py-2 font-medium">{l.payroll_month}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{l.present_days}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{l.weekly_offs}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{l.absent_days}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{money(l.gross)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-red-500">{money(l.deductions)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{money(l.net)}</td>
+                          </tr>
+                        ))}
+                        {calc.holdLines.map(l => (
+                          <tr key={`hold-${l.payroll_month}`} className="bg-amber-50/40">
+                            <td className="px-3 py-2 font-medium">{l.payroll_month} <span className="text-xs text-amber-700">held salary</span></td>
+                            <td className="px-3 py-2" colSpan={3} />
+                            <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{money(l.gross)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-slate-300">—</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{money(l.net)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
 
@@ -829,43 +804,84 @@ export default function FinalSettlement({ role }) {
                   <div className="space-y-2.5 text-sm">
                     <h3 className="font-semibold text-slate-700 mb-2">Earnings</h3>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Pending Salary ({settlement.effPaidDays} paid days × {money(settlement.dailyRate)})</span>
-                      <span className="text-emerald-600">{money(settlement.pendingSalary)}</span>
+                      <span className="text-slate-500">
+                        {paidDaysOverride != null
+                          ? `Salary (${calc.paidDays} paid days × ${money(calc.dailyRate)})`
+                          : `Unpaid months (${calc.months.length || 0})`}
+                      </span>
+                      <span className="text-emerald-600">{money(calc.pendingSalary)}</span>
                     </div>
+                    {calc.releasedHold > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Held salary released</span>
+                        <span className="text-emerald-600">{money(calc.releasedHold)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
                       <span className="text-slate-500">Leave Encashment</span>
-                      <span className="text-slate-400">Rs. 0 (zeroed on exit)</span>
+                      <span className="text-slate-400">Rs. 0 (forfeited on exit)</span>
                     </div>
                     <div className="flex justify-between font-semibold border-t border-slate-100 pt-2">
-                      <span>Gross Earnings</span><span>{money(settlement.gross)}</span>
+                      <span>Gross Earnings</span><span>{money(calc.grossEarnings)}</span>
                     </div>
                   </div>
                   <div className="space-y-2.5 text-sm">
                     <h3 className="font-semibold text-slate-700 mb-2">Deductions</h3>
+                    {paidDaysOverride == null && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Monthly deductions (loans, fines, tax, EOBI…)</span>
+                        <span className="text-red-500">{money(calc.monthLines.reduce((s, l) => s + l.deductions, 0))}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Outstanding Loans</span>
-                      <span className="text-red-500">{money(settlement.loanBalance)}</span>
+                      <span className="text-slate-500">
+                        Loan balance at exit
+                        {calc.installmentsTaken > 0 && (
+                          <span className="block text-xs text-slate-400">
+                            {money(calc.loanOutstanding)} outstanding − {money(calc.installmentsTaken)} already taken above
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-red-500">{money(calc.loanClosingBalance)}</span>
                     </div>
+                    {calc.advanceResidual > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Unrecovered advances</span>
+                        <span className="text-red-500">{money(calc.advanceResidual)}</span>
+                      </div>
+                    )}
                     {!isTermination && (
                       <div className="flex justify-between">
                         <span className="text-slate-500">Short Notice Penalty</span>
-                        <span className="text-red-500">{money(settlement.noticePenalty)}</span>
+                        <span className="text-red-500">{money(noticePenalty)}</span>
                       </div>
                     )}
                     <div className="flex justify-between font-semibold border-t border-slate-100 pt-2">
-                      <span>Total Deductions</span><span className="text-red-500">{money(settlement.deductions)}</span>
+                      <span>Total Deductions</span><span className="text-red-500">{money(calc.totalDeductions)}</span>
                     </div>
                   </div>
                   <div className="md:col-span-2 bg-slate-50 rounded-2xl p-4 flex justify-between items-center">
-                    <span className="text-lg font-bold text-slate-800">Net Payable</span>
-                    <span className="text-2xl font-bold text-emerald-600">{money(settlement.net)}</span>
+                    <div>
+                      <span className="text-lg font-bold text-slate-800 mr-2">Net Payable</span>
+                      <Badge tone={calc.paymentStatus === "FnF" ? "blue" : "red"}>
+                        {calc.paymentStatus === "FnF" ? "F&F" : "No F&F"}
+                      </Badge>
+                    </div>
+                    <span className="text-2xl font-bold text-emerald-600">{money(calc.cashPayable)}</span>
                   </div>
+                  {calc.recoverableAtExit > 0 && (
+                    <div className="md:col-span-2 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm">
+                      Deductions exceed what is owed by <strong>{money(calc.recoverableAtExit)}</strong>. Nothing is
+                      paid out, and this stays on record as recoverable at exit — the loan is not written off
+                      automatically.
+                    </div>
+                  )}
                 </div>
               </div>
             )}
           <div className="mt-4">
-            <Button onClick={processSettlement} className="rounded-2xl" disabled={!canProcess}>
-              {isTermination ? "Process Termination" : "Process Settlement"}
+            <Button onClick={processSettlement} className="rounded-2xl" disabled={!canProcess || processing}>
+              {processing ? "Processing…" : isTermination ? "Process Termination" : "Process Settlement"}
             </Button>
           </div>
         </div>
