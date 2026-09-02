@@ -336,6 +336,10 @@ export function buildLedger({ emp, attendance, holidayDates, fromDate, toDate })
 }
 
 // Per-employee tallies from a built ledger.
+// `worked` excludes hours sitting on a day nothing was owed (Weekly Off /
+// Absent / Gazetted Holiday) so it agrees with the Timesheet's obligation
+// total and payroll's OT numerator — see totalWorkedHours in Timesheet.jsx.
+const WORKED_HOURS_EXCLUDED = ["Weekly Off", "Absent", "Gazetted Holiday"];
 export function summariseLedger(led) {
   const counts = {};
   led.forEach((r) => { const s = r.attendance_status || r.status || ""; counts[s] = (counts[s] || 0) + 1; });
@@ -347,7 +351,8 @@ export function summariseLedger(led) {
     weeklyOff: counts["Weekly Off"] || 0,
     leave: counts.Leave || 0,
     gh: counts["Gazetted Holiday"] || 0,
-    worked: fmt2(led.reduce((s, r) => s + Number(r.worked_hours ?? r.actual_hours ?? r.hours_worked ?? 0), 0)),
+    worked: fmt2(led.reduce((s, r) => WORKED_HOURS_EXCLUDED.includes(r.attendance_status || r.status)
+      ? s : s + Number(r.worked_hours ?? r.actual_hours ?? r.hours_worked ?? 0), 0)),
     lateCount: lateRows.length,
     lateMins: lateRows.reduce((s, r) => s + Number(r.late_minutes || 0), 0),
     shortHrs: fmt2(led.reduce((s, r) => s + Number(r.short_hours || 0), 0)),

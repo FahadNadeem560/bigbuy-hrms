@@ -688,10 +688,20 @@ export default function Timesheet({ branchFilter, role }) {
     return { totalLateCount, totalLateMins, deductibleLates };
   }, [ledger]);
 
+  // Hours that count toward the month's obligation — the worked side of the
+  // OT / variance calc. Payroll (buildPayrollRows) gates worked_hours and
+  // required_hours together: a day nothing was owed (Weekly Off, Absent,
+  // Gazetted Holiday — buildLedger already relabels an overridden-off row to
+  // "Weekly Off") contributes to neither, so a partial punch on a holiday or
+  // a sub-minimum shift that classified Absent can't hand out free OT credit.
+  // Mirror that here. (The per-day "Hours" column still shows actual hours.)
+  const WORKED_HOURS_EXCLUDED = ["Weekly Off", "Absent", "Gazetted Holiday"];
   const totalWorkedHours = useMemo(() => {
-    // Payroll (buildPayrollRows) sums `worked_hours`; keep the same primary
-    // column here so the two never disagree on total time.
-    return fmt2(ledger.reduce((s, r) => s + Number(r.worked_hours ?? r.actual_hours ?? r.hours_worked ?? 0), 0));
+    return fmt2(ledger.reduce((s, r) => {
+      if (WORKED_HOURS_EXCLUDED.includes(r.attendance_status || r.status)) return s;
+      return s + Number(r.worked_hours ?? r.actual_hours ?? r.hours_worked ?? 0);
+    }, 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ledger]);
 
   // Statuses a synthetic (filled-in) row can carry where no work was owed.

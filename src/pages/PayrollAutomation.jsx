@@ -979,24 +979,27 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
       // Late-exempt employees never reach "Late" status, so the flag check is
       // a redundant-but-cheap guard.
       if (!isLateExempt(c, a) && s === "Late" && Number(a.late_minutes || 0) > 0) attByEmp[c].lateCount++;
-      attByEmp[c].workedHours += Number(a.worked_hours || 0);
-      // A day the employee wasn't actually working owed nothing toward the
-      // OT-eligibility denominator: a Weekly Off (JS-inferred or real
-      // roster-driven) because no work was expected at all, an Absent day
-      // because that shortfall is already penalized on its own via
-      // absentDeduction below (dailyRate * absentDays) -- counting either
-      // one's required_hours here as well would inflate Required Hours and
-      // silently wipe out the month's real OT a second time (workedHours -
-      // requiredHours nets negative once a day that earned nothing gets its
-      // full required hours added on top of days actually worked). Matches
-      // Timesheet's rowRequiredHours(). Confirmed against employee 1441,
-      // July 2026: 3 real Weekly Off days + 1 Absent day's required hours
-      // were being added on top, pushing net OT to a large negative and
-      // zeroing it out instead of the ~9h actually earned on days worked.
-      // "Gazetted Holiday" excluded too -- a paid public holiday owed no work,
-      // so counting its required hours would suppress the month's real OT the
-      // same way an Absent/Weekly Off day would (see comment above).
-      if (!isOverriddenOff && s !== "Weekly Off" && s !== "Absent" && s !== "Gazetted Holiday") attByEmp[c].requiredHours += Number(a.required_hours || 0);
+      // A day the employee wasn't actually rostered to work owed nothing
+      // toward the OT-eligibility denominator, and equally must not *feed*
+      // it: a Weekly Off (JS-inferred or real roster-driven) because no work
+      // was expected at all, an Absent day because that shortfall is already
+      // penalized on its own via absentDeduction below (dailyRate *
+      // absentDays), a Gazetted Holiday because it's a paid day off. Counting
+      // such a day's required_hours would inflate Required Hours and wipe out
+      // the month's real OT a second time; counting its worked_hours (a
+      // partial punch on a holiday, or a sub-minimum shift that classified as
+      // Absent -- both still carry hours on the row) hands the employee free
+      // OT credit for hours worked on a day nothing was owed, while they're
+      // ALSO being docked for it. So worked and required are gated together
+      // and net out to zero for these days. Matches Timesheet's
+      // totalWorkedHours / rowRequiredHours. Confirmed: employee 1441 July
+      // 2026 (required side -- real OT was being zeroed); August 2026 ~180h
+      // of worked_hours sat on Absent / Weekly Off / Gazetted Holiday rows
+      // and leaked into the OT pool (worked side).
+      if (!isOverriddenOff && s !== "Weekly Off" && s !== "Absent" && s !== "Gazetted Holiday") {
+        attByEmp[c].requiredHours += Number(a.required_hours || 0);
+        attByEmp[c].workedHours += Number(a.worked_hours || 0);
+      }
     });
 
     // One entry per block earned (see getFullyWorkedBlockKeys) -- every
