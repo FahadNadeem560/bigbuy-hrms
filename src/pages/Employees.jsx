@@ -193,6 +193,9 @@ export function EmployeeAdd({ employee, setEmployee, save, close, role, nextId }
             {allowedOffDays(employee.department, employee.level).map(d => <option key={d} value={d}>{DAY_NAMES[d]}</option>)}
           </select>
         </Field>
+        <Field label="Biometric / ZKT No.">
+          {inp("zktEmployeeNo", "Leave blank = same as employee code")}
+        </Field>
       </Section>
 
       <Section title="Hierarchy & Role">
@@ -324,6 +327,10 @@ export function EmployeeEdit({ employee, setEmployee, save, close, role }) {
             <option value="">Not set</option>
             {allowedOffDays(employee.dept, employee.level).map(d => <option key={d} value={d}>{DAY_NAMES[d]}</option>)}
           </select>
+        </Field>
+        <Field label="Biometric / ZKT No.">
+          {inp("zktEmployeeNo", "Same as employee code if blank")}
+          <p className="text-[11px] text-slate-400 mt-1">The number this person is enrolled under on the fingerprint device. If wrong, their attendance won't be picked up.</p>
         </Field>
       </Section>
 

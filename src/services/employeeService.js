@@ -36,6 +36,7 @@ export function mapEmployeeRecord(emp) {
     status: emp.status || "Active",
     lastWorkingDay: emp.last_working_day || "",
     weeklyOffDay: emp.weekly_off_day != null ? String(emp.weekly_off_day) : "",
+    zktEmployeeNo: emp.zkt_employee_no || "",
     eligibilityGroup: emp.eligibility_group || "",
     otEligible: emp.ot_eligible,
     extraDaysEligible: emp.extra_days_eligible,

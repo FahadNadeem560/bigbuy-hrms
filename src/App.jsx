@@ -271,6 +271,14 @@ export default function BigBuyHRMS({ profile }) {
       employment_status: employmentStatus,
       is_field_employee: !!newEmployee.isFieldEmployee,
       weekly_off_day: newEmployee.weeklyOffDay !== "" && newEmployee.weeklyOffDay != null ? newEmployee.weeklyOffDay : null,
+      // The ZKT biometric device logs punches under the plain employee code
+      // for every new joiner, and process_daily_attendance joins raw punches
+      // on employees.zkt_employee_no -- a blank value means the employee is
+      // silently invisible to attendance AND payroll (found 2026-09-02: 33
+      // Aug joiners had it blank, 30 with full punch history going unprocessed).
+      // Default it to the code; HR can override on the Edit form if the device
+      // enrolled them under a different number.
+      zkt_employee_no: (newEmployee.zktEmployeeNo || "").trim() || code,
     };
     try {
       await createEmployee(payload); await loadEmployees();
@@ -302,6 +310,10 @@ export default function BigBuyHRMS({ profile }) {
         personal_phone: editingEmployee.personalPhone, work_phone: editingEmployee.workPhone, email: editingEmployee.email,
         bank_name: editingEmployee.bankName, account_number: editingEmployee.accountNumber, iban: editingEmployee.iban,
         weekly_off_day: editingEmployee.weeklyOffDay !== "" && editingEmployee.weeklyOffDay != null ? editingEmployee.weeklyOffDay : null,
+        // Falls back to the employee code rather than null -- a blank
+        // zkt_employee_no makes the employee invisible to attendance (see
+        // saveEmployee).
+        zkt_employee_no: (editingEmployee.zktEmployeeNo || "").trim() || editingEmployee.id,
       });
       if (levelChanged) {
         setMessage(`Staff level changed ${prevLevel} → ${editingEmployee.level}. Recalculating attendance for open payroll months…`);
