@@ -73,6 +73,30 @@ export async function fetchRecentAttendance(limit = 25000) {
   return fetchInBatches(ranges);
 }
 
+// Every row of attendance for a date range, paged past PostgREST's ~1000-row
+// response cap (a whole-company month is ~8k+ rows; a plain `.select()` — even
+// with a high `.limit()` — silently returns only the first page). Ordered
+// work_date, id so a page boundary landing inside a date can't drop or
+// duplicate rows. Used by the Timesheet "All Employees" summary and the
+// Missing Punches tab. `select("*")` — callers derive several different views.
+export async function fetchAttendanceForRange(fromDate, toDate) {
+  const pageSize = 1000;
+  let all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase.from("attendance").select("*")
+      .gte("work_date", fromDate).lte("work_date", toDate)
+      .order("work_date", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    all = all.concat(data || []);
+    if (!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 export async function runAttendanceProcessing(fromDate, toDate) {
   const { data, error } = await supabase.rpc("run_attendance_processing", {
     p_from_date: fromDate || null,

@@ -5,9 +5,10 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import StatusBadge from "../components/StatusBadge.jsx";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { STAFF_LEVEL_POLICIES } from "../config/staffPolicies.js";
-import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys } from "../utils/attendanceRules.js";
+import { buildLedger, summariseLedger } from "../utils/attendanceRules.js";
 import { OT_SHORT_MIN_HOURS } from "../utils/payrollRules.js";
 import { submitAttendanceStatusChange } from "../services/attendanceAdjustmentService.js";
+import { fetchAttendanceForRange } from "../services/attendanceService.js";
 
 const LATE_WARNING_COUNT = 2;
 const ADJ_TONE = { "Pending Approval": "yellow", "Approved": "green", "Applied": "green", "Rejected": "red" };
@@ -39,33 +40,6 @@ function fmt2(n) {
   return Math.round(Number(n || 0) * 100) / 100;
 }
 
-// PostgREST caps a single response at ~1000 rows regardless of a higher
-// `.limit()`, so a whole-company month of attendance (~8.5k rows) came back
-// truncated to whatever fell in the first page — every employee past the
-// cutoff showed a handful of Present days and the rest synthesized as Absent
-// (see AllTimesheets). Page through with `.range()`, ordered on a key that's
-// unique across the full result set (work_date alone repeats ~300x/day and
-// Postgres won't keep that order stable between the separate requests, so a
-// page boundary inside a date drops or duplicates rows) — same pattern as
-// PayrollAutomation.fetchAllAttendanceForMonth.
-async function fetchAllAttendanceForRange(fromDate, toDate) {
-  const pageSize = 1000;
-  let all = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await supabase.from("attendance").select("*")
-      .gte("work_date", fromDate).lte("work_date", toDate)
-      .order("work_date", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw error;
-    all = all.concat(data || []);
-    if (!data || data.length < pageSize) break;
-    from += pageSize;
-  }
-  return all;
-}
-
 function hoursToHHMM(n) {
   const total = Number(n || 0);
   const sign = total < 0 ? "-" : "";
@@ -75,82 +49,9 @@ function hoursToHHMM(n) {
   return `${sign}${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function fmtDate(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function enumerateDates(from, to) {
-  const dates = [];
-  const cursor = new Date(`${from}T00:00:00`);
-  const end = new Date(`${to}T00:00:00`);
-  while (cursor <= end) {
-    dates.push(fmtDate(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return dates;
-}
-
 function getDayName(dateStr) {
   if (!dateStr) return "";
   return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" });
-}
-
-// Shared ledger builder. Fills every missing day up to today with a synthetic
-// Absent (or Gazetted Holiday) row, applies the Mon-Fri lone-absence -> Weekly
-// Off override, and zeroes short/late/OT on days nothing was owed. Same logic
-// the single-employee `ledger` uses; also drives the All Employees summary.
-// `.extraWorkingDaysCount` is attached to the returned array.
-function buildLedger({ emp, attendance, holidayDates, fromDate, toDate }) {
-  const byDate = {};
-  (attendance || []).forEach((r) => { byDate[r.work_date] = r; });
-  const todayStr = fmtDate(new Date());
-
-  const base = enumerateDates(fromDate, toDate).map((date) => {
-    if (byDate[date]) return { ...byDate[date] };
-    if (date > todayStr) return null;
-    const isHoliday = holidayDates.has(date);
-    return { work_date: date, attendance_status: isHoliday ? "Gazetted Holiday" : "Absent", is_synthetic: true };
-  }).filter(Boolean);
-
-  const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: fromDate, rangeEnd: toDate });
-  const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
-    rangeStart: fromDate, rangeEnd: toDate,
-    employmentStart: (emp?.joining_date && emp.joining_date >= fromDate && emp.joining_date <= toDate) ? emp.joining_date : null,
-    employmentEnd: (["Resigned", "Terminated"].includes(emp?.status) && emp?.last_working_day && emp.last_working_day >= fromDate && emp.last_working_day <= toDate) ? emp.last_working_day : null,
-  });
-  base.forEach((row) => {
-    if (overrideDates.has(row.work_date)) {
-      row.attendance_status = "Weekly Off";
-      row.short_hours = 0; row.late_minutes = 0; row.ot_hours = 0; row.overtime_hours = 0;
-    } else if (row.attendance_status === "Absent") {
-      row.short_hours = 0;
-    } else if (row.attendance_status === "Weekly Off" || row.attendance_status === "Gazetted Holiday") {
-      row.short_hours = 0; row.late_minutes = 0; row.ot_hours = 0; row.overtime_hours = 0;
-    }
-  });
-  base.extraWorkingDaysCount = fullyWorkedBlockKeys.size;
-  return base;
-}
-
-// Per-employee tallies from a built ledger — used by the All Employees table.
-function summariseLedger(led) {
-  const counts = {};
-  led.forEach((r) => { const s = r.attendance_status || r.status || ""; counts[s] = (counts[s] || 0) + 1; });
-  const lateRows = led.filter((r) => (r.attendance_status || r.status) === "Late" && Number(r.late_minutes || 0) > 0);
-  return {
-    present: (counts.Present || 0) + (counts.Late || 0) + (counts["Half Day"] || 0) + (counts["Short Hours"] || 0) + (counts["Early Out"] || 0),
-    absent: counts.Absent || 0,
-    halfDay: (counts["Half Day"] || 0) + (counts.HalfDay || 0),
-    weeklyOff: counts["Weekly Off"] || 0,
-    leave: counts.Leave || 0,
-    gh: counts["Gazetted Holiday"] || 0,
-    worked: fmt2(led.reduce((s, r) => s + Number(r.worked_hours ?? r.actual_hours ?? r.hours_worked ?? 0), 0)),
-    lateCount: lateRows.length,
-    lateMins: lateRows.reduce((s, r) => s + Number(r.late_minutes || 0), 0),
-    shortHrs: fmt2(led.reduce((s, r) => s + Number(r.short_hours || 0), 0)),
-    otHrs: fmt2(led.reduce((s, r) => s + Number(r.ot_hours ?? r.overtime_hours ?? 0), 0)),
-    ewd: led.extraWorkingDaysCount || 0,
-  };
 }
 
 function Toggle({ value, onChange, tone = "blue" }) {
@@ -590,7 +491,7 @@ export default function Timesheet({ branchFilter, role }) {
     setError("");
     try {
       const [att, { data: gh }] = await Promise.all([
-        fetchAllAttendanceForRange(fromDate, toDate),
+        fetchAttendanceForRange(fromDate, toDate),
         supabase.from("gazetted_holidays").select("holiday_date").eq("is_active", true)
           .gte("holiday_date", fromDate).lte("holiday_date", toDate),
       ]);
