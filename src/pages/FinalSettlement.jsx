@@ -390,6 +390,8 @@ export default function FinalSettlement({ role }) {
   const [attendanceData, setAttendanceData] = useState([]);
   const [calc, setCalc] = useState(null);
   const [calcLoading, setCalcLoading] = useState(false);
+  const [calcKeyDone, setCalcKeyDone] = useState(null); // input signature the figures on screen were built from
+  const [refreshTick, setRefreshTick] = useState(0);    // manual Recalculate
   const [processing, setProcessing] = useState(false);
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
@@ -404,7 +406,7 @@ export default function FinalSettlement({ role }) {
   function resetForm() {
     setSelEmp(null); setSepType("resignation");
     setResignDate(""); setLastDay(""); setResignReason("");
-    setAttendanceData([]); setCalc(null);
+    setAttendanceData([]); setCalc(null); setCalcKeyDone(null);
     setOverrideMode(false); setOverrideReason("");
     setPayoutMode("worked"); setCustomDays(""); setSalaryNotPayable(false);
   }
@@ -441,26 +443,47 @@ export default function FinalSettlement({ role }) {
     return null;
   }, [isTermination, salaryNotPayable, overrideMode, payoutMode, noticeRequired, customDaysNum]);
 
+  // Everything the settlement figures actually depend on, as one signature.
+  // Comparing it against calcKeyDone is what tells us the numbers on screen
+  // no longer match the form -- previously a date edit that didn't happen to
+  // flip the notice penalty left last run's figures sitting there looking
+  // current, with no way to force a recalculation.
+  const calcKey = useMemo(
+    () => JSON.stringify([selEmp?.employee_code || null, sepType, lastDay, noticePenalty, paidDaysOverride]),
+    [selEmp?.employee_code, sepType, lastDay, noticePenalty, paidDaysOverride]
+  );
+  const calcStale = !!calc && calcKeyDone !== null && calcKeyDone !== calcKey;
+
   // The settlement itself. Resolves the real unpaid window (paid-through
   // watermark -> last working day) and runs the regular payroll engine over
   // every month in it, so the leaver's final months cost exactly what they
   // would have if they'd stayed.
+  //
+  // Debounced: a <input type="date"> fires onChange on every keystroke while
+  // a date is being typed, and each run costs a full payroll pass per month
+  // in the window. Without the delay, typing one date queued half a dozen
+  // of them and the panel sat spinning long after the form had settled.
   useEffect(() => {
-    if (!selEmp || !lastDay) { setCalc(null); return; }
+    if (!selEmp || !lastDay || !/^\d{4}-\d{2}-\d{2}$/.test(lastDay)) {
+      setCalc(null); setCalcKeyDone(null); return;
+    }
     let cancelled = false;
-    setCalcLoading(true); setErr("");
-    buildSettlement({
-      employee: selEmp,
-      separationType: sepType,
-      lastWorkingDay: lastDay,
-      noticePenalty,
-      paidDaysOverride,
-    })
-      .then(r => { if (!cancelled) setCalc(r); })
-      .catch(e => { if (!cancelled) { setErr(e.message); setCalc(null); } })
-      .finally(() => { if (!cancelled) setCalcLoading(false); });
-    return () => { cancelled = true; };
-  }, [selEmp, sepType, lastDay, noticePenalty, paidDaysOverride]);
+    const timer = setTimeout(() => {
+      setCalcLoading(true); setErr("");
+      buildSettlement({
+        employee: selEmp,
+        separationType: sepType,
+        lastWorkingDay: lastDay,
+        noticePenalty,
+        paidDaysOverride,
+      })
+        .then(r => { if (!cancelled) { setCalc(r); setCalcKeyDone(calcKey); } })
+        .catch(e => { if (!cancelled) { setErr(e.message); setCalc(null); setCalcKeyDone(null); } })
+        .finally(() => { if (!cancelled) setCalcLoading(false); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calcKey, refreshTick]);
 
   // Attendance over the resolved window, only for the absconding check.
   useEffect(() => {
@@ -554,7 +577,7 @@ export default function FinalSettlement({ role }) {
   }
 
   const dateFieldLabel = isTermination ? "Termination Date" : "Resignation Date";
-  const canProcess = selEmp && calc && !calcLoading && !blocked
+  const canProcess = selEmp && calc && !calcLoading && !calcStale && !blocked
     && resignDate && lastDay
     && !(isTermination && lastDay > resignDate)
     && !(!isTermination && lastDay < resignDate)
@@ -741,13 +764,28 @@ export default function FinalSettlement({ role }) {
 
       {selEmp && lastDay && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
-          <h2 className="font-bold text-slate-800 mb-4">Settlement Calculator</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <h2 className="font-bold text-slate-800">Settlement Calculator</h2>
+            <div className="flex items-center gap-3">
+              {calcLoading
+                ? <span className="text-xs text-slate-400">Recalculating…</span>
+                : calcStale
+                ? <span className="text-xs text-amber-600 font-medium">Details changed — figures below are out of date.</span>
+                : calc ? <span className="text-xs text-emerald-600">Up to date</span> : null}
+              <Button variant="outline" disabled={calcLoading} className="rounded-xl text-xs"
+                onClick={() => setRefreshTick(t => t + 1)}>
+                {calcLoading ? "Calculating…" : "Recalculate"}
+              </Button>
+            </div>
+          </div>
           {blocked
             ? <div className="p-4 bg-red-50 rounded-xl text-red-700">Settlement blocked. Master must approve to proceed.</div>
-            : calcLoading || !calc
-            ? <div className="p-4 bg-slate-50 rounded-xl text-slate-500 text-sm">Working out what {selEmp.full_name} is owed…</div>
+            : !calc
+            ? <div className="p-4 bg-slate-50 rounded-xl text-slate-500 text-sm">
+                {calcLoading ? `Working out what ${selEmp.full_name} is owed…` : "Enter the separation details, then press Recalculate."}
+              </div>
             : (
-              <div className="space-y-4">
+              <div className={`space-y-4 ${calcLoading || calcStale ? "opacity-50" : ""}`}>
                 {/* What period is actually being paid, and why */}
                 <div className="bg-blue-50 rounded-xl p-4">
                   <h3 className="text-xs font-semibold text-blue-500 uppercase tracking-wider mb-2">Unpaid Period</h3>

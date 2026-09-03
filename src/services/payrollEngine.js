@@ -56,13 +56,15 @@ export function loanInstallmentDue(loan, payrollMonth) {
 // order is total and identical on every page fetch. Confirmed against
 // July 2026: ~150 of 276 payroll rows had a worked-hours / absent-day
 // count that didn't reconcile with the (unchanged) attendance rows.
-async function fetchAllAttendanceForMonth(fromDate, toDate) {
+async function fetchAllAttendanceForMonth(fromDate, toDate, scopeCodes = null) {
   const pageSize = 1000;
   let all = [];
   let from = 0;
   while (true) {
-    const { data, error } = await supabase.from("attendance").select("*")
-      .gte("work_date", fromDate).lte("work_date", toDate)
+    let q = supabase.from("attendance").select("*")
+      .gte("work_date", fromDate).lte("work_date", toDate);
+    if (scopeCodes?.length) q = q.in("employee_code", scopeCodes);
+    const { data, error } = await q
       .order("work_date", { ascending: true })
       .order("id", { ascending: true })
       .range(from, from + pageSize - 1);
@@ -74,7 +76,15 @@ async function fetchAllAttendanceForMonth(fromDate, toDate) {
   return all;
 }
 
-export async function computePayrollForMonth({ month, employees, loans, applySideEffects = true }) {
+// scopeCodes: restrict every per-employee query to these employee codes.
+// A whole-company payroll run leaves it null and reads the month in bulk, but
+// a single leaver's Final Settlement was pulling the entire company's
+// attendance (8k+ rows, paged), every tax setting, every leave balance and
+// the *whole* leave_requests table -- once per month in the settlement
+// window -- just to cost one person. That is what made the Settlement
+// Calculator take tens of seconds, on every keystroke in a date field.
+export async function computePayrollForMonth({ month, employees, loans, applySideEffects = true, scopeCodes = null }) {
+  const scoped = (q) => (scopeCodes?.length ? q.in("employee_code", scopeCodes) : q);
   const fromDate = month + "-01";
   const [y, m] = month.split("-").map(Number);
   const toDate = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
@@ -93,8 +103,8 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
   const isHalfDayExempt = (code, row) => halfDayExemptCodes.has(code) || row?.half_day_exempt === true;
   const isLateExempt = (code, row) => lateExemptCodes.has(code) || row?.late_exempt === true;
 
-  const [att, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }, { data: taxSlabsData }, { data: taxSettingsData }, { data: leaveBalanceRows }, { data: approvedLeaveRequests }] = await Promise.all([
-    fetchAllAttendanceForMonth(fromDate, toDate),
+  const [attRaw, { data: finesData }, { data: shortagesData }, { data: advancesData }, { data: oneTimeAdjData }, { data: groupsData }, { data: loanReliefData }, { data: taxSlabsData }, { data: taxSettingsData }, { data: leaveBalanceRows }, { data: approvedLeaveRequests }] = await Promise.all([
+    fetchAllAttendanceForMonth(fromDate, toDate, scopeCodes),
     supabase.from("fines").select("*").eq("payroll_month", month).eq("status", "Approved"),
     supabase.from("shortages").select("*").eq("payroll_month", month).eq("status", "Approved"),
     supabase.from("advances").select("*").eq("advance_month", month).in("status", ["Issued", "Deducted"]),
@@ -107,11 +117,11 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
     // Tax Management page (TaxManagement.jsx) lets Master/Finance set a
     // per-employee Manual amount or Exempt status -- this must override
     // the auto slab calculation below, not just be a display-only setting.
-    supabase.from("employee_tax_settings").select("*"),
+    scoped(supabase.from("employee_tax_settings").select("*")),
     // Leave-first offset for Management (see the loop below) needs each
     // employee's opening balance and every already-Approved leave request.
-    supabase.from("leaves").select("employee_code, employee_id, opening_balance"),
-    supabase.from("leave_requests").select("employee_code, leave_type, days, reason").eq("status", "Approved"),
+    scoped(supabase.from("leaves").select("employee_code, employee_id, opening_balance")),
+    scoped(supabase.from("leave_requests").select("employee_code, leave_type, days, reason").eq("status", "Approved")),
   ]);
   const skippedLoanIds = new Set((loanReliefData || []).map(r => r.loan_id));
   const groupByCode = Object.fromEntries((groupsData || []).map(g => [g.code, g]));
@@ -129,6 +139,26 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
     // offset as "already used" and compound it smaller each time instead
     // of recomputing fresh against the real, current balance.
     if (!(r.reason || "").includes(AUTO_LEAVE_OFFSET_TAG)) approvedLeaveByEmp[c].push(r);
+  });
+
+  // Days after a leaver's last working day are not employment days at all.
+  // Two separate things went wrong while they were left in:
+  //   1. attendance can carry stale post-departure rows (Present / Weekly
+  //      Off), which pay out as if the employee were still on strength;
+  //   2. the missing-day scan further down stops AT the last working day, so
+  //      the days after it -- which have no attendance row -- were never
+  //      charged to anyone. A resignation on the 6th drew 29/30 of a full
+  //      salary (confirmed: employee 1934, July 2026 -- last working day
+  //      07-Jul, paid 24,167 of 25,000 for six days worked).
+  // Rows outside the span are dropped here, before any aggregation, and the
+  // unworked tail is charged as postExitUnpaidDays below.
+  const exitDayByEmp = Object.fromEntries((employees || [])
+    .filter(e => ["Resigned", "Terminated"].includes(e.status)
+      && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate)
+    .map(e => [e.employee_code, e.last_working_day]));
+  const att = (attRaw || []).filter(a => {
+    const exit = exitDayByEmp[a.employee_code];
+    return !exit || a.work_date <= exit;
   });
 
   // Every employee gets one unpaid Mon-Fri day off per week; a week's lone
@@ -394,9 +424,8 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
       const startDay = (emp.joining_date && emp.joining_date >= monthStart && emp.joining_date <= monthEnd)
         ? Number(emp.joining_date.slice(8, 10))
         : 1;
-      const lastDayOfMonth = (["Resigned", "Terminated"].includes(emp.status) && emp.last_working_day >= fromDate && emp.last_working_day <= toDate)
-        ? Number(emp.last_working_day.slice(8, 10))
-        : daysInMonth;
+      const exitDate = exitDayByEmp[emp.employee_code] || null;
+      const lastDayOfMonth = exitDate ? Number(exitDate.slice(8, 10)) : daysInMonth;
       const trackedDates = attDatesByEmp[emp.employee_code] || new Set();
       let missingDays = 0;
       for (let d = startDay; d <= lastDayOfMonth; d++) {
@@ -421,8 +450,18 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
         const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         if (!trackedDates.has(dateStr)) preJoinUnpaidDays++;
       }
+      // The unworked tail after a mid-month leaver's last working day, the
+      // mirror image of preJoinUnpaidDays above. Counted against the 30-day
+      // pay base (dailyRate is Salary/30), NOT the calendar length of the
+      // month: leaving on the 6th has to leave exactly 6/30 of the salary
+      // payable, which is what "pay for days worked" means to Master.
+      // Charging the calendar tail (25 days in a 31-day July) would pay 5/30
+      // instead and quietly short every leaver by a day in a long month.
+      const postExitUnpaidDays = exitDate ? Math.max(0, 30 - Number(exitDate.slice(8, 10))) : 0;
+
       adj.preJoinUnpaidDays = preJoinUnpaidDays;
-      adj.absentDays = Number(adj.absentDays || 0) + missingDays + preJoinUnpaidDays;
+      adj.postExitUnpaidDays = postExitUnpaidDays;
+      adj.absentDays = Number(adj.absentDays || 0) + missingDays + preJoinUnpaidDays + postExitUnpaidDays;
     }
 
     // Leave-first offset: Management staff's short hours/half days/
@@ -434,9 +473,10 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
     // nothing left to offset and this would otherwise drain a real leave
     // balance for a deduction that was never actually charged.
     if (emp.staff_level === "Management" && !emp.is_attendance_exempt) {
-      // Pre-join unpaid days (mid-month joiner) are excluded here -- they're
-      // an unworked-period proration, not a leave-coverable absence, so
-      // they must not drain the employee's leave balance.
+      // Pre-join unpaid days (mid-month joiner) and post-exit unpaid days
+      // (mid-month leaver) are excluded here -- they're an unworked-period
+      // proration, not a leave-coverable absence, so they must not drain the
+      // employee's leave balance.
       // Short-hour days only count toward the leave offset when payroll
       // actually charges them (net shortfall past OT_SHORT_MIN_HOURS) --
       // otherwise a sub-threshold fractional-day total would drain leave
@@ -444,7 +484,8 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
       const shortDeductibleDays = Number(adj.netShortHours || 0) >= OT_SHORT_MIN_HOURS
         ? Number(adj.shortHourFractionalDays || 0) : 0;
       const deductibleDays =
-        Number(adj.absentDays || 0) - Number(adj.preJoinUnpaidDays || 0) +
+        Number(adj.absentDays || 0) - Number(adj.preJoinUnpaidDays || 0)
+        - Number(adj.postExitUnpaidDays || 0) +
         Number(adj.halfDays || 0) * 0.5 + shortDeductibleDays;
 
       // Always clear out a prior run's auto-adjustment row for this exact

@@ -16,6 +16,13 @@ import { computePayrollForMonth } from "./payrollEngine.js";
 
 const SETTLED_THROUGH_KEY = "payroll_settled_through";
 
+// Everything up to and including this month was paid outside this system and
+// is closed. No settlement may ever compute, re-cost or pay a month at or
+// before it, whatever the policy row says or fails to say -- a missing /
+// mistyped watermark used to send the engine back to the joining date and
+// re-pay months that were settled months ago.
+export const HARD_PAID_THROUGH_FLOOR = "2026-06";
+
 // ── month helpers (months are "YYYY-MM" strings, dates "YYYY-MM-DD") ───────
 export const monthOf = (d) => (d ? String(d).slice(0, 7) : null);
 export const firstDayOf = (m) => `${m}-01`;
@@ -43,9 +50,11 @@ export async function getPayrollWatermark() {
   const { data } = await supabase.from("hrms_policy_settings")
     .select("value").eq("key", SETTLED_THROUGH_KEY).maybeSingle();
   const v = data?.value;
-  if (typeof v === "string") return v;
-  if (v && typeof v === "object" && typeof v.month === "string") return v.month;
-  return null;
+  let stored = null;
+  if (typeof v === "string") stored = v;
+  else if (v && typeof v === "object" && typeof v.month === "string") stored = v.month;
+  // Never earlier than the floor, but a later watermark still wins.
+  return stored && stored > HARD_PAID_THROUGH_FLOOR ? stored : HARD_PAID_THROUGH_FLOOR;
 }
 
 // The last month this employee is considered paid for: the later of the
@@ -93,8 +102,10 @@ export function resolveUnpaidWindow({ joiningDate, settledThrough, lastWorkingDa
   if (!windowStart || !windowEnd || windowStart > windowEnd) {
     return { windowStart, windowEnd, months: [], notes };
   }
-  const months = monthsBetween(monthOf(windowStart), monthOf(windowEnd));
+  const months = monthsBetween(monthOf(windowStart), monthOf(windowEnd))
+    .filter(m => m > HARD_PAID_THROUGH_FLOOR);
   if (months.length > 6) notes.push(`Window spans ${months.length} months — check the paid-through date before processing.`);
+  if (!months.length) notes.push(`Nothing to settle: the whole period falls on or before ${HARD_PAID_THROUGH_FLOOR}, which is already paid.`);
   return { windowStart, windowEnd, months, notes };
 }
 
@@ -132,6 +143,9 @@ export async function buildSettlement({
   for (const m of months) {
     const rows = await computePayrollForMonth({
       month: m, employees: [shadowEmp], loans, applySideEffects: false,
+      // One leaver -- don't drag the whole company's month through the
+      // browser to cost them (see computePayrollForMonth).
+      scopeCodes: [code],
     });
     const r = rows?.[0];
     if (!r) continue;
