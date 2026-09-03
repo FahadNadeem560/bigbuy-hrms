@@ -15,7 +15,12 @@ const ADJ_TONE = { "Pending Approval": "yellow", "Approved": "green", "Applied":
 const DB_FIELD_MAP = {
   halfDayExempt: "half_day_exempt",
   lateExempt: "late_exempt",
-  isGazettedHoliday: "is_gazetted_holiday",
+  // NOT is_gazetted_holiday: that column is derived and rewritten by
+  // reclassify_attendance_row from the roster / gazetted_holidays table, so a
+  // value written straight into it was silently discarded on the next sync.
+  // gazetted_holiday_override is the per-day manual intent the classifiers
+  // now read (NULL = derive, true/false = force).
+  isGazettedHoliday: "gazetted_holiday_override",
 };
 
 // Day-status overrides offered for a given current status. Every status can be
@@ -344,7 +349,7 @@ export default function Timesheet({ branchFilter, role }) {
   useEffect(() => {
     let q = supabase
       .from("employees")
-      .select("employee_code, full_name, department, branch, staff_level, eligibility_group, ot_eligible, extra_days_eligible, gazetted_holiday_eligible, status, joining_date, last_working_day")
+      .select("employee_code, full_name, department, branch, staff_level, eligibility_group, ot_eligible, extra_days_eligible, gazetted_holiday_eligible, status, joining_date, last_working_day, weekly_off_day")
       .order("full_name");
     if (branchFilter) q = q.eq("branch", branchFilter);
     q.then(({ data }) => setEmployees(data || []));
@@ -593,12 +598,13 @@ export default function Timesheet({ branchFilter, role }) {
       : r
     ));
 
-    // Half Day Exempt / Late Exempt aren't just a label like the other
-    // toggles here -- they change what status this day should actually
-    // carry (see classify_attendance_day), so recompute it immediately
-    // instead of leaving a stale Half Day/Late status sitting next to a
-    // now-exempt flag until the next bulk sync reprocesses it.
-    if (flag === "halfDayExempt" || flag === "lateExempt") {
+    // None of these flags are just a label -- each changes what status this
+    // day should actually carry (see classify_attendance_day), so recompute it
+    // immediately instead of leaving a stale status sitting next to the new
+    // flag until the next bulk sync reprocesses it. Gazetted Holiday was
+    // missing from this list, which is why marking a holiday on one
+    // employee's timesheet set the flag and left the day reading "Absent".
+    if (flag === "halfDayExempt" || flag === "lateExempt" || flag === "isGazettedHoliday") {
       const { data: reclassified, error: reErr } = await supabase.rpc("reclassify_attendance_row", { p_attendance_id: row.id });
       if (reErr) { setNotice(`Flag saved, but reclassification failed: ${reErr.message}`); return; }
       setAttendance(prev => prev.map(r => r.id === row.id ? { ...r, ...reclassified } : r));

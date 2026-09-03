@@ -166,7 +166,11 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
   // getWeeklyOffOverrideKeys) — otherwise absentDeduction in payrollRules.js
   // would wrongly dock a day's pay for it. Applied here so it's consistent
   // with the same rule on the Timesheet and Final Settlement pages.
-  const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate });
+  // Per-employee rest-day entitlement: an employee whose roster off-day falls
+  // 5 times in the month is owed 5, not the flat 4 (see monthlyOffDayQuota).
+  const weeklyOffDayByEmp = Object.fromEntries((employees || [])
+    .map(e => [e.employee_code, e.weekly_off_day]));
+  const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, weeklyOffDayByEmp });
 
   // Extra Working Days: a block worked straight through with no rest at
   // all (see getFullyWorkedBlockKeys) -- replaces trusting attendance.
@@ -189,7 +193,7 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
       end: (["Resigned", "Terminated"].includes(e.status) && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate) ? e.last_working_day : null,
     },
   ]));
-  const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds });
+  const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds, weeklyOffDayByEmp });
 
   // Attendance is generated daily for every employee regardless of
   // resignation status (confirmed: a resigned employee's post-departure

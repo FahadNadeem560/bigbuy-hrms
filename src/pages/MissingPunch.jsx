@@ -77,7 +77,7 @@ export default function MissingPunch({ role, branchFilter }) {
       const [att, empRes, ghRes] = await Promise.all([
         fetchAttendanceForRange(filterFrom, filterTo),
         supabase.from("employees")
-          .select("employee_code, full_name, branch, department, staff_level, joining_date, last_working_day, status")
+          .select("employee_code, full_name, branch, department, staff_level, joining_date, last_working_day, status, weekly_off_day")
           .order("full_name"),
         supabase.from("gazetted_holidays").select("holiday_date").eq("is_active", true)
           .gte("holiday_date", filterFrom).lte("holiday_date", filterTo),

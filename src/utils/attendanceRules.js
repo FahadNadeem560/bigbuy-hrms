@@ -36,6 +36,55 @@ function fmtDate(d) {
 // are exempt from the cap server-side, but never fall short of it either).
 const MONTHLY_WEEKLY_OFF_QUOTA = 4;
 
+// Hard ceiling on Extra Working Days paid to one employee in one month,
+// independent of the quota below: however many rest days a roster grants, no
+// one is ever paid more than this many EWDs (explicit policy, 2026-09-03).
+const MAX_EWD_PER_MONTH = 4;
+
+// A weekly off is one day per week, so an employee whose roster off-day falls
+// five times in a month -- five Sundays in August 2026 -- is entitled to five
+// rest days that month, not four. MONTHLY_WEEKLY_OFF_QUOTA is the floor, not
+// the answer: generate_employee_work_rosters already exempts Management /
+// Warehouse from the flat cap server-side, and this carries that same
+// exemption into the client-side gate, which never had it.
+//
+// Confirmed against employee 1157 (Warehouse, Sunday off), August 2026: five
+// Sundays, three taken off and two worked straight through. Under the flat 4,
+// the three real Weekly Offs plus the first worked Sunday exhausted the quota
+// and the second worked Sunday earned nothing -- 1 EWD where 2 were due.
+export function monthlyOffDayQuota(weeklyOffDay, rangeStart) {
+  const dow = Number(weeklyOffDay);
+  if (!rangeStart || weeklyOffDay == null || weeklyOffDay === ""
+      || !Number.isInteger(dow) || dow < 0 || dow > 6) {
+    return MONTHLY_WEEKLY_OFF_QUOTA;
+  }
+  // Counted across the whole calendar month the range starts in, because the
+  // entitlement is monthly: a caller whose window is clamped to part of the
+  // month (a mid-month joiner's ledger) must not thereby see a smaller quota.
+  const start = new Date(rangeStart + "T00:00:00");
+  const y = start.getFullYear();
+  const m = start.getMonth();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  let count = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    if (new Date(y, m, d).getDay() === dow) count++;
+  }
+  return Math.max(MONTHLY_WEEKLY_OFF_QUOTA, count);
+}
+
+// One quota per employee present in the bucketing. weeklyOffDayByEmp is the
+// multi-employee (payroll) form; weeklyOffDay the scalar single-employee one.
+function resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, rangeStart }) {
+  const quotas = {};
+  Object.values(weeks).forEach((week) => {
+    if (quotas[week.empPart] !== undefined) return;
+    const code = week.empPart ? week.empPart.slice(0, -1) : null;
+    const day = (weeklyOffDayByEmp && code != null) ? weeklyOffDayByEmp[code] : weeklyOffDay;
+    quotas[week.empPart] = monthlyOffDayQuota(day, rangeStart || fmtDate(week.blockStart));
+  });
+  return quotas;
+}
+
 // Shared first pass: buckets rows into fixed calendar blocks and tallies
 // what happened in each one. Both getWeeklyOffOverrideKeys (below) and
 // getFullyWorkedBlockKeys derive their answer from the same bucketing so
@@ -130,8 +179,9 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
 // `${employee_code}|${date}` (with employeeKey) for rows that should read
 // as "Weekly Off" instead of "Absent".
 export function getWeeklyOffOverrideKeys(rows, opts = {}) {
-  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, rangeStart });
 
   // Company policy (2026-08-29): an employee is entitled to up to
   // MONTHLY_WEEKLY_OFF_QUOTA unpaid rest days per calendar month. Every lone
@@ -172,7 +222,7 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
   const overrideKeys = new Set();
   eligible.forEach(({ empPart, row }) => {
     const used = runningCount[empPart] || 0;
-    if (used >= MONTHLY_WEEKLY_OFF_QUOTA) return;
+    if (used >= (quotas[empPart] ?? MONTHLY_WEEKLY_OFF_QUOTA)) return;
     runningCount[empPart] = used + 1;
     overrideKeys.add(`${empPart}${row[dateKey]}`);
   });
@@ -235,8 +285,9 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // partial calendar block they joined in (confirmed: employee 3052, joined
 // 2026-07-02 -- July's 1-7 block had rows only for the 2nd-7th and paid 1 EWD).
 export function getFullyWorkedBlockKeys(rows, opts = {}) {
-  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, employmentBounds = null, employmentStart = null, employmentEnd = null } = opts;
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, employmentBounds = null, employmentStart = null, employmentEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, rangeStart });
 
   // Forgiven lone absences count toward the same quota as real Weekly Offs
   // (see comment above) -- tallied per employee from the same override set
@@ -270,9 +321,16 @@ export function getFullyWorkedBlockKeys(rows, opts = {}) {
   candidates.sort((a, b) => a.blockStart - b.blockStart);
 
   const blockKeys = new Set();
+  const earned = {};
   candidates.forEach((week) => {
     const used = runningCount[week.empPart] || 0;
-    if (used >= MONTHLY_WEEKLY_OFF_QUOTA) return;
+    if (used >= (quotas[week.empPart] ?? MONTHLY_WEEKLY_OFF_QUOTA)) return;
+    // Ceiling applied on top of the quota, never instead of it: a roster that
+    // grants five rest days still pays back at most MAX_EWD_PER_MONTH of them
+    // as Extra Working Days.
+    const got = earned[week.empPart] || 0;
+    if (got >= MAX_EWD_PER_MONTH) return;
+    earned[week.empPart] = got + 1;
     runningCount[week.empPart] = used + 1;
     blockKeys.add(`${week.empPart}${fmtDate(week.blockStart)}`);
   });
@@ -326,9 +384,11 @@ export function buildLedger({ emp, attendance, holidayDates, fromDate, toDate })
     return { work_date: date, attendance_status: isHoliday ? "Gazetted Holiday" : "Absent", is_synthetic: true };
   }).filter(Boolean);
 
-  const overrideDates = getWeeklyOffOverrideKeys(base, { rangeStart: effFrom, rangeEnd: effTo });
+  const overrideDates = getWeeklyOffOverrideKeys(base, {
+    rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null,
+  });
   const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
-    rangeStart: effFrom, rangeEnd: effTo,
+    rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null,
     employmentStart: (joinDate && joinDate >= effFrom && joinDate <= effTo) ? joinDate : null,
     employmentEnd: (exitDate && exitDate >= effFrom && exitDate <= effTo) ? exitDate : null,
   });
