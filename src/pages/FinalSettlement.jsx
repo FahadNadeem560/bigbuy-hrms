@@ -577,12 +577,31 @@ export default function FinalSettlement({ role }) {
   }
 
   const dateFieldLabel = isTermination ? "Termination Date" : "Resignation Date";
-  const canProcess = selEmp && calc && !calcLoading && !calcStale && !blocked
-    && resignDate && lastDay
-    && !(isTermination && lastDay > resignDate)
-    && !(!isTermination && lastDay < resignDate)
-    && !(!isTermination && overrideMode && !overrideReason.trim())
-    && !(!isTermination && overrideMode && payoutMode === "custom" && !customDays.trim());
+  // Nine separate conditions gate Process Settlement and, until this existed,
+  // none of them said anything -- the button just sat there greyed out and
+  // you had to guess which field it was unhappy about. First failing reason
+  // wins, in the order you'd fix them in.
+  const blockReason = useMemo(() => {
+    const what = isTermination ? "termination" : "resignation";
+    if (!selEmp) return "Select an employee.";
+    if (!resignDate) return `Enter the ${what} date.`;
+    if (!lastDay) return "Enter the last working day.";
+    if (isTermination && lastDay > resignDate) return "Last working day must be on or before the termination date.";
+    if (!isTermination && lastDay < resignDate) return "Last working day cannot be before the resignation date.";
+    if (blocked) return role === "Master"
+      ? "Absconding case (7+ consecutive absents in the unpaid period). Tick Master Override to proceed."
+      : `Absconding case (7+ consecutive absents in the unpaid period). Only a Master can override this — you are signed in as ${role || "another role"}.`;
+    if (!isTermination && overrideMode && !overrideReason.trim()) return "Enter a reason for the Master Override.";
+    if (!isTermination && overrideMode && payoutMode === "custom" && !customDays.trim()) return "Enter the number of days to pay for the custom payout.";
+    if (calcLoading) return "Still working out the figures…";
+    if (calcStale) return "The details changed — press Recalculate before processing.";
+    if (!calc) return "No figures yet — press Recalculate.";
+    if (!calc.months.length && !calc.releasedHold) return `Nothing to settle: the whole period falls on or before ${calc.settledThrough}, which is already paid.`;
+    return "";
+  }, [selEmp, resignDate, lastDay, isTermination, blocked, role, overrideMode, overrideReason,
+      payoutMode, customDays, calcLoading, calcStale, calc]);
+
+  const canProcess = !blockReason;
 
   return (
     <div>
@@ -917,10 +936,13 @@ export default function FinalSettlement({ role }) {
                 </div>
               </div>
             )}
-          <div className="mt-4">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
             <Button onClick={processSettlement} className="rounded-2xl" disabled={!canProcess || processing}>
               {processing ? "Processing…" : isTermination ? "Process Termination" : "Process Settlement"}
             </Button>
+            {blockReason && !processing && (
+              <span className="text-sm text-amber-700">{blockReason}</span>
+            )}
           </div>
         </div>
       )}
