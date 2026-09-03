@@ -280,6 +280,9 @@ export async function addConfidentialIncentive({ employeeId, employeeCode, emplo
     employee_id: employeeId || null, employee_code: employeeCode, employee_name: employeeName,
     branch: branch || null, department: department || null, amount: Number(amount),
     is_recurring: true, is_active: true, effective_from: effectiveFrom,
+    // payroll_month is NOT NULL and meaningless for a standing amount — recurring
+    // rows stamp the month it takes effect (the snapshot reads effective_from/_to).
+    payroll_month: effectiveFrom.slice(0, 7),
     change_reason: reason || null, given_by: addedBy, given_by_role: addedByRole,
   }).select().single();
   if (error) throw error;
@@ -296,7 +299,9 @@ export async function amendConfidentialIncentive({ id, employeeCode, employeeNam
   if (!(Number(newAmount) > 0)) throw new Error("Amount must be greater than zero.");
   if (!effectiveFrom) throw new Error("Effective From date is required.");
   const { error } = await supabase.from("cash_incentives").update({
-    amount: Number(newAmount), effective_from: effectiveFrom, change_reason: reason || null,
+    amount: Number(newAmount), effective_from: effectiveFrom,
+    payroll_month: effectiveFrom.slice(0, 7), // keep in step with effective_from
+    change_reason: reason || null,
   }).eq("id", id);
   if (error) throw error;
   await supabase.from("cash_incentive_history").insert({
