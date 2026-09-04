@@ -64,9 +64,12 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
 
   // final_settlements already carries its own branch snapshot -- no join
   // needed. Only F&F is actually owed anything; No F&F is a zero/forfeited
-  // record shown for visibility, never counted as payable.
-  const settlementRows = useMemo(() => settlements.map(s => ({
+  // record shown for visibility, never counted as payable. And an F&F is only
+  // cash Finance has to move once Master/GM have approved it -- before that
+  // it is HR's proposal, and a reversed settlement is not owed at all.
+  const settlementRows = useMemo(() => settlements.filter(s => !s.is_reversed).map(s => ({
     ...s, netPayable: Number(s.net_payable || 0), isPaid: !!s.is_paid,
+    isApproved: s.approval_status === "Approved",
   })), [settlements]);
 
   const [branchFilter, setBranchFilter] = useState("");
@@ -80,7 +83,8 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
 
   const totals = useMemo(() => {
     const normal = scopedRows.filter(r => r.paymentStatus === "Normal").reduce((s, r) => s + r.netSalary, 0);
-    const fnf = scopedSettlements.filter(s => s.payment_status === "FnF").reduce((s, r) => s + r.netPayable, 0);
+    const fnf = scopedSettlements.filter(s => s.payment_status === "FnF" && s.isApproved).reduce((s, r) => s + r.netPayable, 0);
+    const fnfPending = scopedSettlements.filter(s => s.payment_status === "FnF" && s.approval_status === "Pending Approval").reduce((s, r) => s + r.netPayable, 0);
     const holdover = scopedRows.reduce((s, r) => s + r.holdoverAmount, 0);
     const loan = scopedRows.reduce((s, r) => s + r.loanDeduction, 0);
     const advance = scopedRows.reduce((s, r) => s + r.advanceDeduction, 0);
@@ -92,7 +96,7 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
     const alreadyPaidFnf = scopedSettlements.filter(s => s.payment_status === "FnF" && s.isPaid).reduce((s, r) => s + r.netPayable, 0);
     const alreadyPaid = alreadyPaidNormal + alreadyPaidFnf;
     const remaining = totalToPay - alreadyPaid;
-    return { normal, fnf, holdover, loan, advance, tax, eobi, overtime, cashIncentiveTotal: scopedCashIncentiveTotal, totalToPay, alreadyPaid, remaining };
+    return { normal, fnf, fnfPending, holdover, loan, advance, tax, eobi, overtime, cashIncentiveTotal: scopedCashIncentiveTotal, totalToPay, alreadyPaid, remaining };
   }, [scopedRows, scopedSettlements, scopedCashIncentiveTotal]);
 
   const incentivePaidByBranch = useMemo(() => Object.fromEntries(incentiveBranchTotals.map(b => [b.branch, !!b.is_paid])), [incentiveBranchTotals]);
@@ -100,7 +104,7 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
   const byBranch = useMemo(() => {
     const acc = {};
     rows.forEach(r => {
-      if (!acc[r.branch]) acc[r.branch] = { branch: r.branch, payable: 0, hold: 0, noFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 };
+      if (!acc[r.branch]) acc[r.branch] = { branch: r.branch, payable: 0, hold: 0, noFnf: 0, pendingFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 };
       if (r.paymentStatus === "Normal") acc[r.branch].payable += r.netSalary;
       else if (r.paymentStatus === "Hold") acc[r.branch].hold += r.netSalary;
       acc[r.branch].loan += r.loanDeduction;
@@ -111,17 +115,20 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
     });
     settlementRows.forEach(s => {
       const b = s.branch || "Unassigned";
-      if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 };
-      if (s.payment_status === "FnF") acc[b].payable += s.netPayable;
-      else acc[b].noFnf += s.netPayable;
+      if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, pendingFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 };
+      if (s.payment_status !== "FnF") acc[b].noFnf += s.netPayable;
+      else if (s.isApproved) acc[b].payable += s.netPayable;
+      else acc[b].pendingFnf += s.netPayable;
     });
-    Object.keys(incentiveByBranch).forEach(b => { if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 }; });
+    Object.keys(incentiveByBranch).forEach(b => { if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, pendingFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 }; });
     return Object.values(acc).map(b => ({
       ...b, cashIncentives: incentiveByBranch[b.branch] || 0,
       total: b.payable + (incentiveByBranch[b.branch] || 0),
       incentivePaid: incentivePaidByBranch[b.branch] || false,
     })).sort((a, b) => a.branch.localeCompare(b.branch));
-  }, [rows, incentiveByBranch, incentivePaidByBranch]);
+    // settlementRows belongs here: without it a branch's F&F column kept the
+    // figures from before an approval landed.
+  }, [rows, settlementRows, incentiveByBranch, incentivePaidByBranch]);
 
   const visibleBranches = useMemo(() => branchFilter ? byBranch.filter(b => b.branch === branchFilter) : byBranch, [byBranch, branchFilter]);
 
@@ -169,7 +176,13 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-2 max-w-xl flex-1 min-w-[320px]">
           <div className="px-3 pt-2 pb-1"><h2 className="font-bold text-slate-800">Finance Payment Schedule — {month}{branchFilter ? ` · ${branchFilter}` : ""}</h2></div>
           <Line label="Regular Payroll (Normal)" value={totals.normal} />
-          <Line label="F&F Settlements" value={totals.fnf} />
+          <Line label="F&F Settlements (approved)" value={totals.fnf} />
+          {totals.fnfPending > 0 && (
+            <div className="flex justify-between items-center py-2.5 px-4 border-b border-slate-50 text-amber-700">
+              <span>F&amp;F awaiting Master / GM approval</span>
+              <span>{money(totals.fnfPending)}</span>
+            </div>
+          )}
           <Line label="Previous Month Holdover" value={totals.holdover} />
           <Line label="Additional Payments (by branch)" value={totals.cashIncentiveTotal} />
           <Line label="TOTAL TO PAY" value={totals.totalToPay} bold />
@@ -194,16 +207,17 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
         <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Branch-wise Breakdown</h2></div>
         <table className="w-full min-w-[1280px] text-sm">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>{["Branch", "Payable", "Hold", "No F&F", "Loan", "Advance", "EOBI", "Tax", "OT", "Additional Payments", "Total", "Incentive Cash Distributed"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
+            <tr>{["Branch", "Payable", "Hold", "F&F Pending Approval", "No F&F", "Loan", "Advance", "EOBI", "Tax", "OT", "Additional Payments", "Total", "Incentive Cash Distributed"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {visibleBranches.length === 0
-              ? <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">No payroll data for {month}{branchFilter ? ` in ${branchFilter}` : ""}.</td></tr>
+              ? <tr><td colSpan={13} className="px-4 py-8 text-center text-slate-400">No payroll data for {month}{branchFilter ? ` in ${branchFilter}` : ""}.</td></tr>
               : visibleBranches.map(b => (
                 <tr key={b.branch}>
                   <td className="px-4 py-3 font-medium">{b.branch}</td>
                   <td className="px-4 py-3 text-emerald-700">{money(b.payable)}</td>
                   <td className="px-4 py-3 text-amber-600">{money(b.hold)}</td>
+                  <td className="px-4 py-3 text-amber-600">{money(b.pendingFnf)}</td>
                   <td className="px-4 py-3 text-red-500">{money(b.noFnf)}</td>
                   <td className="px-4 py-3">{money(b.loan)}</td>
                   <td className="px-4 py-3">{money(b.advance)}</td>

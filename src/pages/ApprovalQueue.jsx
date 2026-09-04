@@ -7,6 +7,7 @@ import { approvePaymentStatusRequest, rejectPaymentStatusRequest, PAYMENT_STATUS
 import { approveIncrement as approveIncrementSvc, rejectIncrement as rejectIncrementSvc } from "../services/incrementService.js";
 import { approveLoanRequest, rejectLoanRequest, approveLoanChange, rejectLoanChange, fetchLoanGuaranteeDocuments } from "../services/loanService.js";
 import { applyAttendanceStatusChange } from "../services/attendanceAdjustmentService.js";
+import { approveFinalSettlement, rejectFinalSettlement } from "../services/finalSettlementService.js";
 
 // Hierarchy-routed requests carry dynamic stage names ("Pending Floor
 // Manager Approval", "Pending Owner Approval", ...) so this can't be a fixed
@@ -231,7 +232,13 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode, init
         supabase.from("employees").select("employee_code,full_name,department,branch,designation,supervisor_id").order("full_name"),
         supabase.from("attendance_adjustments").select("*").eq("status", "Pending Approval").order("adjusted_at", { ascending: false }).limit(200),
         supabase.from("one_time_adjustments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
-        supabase.from("settlement_requests").select("*").neq("status","Completed").order("created_at", { ascending: false }).limit(200),
+        // The real F&F record is final_settlements (settlement_requests was a
+        // dead pre-Phase-2 table). HR processes the settlement; it sits here
+        // as "Pending Approval" until Master/GM release the payable. No F&F
+        // rows owe nothing, so there is nothing to approve on them.
+        supabase.from("final_settlements").select("*")
+          .eq("approval_status", "Pending Approval").eq("payment_status", "FnF").eq("is_reversed", false)
+          .order("settled_at", { ascending: false }).limit(200),
         supabase.from("salary_increments").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
         supabase.from("loans").select("*").eq("status","Pending Approval").order("created_at", { ascending: false }).limit(200),
         supabase.from("loan_changes").select("*").eq("status","Pending").order("created_at", { ascending: false }).limit(200),
@@ -400,14 +407,23 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode, init
   }
 
   // ── Settlement actions ──
+  // Approval is what makes an F&F payable: until it lands, Mark Paid in the
+  // Settlements Ledger is refused by mark_final_settlement_paid.
   async function approveSettlement(id) {
-    await supabase.from("settlement_requests").update({ status: "Approved by HR", approved_by: role, approved_at: new Date().toISOString() }).eq("id", id);
-    setMsg("Settlement approved."); loadAll();
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can approve a final settlement.");
+    try {
+      await approveFinalSettlement(id);
+      setMsg("Final settlement approved — it is now payable by Finance."); loadAll();
+    } catch (e) { setErr(e.message); }
   }
 
   async function rejectSettlement(id, reason) {
-    await supabase.from("settlement_requests").update({ status: "Rejected", rejection_reason: reason }).eq("id", id);
-    setMsg("Settlement rejected."); loadAll();
+    if (!["Master", "GM"].includes(role)) return setErr("Only Master or GM can reject a final settlement.");
+    if (!reason?.trim()) return setErr("A reason is required to reject a settlement.");
+    try {
+      await rejectFinalSettlement(id, reason);
+      setMsg("Final settlement rejected — HR has been left the reason on the record."); loadAll();
+    } catch (e) { setErr(e.message); }
   }
 
   // ── Increment actions ──
@@ -702,41 +718,66 @@ export default function ApprovalQueue({ role, actorName, actorEmployeeCode, init
 
       {/* ── FINAL SETTLEMENTS ── */}
       {tab === "settlements" && !loading && (() => {
-        const actionableIds = settlements.map(s => s.id);
+        const canActSettlement = ["Master", "GM"].includes(role);
+        const actionableIds = canActSettlement ? settlements.map(s => s.id) : [];
+        const pendingTotal = settlements.reduce((sum, s) => sum + Number(s.net_payable || 0), 0);
         return (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
-          <div className="px-5 pt-4 pb-2"><h2 className="font-bold text-slate-800">Final Settlements</h2><p className="text-xs text-slate-400">{settlements.length} pending</p></div>
+          <div className="px-5 pt-4 pb-2">
+            <h2 className="font-bold text-slate-800">Final Settlements</h2>
+            <p className="text-xs text-slate-400">
+              {settlements.length} awaiting approval · {money(pendingTotal)} payable
+              {!canActSettlement && " · Master or GM approval required"}
+            </p>
+          </div>
           <BulkActionsBar selectedCount={selectedIn(actionableIds).length} busy={bulkBusy}
             onApprove={() => bulkApprove(selectedIn(actionableIds), approveSettlement)}
             onReject={() => bulkReject(selectedIn(actionableIds), rejectSettlement)} />
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[1000px] text-sm">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
                 <th className="px-4 py-3 sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]"><SelectAllCheckbox ids={actionableIds} selectedIds={selectedIds} onToggleAll={toggleSelectAll} /></th>
-                {["Employee","Branch","Resign Date","Last Working Day","Net Settlement","Supervisor","Status","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
+                {["Employee","Type","Branch","Separation Date","Last Working Day","Month","Net Payable","Initiated By","Action"].map(h => <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {settlements.length === 0
-                ? <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400">No pending settlements.</td></tr>
-                : settlements.map(s => (
+                ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No settlements awaiting approval.</td></tr>
+                : settlements.map(s => {
+                  const isTerm = s.separation_type === "termination";
+                  return (
                   <tr key={s.id}>
-                    <td className="px-4 py-3"><RowCheckbox id={s.id} selectedIds={selectedIds} onToggle={toggleSelect} /></td>
-                    <td className="px-4 py-3"><EmployeeCell code={s.employee_code} name={s.employee_name} empMap={empMap} /></td>
+                    <td className="px-4 py-3"><RowCheckbox id={s.id} selectedIds={selectedIds} onToggle={toggleSelect} disabled={!canActSettlement} /></td>
+                    <td className="px-4 py-3"><EmployeeCell code={s.employee_code} name={empMap[s.employee_code]?.full_name} empMap={empMap} /></td>
+                    <td className="px-4 py-3"><Badge tone={isTerm ? "yellow" : "slate"}>{isTerm ? "Termination" : "Resignation"}</Badge></td>
                     <td className="px-4 py-3">{s.branch || "—"}</td>
-                    <td className="px-4 py-3">{s.resign_date || "—"}</td>
+                    <td className="px-4 py-3">{(isTerm ? s.termination_date : s.resignation_date) || "—"}</td>
                     <td className="px-4 py-3">{s.last_working_day || "—"}</td>
-                    <td className="px-4 py-3 font-semibold text-emerald-700">{money(s.net_settlement || 0)}</td>
-                    <td className="px-4 py-3 text-slate-500">{supervisorName(s.employee_code)}</td>
-                    <td className="px-4 py-3"><StageBadge status={s.status} /></td>
+                    <td className="px-4 py-3">{s.payroll_month || "—"}</td>
+                    <td className="px-4 py-3 font-semibold text-emerald-700">
+                      {money(s.net_payable || 0)}
+                      {Number(s.notice_penalty) > 0 && (
+                        <div className="text-xs text-slate-400">after {money(s.notice_penalty)} short-notice penalty</div>
+                      )}
+                      {s.override_applied && (
+                        <div className="text-xs text-amber-600" title={s.override_reason || ""}>Master override applied</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500">
+                      {s.settled_by || "—"}
+                      {s.settled_at && <div className="text-xs text-slate-400">{new Date(s.settled_at).toLocaleDateString()}</div>}
+                    </td>
                     <td className="px-4 py-3">
-                      <ApproveRejectBtns
-                        id={s.id} rejectId={rejectId} setRejectId={setRejectId}
-                        rejectNote={rejectNote} setRejectNote={setRejectNote}
-                        onApprove={approveSettlement} onReject={rejectSettlement} />
+                      {canActSettlement
+                        ? <ApproveRejectBtns
+                            id={s.id} rejectId={rejectId} setRejectId={setRejectId}
+                            rejectNote={rejectNote} setRejectNote={setRejectNote}
+                            onApprove={approveSettlement} onReject={rejectSettlement} />
+                        : <span className="text-xs text-slate-400">Master / GM only</span>}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
             </tbody>
           </table>
         </div>

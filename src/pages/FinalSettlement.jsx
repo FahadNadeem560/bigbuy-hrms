@@ -3,7 +3,15 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { buildSettlement } from "../services/settlementEngine.js";
-import { processFinalSettlement, fetchSettlementLines } from "../services/finalSettlementService.js";
+import { processFinalSettlement, fetchSettlementLines, markFinalSettlementPaid } from "../services/finalSettlementService.js";
+
+// A processed settlement is not payable on its own -- HR initiates it, Master
+// or GM releases it in the Approval Queue, and only then can Finance pay it.
+function ApprovalBadge({ status }) {
+  if (status === "Approved") return <Badge tone="green">Approved</Badge>;
+  if (status === "Rejected") return <Badge tone="red">Rejected</Badge>;
+  return <Badge tone="yellow">Awaiting Approval</Badge>;
+}
 
 // Calendar days required per staff level (no exclusions)
 const NOTICE_CALENDAR_DAYS = {
@@ -228,6 +236,11 @@ function SettlementSlipModal({ row, onClose }) {
           <div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Payment</h3>
             <IRow label="Status" value={row.payment_status === "FnF" ? "F&F — payable" : "No F&F — nothing owed"} />
+            <IRow label="Approval" value={row.approval_status === "Approved"
+              ? `Approved · ${row.approved_by || "—"}${row.approved_at ? ` · ${new Date(row.approved_at).toLocaleDateString()}` : ""}`
+              : row.approval_status === "Rejected"
+              ? `Rejected · ${row.approved_by || "—"}${row.rejection_reason ? ` — ${row.rejection_reason}` : ""}`
+              : "Awaiting Master / GM approval"} />
             <IRow label="Paid" value={row.is_paid
               ? `Yes · ${row.paid_by || "—"}${row.paid_at ? ` · ${new Date(row.paid_at).toLocaleDateString()}` : ""}`
               : "Not yet paid"} />
@@ -250,6 +263,7 @@ function SettlementsLedger({ role }) {
   const [monthFilter, setMonthFilter] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [approvalFilter, setApprovalFilter] = useState("All");
   const [marking, setMarking] = useState(null);
   const [slip, setSlip] = useState(null);
   const [err, setErr] = useState("");
@@ -268,13 +282,13 @@ function SettlementsLedger({ role }) {
   }
   useEffect(() => { load(); }, []);
 
+  // Goes through the RPC rather than a direct UPDATE: the browser has no
+  // write rights on final_settlements any more, and the RPC is what refuses
+  // to pay a settlement Master/GM haven't approved yet.
   async function markPaid(row) {
     setMarking(row.id); setErr("");
     try {
-      const { error } = await supabase.from("final_settlements").update({
-        is_paid: true, paid_at: new Date().toISOString(), paid_by: role,
-      }).eq("id", row.id);
-      if (error) throw error;
+      await markFinalSettlementPaid(row.id);
       await load();
     } catch (e) { setErr(e.message); }
     finally { setMarking(null); }
@@ -284,25 +298,32 @@ function SettlementsLedger({ role }) {
     if (monthFilter && r.payroll_month !== monthFilter) return false;
     if (branchFilter && r.branch !== branchFilter) return false;
     if (statusFilter !== "All" && r.payment_status !== statusFilter) return false;
+    if (approvalFilter !== "All" && (r.approval_status || "Pending Approval") !== approvalFilter) return false;
     return true;
-  }), [rows, monthFilter, branchFilter, statusFilter]);
+  }), [rows, monthFilter, branchFilter, statusFilter, approvalFilter]);
 
   const branchOptions = useMemo(() => Array.from(new Set(rows.map(r => r.branch).filter(Boolean))).sort(), [rows]);
 
   const totals = useMemo(() => {
     const fnfRows = filtered.filter(r => r.payment_status === "FnF");
-    const payable = fnfRows.reduce((s, r) => s + Number(r.net_payable || 0), 0);
-    const paid = fnfRows.filter(r => r.is_paid).reduce((s, r) => s + Number(r.net_payable || 0), 0);
-    return { fnfCount: fnfRows.length, payable, paid, outstanding: payable - paid };
+    const sum = list => list.reduce((s, r) => s + Number(r.net_payable || 0), 0);
+    const payable = sum(fnfRows);
+    const paid = sum(fnfRows.filter(r => r.is_paid));
+    // Money HR has computed but nobody has released yet -- it cannot be paid
+    // until Master/GM approve it, so it is worth showing separately from the
+    // approved-but-unpaid outstanding balance.
+    const awaiting = sum(fnfRows.filter(r => (r.approval_status || "Pending Approval") === "Pending Approval"));
+    return { fnfCount: fnfRows.length, payable, paid, awaiting, outstanding: payable - paid };
   }, [filtered]);
 
   return (
     <div>
       <SettlementSlipModal row={slip} onClose={() => setSlip(null)} />
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
         {[
           ["F&F Settlements", totals.fnfCount],
           ["Total Payable", money(totals.payable)],
+          ["Awaiting Approval", money(totals.awaiting)],
           ["Already Paid", money(totals.paid)],
           ["Outstanding", money(totals.outstanding)],
         ].map(([label, value]) => (
@@ -327,6 +348,12 @@ function SettlementsLedger({ role }) {
           <option value="FnF">F&F</option>
           <option value="No_FnF">No F&F</option>
         </select>
+        <select value={approvalFilter} onChange={e => setApprovalFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+          <option value="All">All Approvals</option>
+          <option value="Pending Approval">Awaiting Approval</option>
+          <option value="Approved">Approved</option>
+          <option value="Rejected">Rejected</option>
+        </select>
       </div>
 
       {loading
@@ -337,13 +364,13 @@ function SettlementsLedger({ role }) {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full min-w-[1000px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Employee", "Type", "Branch", "Department", "Last Working Day", "Month", "Status", "Net Payable", "Paid", "Action"].map(h =>
+                <tr>{["Employee", "Type", "Branch", "Department", "Last Working Day", "Month", "Status", "Approval", "Net Payable", "Paid", "Action"].map(h =>
                   <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.length === 0
-                  ? <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
+                  ? <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
                   : filtered.map(r => (
                     <tr key={r.id} onClick={() => setSlip(r)} className="hover:bg-slate-50 cursor-pointer">
                       <td className="px-4 py-3 font-medium">{r.employee_name} <span className="text-xs text-slate-400">({r.employee_code})</span></td>
@@ -357,15 +384,33 @@ function SettlementsLedger({ role }) {
                       <td className="px-4 py-3">{r.last_working_day || "—"}</td>
                       <td className="px-4 py-3">{r.payroll_month}</td>
                       <td className="px-4 py-3"><Badge tone={r.payment_status === "FnF" ? "blue" : "red"}>{r.payment_status === "FnF" ? "F&F" : "No F&F"}</Badge></td>
+                      <td className="px-4 py-3">
+                        <ApprovalBadge status={r.approval_status} />
+                        {r.approval_status === "Rejected" && r.rejection_reason && (
+                          <div className="text-xs text-slate-400 mt-0.5 max-w-[180px] truncate" title={r.rejection_reason}>{r.rejection_reason}</div>
+                        )}
+                      </td>
                       <td className="px-4 py-3 font-semibold">{money(r.net_payable)}</td>
                       <td className="px-4 py-3">
                         {r.is_paid ? <Badge tone="green">Paid</Badge> : <span className="text-slate-400 text-xs">Unpaid</span>}
                       </td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         {r.payment_status === "FnF" && !r.is_paid && canMarkPaid && (
-                          <Button onClick={() => markPaid(r)} disabled={marking === r.id} className="rounded-lg text-xs py-1 px-2">
-                            {marking === r.id ? "Marking…" : "Mark Paid"}
-                          </Button>
+                          r.approval_status === "Approved" ? (
+                            <Button onClick={() => markPaid(r)} disabled={marking === r.id} className="rounded-lg text-xs py-1 px-2">
+                              {marking === r.id ? "Marking…" : "Mark Paid"}
+                            </Button>
+                          ) : (
+                            // Nothing is payable until it clears approval, and a
+                            // greyed-out button with no reason is what sent people
+                            // hunting last time -- say which gate it is stuck on.
+                            <span className="text-xs text-slate-400"
+                              title={r.approval_status === "Rejected"
+                                ? "A rejected settlement stays on record. Master must reverse it before HR can process a corrected one."
+                                : "Master or GM must approve this in the Approval Queue before it can be paid."}>
+                              {r.approval_status === "Rejected" ? "Rejected — not payable" : "Awaiting approval"}
+                            </span>
+                          )
                         )}
                       </td>
                     </tr>
@@ -571,7 +616,10 @@ export default function FinalSettlement({ role }) {
     const extra = calc.recoverableAtExit > 0 ? ` (plus ${money(calc.recoverableAtExit)} recoverable at exit)` : "";
     const label = isTermination ? "Termination" : "Settlement";
     const fnf = calc.paymentStatus === "FnF" ? "F&F" : "No F&F";
-    setMsg(`${label} processed for ${selEmp.full_name}. Payable: ${money(calc.cashPayable)}${extra}. Recorded as ${fnf} covering ${calc.months.join(", ")}, removed from regular payroll.`);
+    const approval = calc.paymentStatus === "FnF"
+      ? " Sent to Master / GM for approval — it is not payable until they release it."
+      : "";
+    setMsg(`${label} processed for ${selEmp.full_name}. Payable: ${money(calc.cashPayable)}${extra}. Recorded as ${fnf} covering ${calc.months.join(", ")}, removed from regular payroll.${approval}`);
     resetForm();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -583,6 +631,9 @@ export default function FinalSettlement({ role }) {
   // wins, in the order you'd fix them in.
   const blockReason = useMemo(() => {
     const what = isTermination ? "termination" : "resignation";
+    // Settlements are HR-initiated. The RPC enforces this too; saying it here
+    // stops a Finance/GM user filling the whole form before finding out.
+    if (!["HR", "Master"].includes(role)) return `Only HR can initiate a settlement — you are signed in as ${role || "another role"}.`;
     if (!selEmp) return "Select an employee.";
     if (!resignDate) return `Enter the ${what} date.`;
     if (!lastDay) return "Enter the last working day.";
@@ -605,7 +656,7 @@ export default function FinalSettlement({ role }) {
 
   return (
     <div>
-      <PageTitle title="Final Settlement" subtitle="Resignation & termination processing, notice-period validation and settlement calculator." />
+      <PageTitle title="Final Settlement" subtitle="Resignation & termination processing, notice-period validation and settlement calculator. HR initiates; Master or GM approve the payable before Finance can pay it." />
 
       <div className="flex flex-wrap gap-2 mb-5">
         {[["process", "Process Settlement"], ["ledger", "Settlements Ledger"]].map(([k, l]) => (

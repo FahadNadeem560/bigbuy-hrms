@@ -68,3 +68,32 @@ export async function fetchSettlementLines(settlementId) {
   if (error) throw error;
   return data || [];
 }
+
+// ─── Approval gate ────────────────────────────────────────────────────────
+// HR (or Master) processes a settlement; it lands as "Pending Approval" and
+// is not payable until Master or GM releases it. Every one of these is a
+// SECURITY DEFINER RPC because the browser no longer has UPDATE rights on
+// final_settlements -- otherwise Finance could set approval_status itself and
+// the gate would be decorative.
+
+// Master / GM. Releases the payable so Finance can settle it.
+export async function approveFinalSettlement(settlementId) {
+  const { error } = await supabase.rpc("approve_final_settlement", { p_settlement_id: settlementId });
+  if (error) throw error;
+}
+
+// Master / GM. Sends it back to HR with a reason. The settlement row stays
+// (the employee is still separated) -- undoing that is reverseFinalSettlement.
+export async function rejectFinalSettlement(settlementId, reason) {
+  const { error } = await supabase.rpc("reject_final_settlement", {
+    p_settlement_id: settlementId, p_reason: reason,
+  });
+  if (error) throw error;
+}
+
+// Master / Finance. Refuses anything not approved, already paid, reversed,
+// or marked No F&F.
+export async function markFinalSettlementPaid(settlementId) {
+  const { error } = await supabase.rpc("mark_final_settlement_paid", { p_settlement_id: settlementId });
+  if (error) throw error;
+}

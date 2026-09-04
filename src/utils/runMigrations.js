@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-09-02-v13";
+const MIGRATION_VERSION = "2026-09-04-v14";
 let ran = false;
 
 export async function runMigrations() {
@@ -300,6 +300,12 @@ async function applyIncrementalMigrations() {
     `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS salary_payable BOOLEAN DEFAULT TRUE`,
     `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS payout_mode TEXT DEFAULT 'worked'`,
     `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS payout_days INTEGER`,
+    // F&F approval gate: HR initiates, Master/GM release, then Finance pays.
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'Pending Approval'`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS approved_by TEXT`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`,
+    `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS rejection_reason TEXT`,
+    `CREATE INDEX IF NOT EXISTS final_settlements_approval_status_idx ON public.final_settlements (approval_status)`,
     `ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_date DATE`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.final_settlements TO anon, authenticated`,
   ];
