@@ -5743,3 +5743,36 @@ SELECT * FROM public.generate_employee_work_rosters('2026-07-01','2026-08-22');
 -- half_day_exempt or late_exempt set, plus Management rows still marked
 -- "Half Day".
 -- =============================================================
+
+-- =============================================================
+-- 2026-09-04: off-day cap exemption now matches WAREHOUSE by BRANCH too
+-- =============================================================
+-- Company policy is at most 4 unpaid weekly-off days per calendar month, so
+-- an employee who already has 4 rest days cannot also be paid an Extra
+-- Working Day. Management and Warehouse staff are exempt from that cap --
+-- their fixed off day counts every week, so a month in which it falls 5
+-- times grants 5 rest days.
+--
+-- The exemption was written as `staff_level = 'Management' or department
+-- ilike '%warehouse%'`, which reads the DEPARTMENT NAME only. That exempted
+-- WAREHOUSE-branch staff filed under "Warehouse Food" / "Warehouse Non Food"
+-- but not their colleagues in the same building filed under Pulses (13),
+-- Inventory (1) and Non Food (1) -- 15 active employees who are warehouse
+-- staff by any operational reading (confirmed 2026-09-04 on employees 3051,
+-- 581 and 935, all branch = WAREHOUSE). Branch is now matched as well.
+--
+-- MUST stay in sync with isOffDayCapExempt() in src/utils/attendanceRules.js,
+-- which gates the same quota on the payroll / Timesheet side. If the two
+-- definitions drift, payroll and the roster disagree about how many rest days
+-- an employee was owed, and the difference shows up as a wrong EWD or a
+-- wrongly-forgiven absence.
+--
+-- Applied live via MCP migration `roster_off_day_cap_exempt_warehouse_branch`.
+-- Only the two `is_exempt` expressions in emp_off changed; the rest of the
+-- function is byte-identical to the version already deployed.
+--
+-- Re-running the generator over a past month is a separate, deliberate step:
+--   select * from generate_employee_work_rosters('2026-07-01','2026-08-31');
+-- It restores the 5th off-day roster row for the newly-exempt employees,
+-- after which their attendance for those days needs reprocessing to pick the
+-- Weekly Off classification up.

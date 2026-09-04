@@ -47,9 +47,18 @@ const MAX_EWD_PER_MONTH = 4;
 // many times it falls in the month, so the client-side quota has to grant the
 // same number of rest days or the two disagree about what the employee was
 // owed. Any change here must be made in the SQL function too.
+//
+// Warehouse is matched on BRANCH as well as department: warehouse staff are
+// warehouse staff whatever their department is called, and the department name
+// alone missed the 15 WAREHOUSE-branch employees filed under Pulses /
+// Inventory / Non Food while catching their colleagues in "Warehouse Food"
+// (confirmed 2026-09-04, e.g. employees 3051, 581, 935). Management is a
+// staff_level, so it needs no branch equivalent.
 export function isOffDayCapExempt(emp) {
   if (!emp) return false;
-  return emp.staff_level === "Management" || /warehouse/i.test(emp.department || "");
+  return emp.staff_level === "Management"
+    || /warehouse/i.test(emp.department || "")
+    || /warehouse/i.test(emp.branch || "");
 }
 
 // The month's off-day entitlement. Company policy (reaffirmed 2026-09-04):
