@@ -240,7 +240,8 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
     // day they did not come in. Forgiveness and this can never collide -- a
     // forgiven absence requires a worked day in the block, which is exactly
     // what an unearned rest day's block lacks.
-    const isUnearnedRest = rawStatus === "Weekly Off" && unearnedRestDays.has(`${c}|${a.work_date}`);
+    const isUnearnedRest = (rawStatus === "Weekly Off" || rawStatus === "Gazetted Holiday")
+      && unearnedRestDays.has(`${c}|${a.work_date}`);
     const s = isOverriddenOff ? "Weekly Off" : (isUnearnedRest ? "Absent" : rawStatus);
     // Gazetted Holiday actually worked -- a working status on a holiday row.
     // Group/individual eligibility is applied later where `group` is known;

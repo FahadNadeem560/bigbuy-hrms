@@ -161,6 +161,11 @@ function resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExempt
 function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey }) {
   const weeks = {};
   const monthlyWeeklyOffCount = {};
+  // Whether the employee turned up at all across the caller's whole window --
+  // approved Leave counts, since that is an authorised absence rather than a
+  // no-show. Used to decide whether a public holiday is a day off from
+  // something (see getUnearnedRestDayKeys).
+  const monthlyEngagedCount = {};
   (rows || []).forEach((row) => {
     const status = row[statusKey];
     const dateStr = row[dateKey];
@@ -181,7 +186,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(blockStart)}`;
     const week = (weeks[weekKey] ||= {
-      absentRows: [], restRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasGazettedHolidayOff: false,
+      absentRows: [], restRows: [], ghRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasGazettedHolidayOff: false,
       hasWorkedDay: false,
       blockStart, blockEnd, empPart, isFullBlock,
     });
@@ -199,7 +204,9 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
       status === "HalfDay" || status === "Short Hours" || status === "Early Out"
     ) {
       week.hasWorkedDay = true;
+      monthlyEngagedCount[empPart] = (monthlyEngagedCount[empPart] || 0) + 1;
     }
+    if (status === "Leave") monthlyEngagedCount[empPart] = (monthlyEngagedCount[empPart] || 0) + 1;
     // Real "Weekly Off" rows (roster-driven) count toward every day of the
     // block, not just Mon-Fri, so a genuine off day on any day still blocks
     // the override below -- without this, a block that already has its real
@@ -217,6 +224,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
       // holiday the employee DID work keeps a working status and is paid its
       // own +1 day directly in payroll, not through the block heuristic.)
       week.hasGazettedHolidayOff = true;
+      week.ghRows.push(row);
     }
     else if (status === "Absent") {
       week.hasAnyAbsent = true;
@@ -230,7 +238,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
       if (dow !== 0 && dow !== 6 && !row[checkInKey] && !row[checkOutKey]) week.absentRows.push(row);
     }
   });
-  return { weeks, monthlyWeeklyOffCount };
+  return { weeks, monthlyWeeklyOffCount, monthlyEngagedCount };
 }
 
 // rows: array of objects with at least a date field and a status field.
@@ -309,17 +317,29 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // A block only partly inside the caller's window is skipped, exactly as in
 // getWeeklyOffOverrideKeys: the days that would prove it was worked may
 // simply be outside the query.
+// A public holiday is a day off from working. An employee who did not turn up
+// once all month was not kept from work by it, so in that case it is neither
+// paid nor allowed to shield the week's rest day -- confirmed on employee
+// 3059, August 2026: zero worked days, yet the 14 Aug holiday paid out and
+// rescued the 13 Aug rest day with it. Any worked day, or any approved Leave,
+// in the window makes the holiday count normally again.
 export function getUnearnedRestDayKeys(rows, opts = {}) {
   const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
-  const { weeks } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+  const { weeks, monthlyEngagedCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
   const keys = new Set();
   Object.values(weeks).forEach((week) => {
-    if (week.hasWorkedDay || week.hasLeave || week.hasGazettedHolidayOff) return;
-    if (week.restRows.length === 0) return;
+    const neverTurnedUp = !(monthlyEngagedCount[week.empPart] > 0);
+    const holidayExcuses = week.hasGazettedHolidayOff && !neverTurnedUp;
+    if (week.hasWorkedDay || week.hasLeave || holidayExcuses) return;
+    if (week.restRows.length === 0 && week.ghRows.length === 0) return;
     if (rangeStart || rangeEnd) {
       if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
     }
     week.restRows.forEach((row) => keys.add(`${week.empPart}${row[dateKey]}`));
+    // The holiday itself is only charged in the never-turned-up case; a block
+    // that simply had no work still keeps a paid holiday if the employee
+    // worked elsewhere in the month.
+    if (neverTurnedUp) week.ghRows.forEach((row) => keys.add(`${week.empPart}${row[dateKey]}`));
   });
   return keys;
 }
@@ -498,7 +518,8 @@ export function buildLedger({ emp, attendance, holidayDates, fromDate, toDate })
   // that the payslip is charging as an absence.
   const unearnedRest = getUnearnedRestDayKeys(base, { rangeStart: effFrom, rangeEnd: effTo });
   base.forEach((row) => {
-    if (unearnedRest.has(row.work_date) && row.attendance_status === "Weekly Off") {
+    if (unearnedRest.has(row.work_date)
+        && (row.attendance_status === "Weekly Off" || row.attendance_status === "Gazetted Holiday")) {
       row.attendance_status = "Absent";
       row.unearned_rest_day = true;
       row.short_hours = 0; row.late_minutes = 0; row.ot_hours = 0; row.overtime_hours = 0;
