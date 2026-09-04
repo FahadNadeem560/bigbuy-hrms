@@ -5,7 +5,7 @@ import { money } from "../utils/format.js";
 import * as XLSX from "xlsx";
 import {
   PAYMENT_STATUSES, PAYMENT_STATUS_LABELS, PAYMENT_STATUS_TONES,
-  canTransitionPaymentStatus, requiresMasterOnly, requestPaymentStatusChange,
+  canTransitionPaymentStatus, requiresMasterOnly, requestPaymentStatusChange, setPaymentStatusDirect,
   getPayrollLock, lockPayrollMonth, unlockPayrollMonth, mergePersistentPayrollFields,
   generateVerificationsForMonth, fetchVerifications,
   getVerificationProgress, respondToFlag,
@@ -74,7 +74,7 @@ function UnlockModal({ month, onConfirm, onCancel }) {
 }
 
 // ── Payment status request modal ───────────────────────────────
-function PaymentStatusModal({ row, month, role, onClose, onSubmitted }) {
+function PaymentStatusModal({ row, month, role, actorName, onClose, onSubmitted }) {
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
   const [err, setErr] = useState("");
@@ -86,18 +86,29 @@ function PaymentStatusModal({ row, month, role, onClose, onSubmitted }) {
     if (!reason.trim()) return setErr("Reason is required.");
     setBusy(true); setErr("");
     try {
-      await requestPaymentStatusChange({
-        employeeId: row.id || null, employeeCode: row.employeeCode, employeeName: row.name,
-        payrollMonth: month, requestedBy: role, currentStatus: row.paymentStatus, requestedStatus: target, reason,
-      });
-      onSubmitted();
+      // HR and Master apply Hold / release straight away (explicit policy,
+      // 2026-09-04). Anyone else still raises a request for Master/GM.
+      if (["HR", "Master"].includes(role)) {
+        await setPaymentStatusDirect({
+          employeeCode: row.employeeCode, employeeName: row.name, payrollMonth: month,
+          currentStatus: row.paymentStatus, newStatus: target, reason,
+          actorRole: role, actorName: actorName || role,
+        });
+        onSubmitted(true);
+      } else {
+        await requestPaymentStatusChange({
+          employeeId: row.id || null, employeeCode: row.employeeCode, employeeName: row.name,
+          payrollMonth: month, requestedBy: role, currentStatus: row.paymentStatus, requestedStatus: target, reason,
+        });
+        onSubmitted(false);
+      }
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   }
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
-        <h2 className="font-bold text-slate-800 text-lg mb-1">Request Payment Status Change</h2>
+        <h2 className="font-bold text-slate-800 text-lg mb-1">{["HR", "Master"].includes(role) ? "Change Payment Status" : "Request Payment Status Change"}</h2>
         <p className="text-sm text-slate-500 mb-4">{row.name} · {row.employeeCode} · {month}</p>
         <div className="mb-3">
           <p className="text-xs text-slate-500 mb-1">Current Status</p>
@@ -120,7 +131,7 @@ function PaymentStatusModal({ row, month, role, onClose, onSubmitted }) {
         </div>
         {err && <div className="mb-3 p-2 rounded-xl bg-red-50 text-red-700 text-xs">{err}</div>}
         <div className="flex gap-3">
-          <Button onClick={submit} disabled={busy || options.length === 0} className="rounded-2xl flex-1">{busy ? "Submitting…" : "Submit for Approval"}</Button>
+          <Button onClick={submit} disabled={busy || options.length === 0} className="rounded-2xl flex-1">{busy ? "Saving…" : ["HR", "Master"].includes(role) ? "Apply Change" : "Submit for Approval"}</Button>
           <Button variant="outline" onClick={onClose} className="rounded-2xl flex-1">Cancel</Button>
         </div>
       </div>
@@ -1290,9 +1301,13 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
       {showUnlockModal && <UnlockModal month={month} onConfirm={doUnlock} onCancel={() => setShowUnlockModal(false)} />}
       <PayslipModal row={selectedPayslip} month={month} onClose={() => setSelectedPayslip(null)} />
       {paymentStatusRow && (
-        <PaymentStatusModal row={paymentStatusRow} month={month} role={role}
+        <PaymentStatusModal row={paymentStatusRow} month={month} role={role} actorName={actorName}
           onClose={() => setPaymentStatusRow(null)}
-          onSubmitted={() => { setPaymentStatusRow(null); setMsg("Payment status change submitted for approval."); }} />
+          onSubmitted={(appliedDirectly) => {
+            setPaymentStatusRow(null);
+            setMsg(appliedDirectly ? "Payment status updated." : "Payment status change submitted for approval.");
+            if (appliedDirectly) loadPayroll();
+          }} />
       )}
 
       <PageTitle title="Payroll Processing" subtitle="Auto-calculate payroll from attendance and policy." />

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { requestPaymentStatusChange } from "../services/payrollControlService.js";
+import { requestPaymentStatusChange, setPaymentStatusDirect } from "../services/payrollControlService.js";
 
 export default function PayrollHold({ role, actorName, month, setMonth }) {
   const [rows, setRows] = useState([]);
@@ -46,17 +46,32 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
   const fnfRows = useMemo(() => rows.filter(r => (r.payment_status || "Normal") === "FnF")
     .map(r => ({ ...r, emp: empByCode[r.employee_code] || {} })), [rows, empByCode]);
 
-  async function requestChange(row, target) {
-    const reason = window.prompt(`Reason for requesting ${target === "Normal" ? "Payment" : "No F&F"} for ${row.emp.full_name || row.employee_code}?`);
+  const canActDirectly = ["HR", "Master"].includes(role);
+
+  // HR and Master release a hold outright; anyone else who can see this tab
+  // (GM) still goes through the request/approve path.
+  async function releaseHold(row) {
+    const name = row.emp.full_name || row.employee_code;
+    const reason = window.prompt(`Reason for releasing ${name} to payment?`);
     if (!reason) return;
     setBusyCode(row.employee_code); setErr(""); setMsg("");
     try {
-      await requestPaymentStatusChange({
-        employeeCode: row.employee_code, employeeName: row.emp.full_name || row.employee_code,
-        payrollMonth: month, requestedBy: role, currentStatus: row.payment_status || "Normal",
-        requestedStatus: target, reason,
-      });
-      setMsg(`Request submitted for ${row.emp.full_name || row.employee_code}.`);
+      if (canActDirectly) {
+        await setPaymentStatusDirect({
+          employeeCode: row.employee_code, employeeName: name, payrollMonth: month,
+          currentStatus: row.payment_status || "Normal", newStatus: "Normal",
+          reason, actorRole: role, actorName,
+        });
+        setMsg(`${name} released — payable by Finance for ${month}.`);
+      } else {
+        await requestPaymentStatusChange({
+          employeeCode: row.employee_code, employeeName: name,
+          payrollMonth: month, requestedBy: role, currentStatus: row.payment_status || "Normal",
+          requestedStatus: "Normal", reason,
+        });
+        setMsg(`Request submitted for ${name}.`);
+      }
+      await load();
     } catch (e) { setErr(e.message); }
     finally { setBusyCode(null); }
   }
@@ -93,10 +108,13 @@ export default function PayrollHold({ role, actorName, month, setMonth }) {
                     <td className="px-4 py-3 font-semibold">{money(r.net_salary)}</td>
                     <td className="px-4 py-3"><Badge tone={streak >= 3 ? "red" : streak >= 2 ? "yellow" : "slate"}>{streak}</Badge></td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-1.5">
-                        <Button disabled={busyCode === r.employee_code} onClick={() => requestChange(r, "Normal")} className="rounded-xl text-xs py-1 px-2">Request Payment</Button>
-                        <Button disabled={busyCode === r.employee_code} variant="outline" onClick={() => requestChange(r, "No_FnF")} className="rounded-xl text-xs py-1 px-2">Request No F&F</Button>
-                      </div>
+                      {/* "Request No F&F" used to sit alongside this and was
+                          dead: Hold -> No_FnF is not an allowed transition, so
+                          it threw every time. No F&F is set by Final
+                          Settlement now, not from here. */}
+                      <Button disabled={busyCode === r.employee_code} onClick={() => releaseHold(r)} className="rounded-xl text-xs py-1 px-2">
+                        {busyCode === r.employee_code ? "Working…" : canActDirectly ? "Release to Payment" : "Request Payment"}
+                      </Button>
                     </td>
                   </tr>
                 );

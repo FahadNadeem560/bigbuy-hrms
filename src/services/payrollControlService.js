@@ -90,6 +90,58 @@ export async function rejectPaymentStatusRequest(request, approverName, rejectio
   }).then(() => {}, () => {});
 }
 
+// HR (and Master) set and clear Hold directly -- no approval step. Holding a
+// salary and releasing it are both HR operations now (explicit policy,
+// 2026-09-04); the request/approve path above is kept only for the requests
+// already in flight and for anyone who isn't HR or Master.
+//
+// Nothing here is enforced in the database: the payroll_write policy already
+// lets Master/HR update payroll rows, which is how Generate and Refresh work.
+// The guard is the role check plus the audit trail, not RLS.
+export async function setPaymentStatusDirect({
+  employeeCode, employeeName, payrollMonth, currentStatus, newStatus, reason, actorRole, actorName,
+}) {
+  if (!["HR", "Master"].includes(actorRole)) {
+    throw new Error("Only HR or Master can change a payment status directly.");
+  }
+  if (!reason || !reason.trim()) throw new Error("Reason is required.");
+  if (!canTransitionPaymentStatus(currentStatus, newStatus)) {
+    throw new Error(`${PAYMENT_STATUS_LABELS[currentStatus] || currentStatus} → ${PAYMENT_STATUS_LABELS[newStatus] || newStatus} is not an allowed transition.`);
+  }
+  const now = new Date().toISOString();
+  const who = actorName || actorRole;
+  const { error } = await supabase.from("payroll").update({
+    payment_status: newStatus,
+    payment_status_changed_by: who, payment_status_changed_at: now,
+    payment_status_approved_by: who, payment_status_reason: reason,
+  }).eq("payroll_month", payrollMonth).eq("employee_code", employeeCode);
+  if (error) throw error;
+
+  // Withholding or releasing someone's salary with nobody else in the loop
+  // has to leave a trail, so this is the part that replaces the approval.
+  await supabase.from("audit_logs").insert({
+    action_type: "payment_status_changed", performed_by: who,
+    details: JSON.stringify({
+      employee_code: employeeCode, employee_name: employeeName, payroll_month: payrollMonth,
+      from: currentStatus, to: newStatus, reason, applied_directly: true,
+    }),
+    created_at: now,
+  }).then(() => {}, () => {});
+
+  // Master and GM no longer approve it, so tell them it happened.
+  await Promise.all(["Master", "GM"].map(r => supabase.from("notifications").insert({
+    recipient_role: r, type: "payment_status_request",
+    title: newStatus === "Hold" ? "Salary Put On Hold" : "Hold Released",
+    message: `${who} moved ${employeeName} (${employeeCode}) from ${PAYMENT_STATUS_LABELS[currentStatus]} to ${PAYMENT_STATUS_LABELS[newStatus]} for ${payrollMonth}. Reason: ${reason}`,
+    is_read: false,
+  }))).catch(() => {});
+
+  queueWhatsappMessage({
+    employeeCode, messageType: MESSAGE_TYPES.PAYMENT_STATUS_CHANGED,
+    templateVariables: [employeeName, payrollMonth, PAYMENT_STATUS_LABELS[newStatus]],
+  }).catch(() => {});
+}
+
 // ══════════════════════════ Month helpers ══════════════════════════
 export function addMonths(monthStr, delta) {
   const [y, m] = monthStr.split("-").map(Number);
