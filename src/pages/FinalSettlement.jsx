@@ -517,6 +517,12 @@ export default function FinalSettlement({ role }) {
     return NOTICE_CALENDAR_DAYS[selEmp.staff_level] || NOTICE_CALENDAR_DAYS["Non-Management"];
   }, [selEmp]);
 
+  // The settlement follows the date typed here, not the employee record, so
+  // say so when they differ rather than leaving two screens quietly at odds.
+  const lwdMismatch = !!selEmp?.last_working_day && !!lastDay
+    && ["Resigned", "Terminated"].includes(selEmp.status)
+    && lastDay !== selEmp.last_working_day;
+
   const noticeDaysServed = useMemo(() => calendarDaysBetween(resignDate, lastDay), [resignDate, lastDay]);
   const noticeRemaining = Math.max(0, noticeRequired - noticeDaysServed);
   const noticeComplete = noticeDaysServed >= noticeRequired;
@@ -740,11 +746,40 @@ export default function FinalSettlement({ role }) {
             <div>
               <p className="text-xs text-slate-500 mb-1">Employee</p>
               <EmpPicker employees={employees} value={selEmp}
-                onChange={v => { setSelEmp(v); setOverrideMode(false); setPayoutMode("worked"); setCustomDays(""); setSalaryNotPayable(false); setAttendanceData([]); }} />
+                onChange={v => {
+                  setSelEmp(v); setOverrideMode(false); setPayoutMode("worked");
+                  setCustomDays(""); setSalaryNotPayable(false); setAttendanceData([]);
+                  // An already-separated employee has these dates on their
+                  // record, and every other screen (Timesheet, payroll) works
+                  // from them. Typing a different last working day here is a
+                  // legitimate thing to do, but it must not be the accidental
+                  // default -- an 8-day leaver settled as if they had worked
+                  // the whole month gets a full month's rest-day quota and
+                  // silently disagrees with their Timesheet.
+                  const sep = ["Resigned", "Terminated"].includes(v?.status);
+                  setSepType(sep && v.status === "Terminated" ? "termination" : "resignation");
+                  setResignDate(sep ? (v.termination_date || v.resignation_date || "") : "");
+                  setLastDay(sep ? (v.last_working_day || "") : "");
+                  setResignReason("");
+                }} />
             </div>
             {selEmp && (
               <div className="p-3 bg-slate-50 rounded-xl text-sm text-slate-600">
                 {selEmp.department} · {selEmp.branch} · <strong>{selEmp.staff_level}</strong> · {money(selEmp.salary)}/month
+                {["Resigned", "Terminated"].includes(selEmp.status) && (
+                  <span className="block text-xs text-slate-400 mt-0.5">
+                    On record: {selEmp.status}
+                    {selEmp.last_working_day ? ` · last working day ${selEmp.last_working_day}` : " · no last working day on file"}
+                  </span>
+                )}
+              </div>
+            )}
+            {lwdMismatch && (
+              <div className="p-3 rounded-xl bg-amber-50 text-amber-800 text-sm">
+                The last working day here ({lastDay}) is not the one on {selEmp.full_name}'s record
+                ({selEmp.last_working_day}). Every other screen — Timesheet, payroll — works from the
+                record, so the settlement will disagree with them: the period settled, the rest-day
+                quota and the weekly-off count all follow the date entered here.
               </div>
             )}
             <div>
@@ -926,7 +961,7 @@ export default function FinalSettlement({ role }) {
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm min-w-[620px]">
                       <thead className="bg-slate-50 text-slate-500">
-                        <tr>{["Month", "Present", "Weekly Off", "Absent", "Earnings", "Deductions", "Net"].map(h => (
+                        <tr>{["Month", "Present", "Weekly Off", "Rest-day Quota", "Absent", "Earnings", "Deductions", "Net"].map(h => (
                           <th key={h} className={`px-3 py-2 font-medium ${h === "Month" ? "text-left" : "text-right"}`}>{h}</th>
                         ))}</tr>
                       </thead>
@@ -936,6 +971,10 @@ export default function FinalSettlement({ role }) {
                             <td className="px-3 py-2 font-medium">{l.payroll_month}</td>
                             <td className="px-3 py-2 text-right tabular-nums">{l.present_days}</td>
                             <td className="px-3 py-2 text-right tabular-nums">{l.weekly_offs}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-slate-400"
+                              title="Rest days this employee was entitled to in this month, prorated by the days they were employed. A no-show is only forgiven while the quota has room left.">
+                              {l.rest_day_quota ?? "—"}
+                            </td>
                             <td className="px-3 py-2 text-right tabular-nums">{l.absent_days}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{money(l.gross)}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-red-500">{money(l.deductions)}</td>
@@ -945,7 +984,7 @@ export default function FinalSettlement({ role }) {
                         {calc.holdLines.map(l => (
                           <tr key={`hold-${l.payroll_month}`} className="bg-amber-50/40">
                             <td className="px-3 py-2 font-medium">{l.payroll_month} <span className="text-xs text-amber-700">held salary</span></td>
-                            <td className="px-3 py-2" colSpan={3} />
+                            <td className="px-3 py-2" colSpan={4} />
                             <td className="px-3 py-2 text-right tabular-nums text-emerald-600">{money(l.gross)}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-slate-300">—</td>
                             <td className="px-3 py-2 text-right tabular-nums font-semibold">{money(l.net)}</td>

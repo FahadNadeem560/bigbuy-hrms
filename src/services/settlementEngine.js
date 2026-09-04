@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 import { computePayrollForMonth } from "./payrollEngine.js";
+import { monthlyOffDayQuota, isOffDayCapExempt } from "../utils/attendanceRules.js";
 
 // Works out what a leaver is actually owed.
 //
@@ -149,7 +150,22 @@ export async function buildSettlement({
     });
     const r = rows?.[0];
     if (!r) continue;
+    // The rest-day entitlement the engine used for this month. Surfaced so a
+    // settlement's weekly-off count can be checked against the Timesheet's
+    // without guessing: the two only ever disagree when they are working from
+    // different tenure dates, and the quota is what that difference moves.
+    const mStart = firstDayOf(m);
+    const mEnd = lastDayOf(m);
+    const inMonth = (d) => d && d >= mStart && d <= mEnd;
+    const restDayQuota = monthlyOffDayQuota(
+      employee?.weekly_off_day ?? null, mStart, isOffDayCapExempt(employee),
+      {
+        start: inMonth(employee?.joining_date) ? employee.joining_date : null,
+        end: inMonth(lastWorkingDay) ? lastWorkingDay : null,
+      },
+    );
     monthLines.push({
+      rest_day_quota: restDayQuota,
       payroll_month: m,
       line_type: "month",
       label: null,
