@@ -41,20 +41,40 @@ const MONTHLY_WEEKLY_OFF_QUOTA = 4;
 // one is ever paid more than this many EWDs (explicit policy, 2026-09-03).
 const MAX_EWD_PER_MONTH = 4;
 
-// A weekly off is one day per week, so an employee whose roster off-day falls
-// five times in a month -- five Sundays in August 2026 -- is entitled to five
-// rest days that month, not four. MONTHLY_WEEKLY_OFF_QUOTA is the floor, not
-// the answer: generate_employee_work_rosters already exempts Management /
-// Warehouse from the flat cap server-side, and this carries that same
-// exemption into the client-side gate, which never had it.
+// Whether an employee is exempt from the flat 4-a-month off-day cap. Mirrors
+// the `is_exempt` expression in generate_employee_work_rosters exactly -- the
+// server generates that employee's fixed off day every week regardless of how
+// many times it falls in the month, so the client-side quota has to grant the
+// same number of rest days or the two disagree about what the employee was
+// owed. Any change here must be made in the SQL function too.
+export function isOffDayCapExempt(emp) {
+  if (!emp) return false;
+  return emp.staff_level === "Management" || /warehouse/i.test(emp.department || "");
+}
+
+// The month's off-day entitlement. Company policy (reaffirmed 2026-09-04):
+// every employee gets at most MONTHLY_WEEKLY_OFF_QUOTA unpaid rest days per
+// calendar month -- a 5th occurrence of their off-day is a real absence, not
+// another free day off -- so an employee who already received 4 rest days has
+// no quota room left and cannot also be paid an Extra Working Day.
 //
-// Confirmed against employee 1157 (Warehouse, Sunday off), August 2026: five
-// Sundays, three taken off and two worked straight through. Under the flat 4,
-// the three real Weekly Offs plus the first worked Sunday exhausted the quota
-// and the second worked Sunday earned nothing -- 1 EWD where 2 were due.
-export function monthlyOffDayQuota(weeklyOffDay, rangeStart) {
+// The one exception is an exempt employee (see isOffDayCapExempt): their fixed
+// off day always counts, so five Sundays in the month means five rest days,
+// and the flat 4 becomes a floor rather than the answer. Confirmed against
+// employee 1157 (Warehouse, Sunday off), August 2026: five Sundays, three
+// taken off and two worked straight through -- under a flat 4 the three real
+// Weekly Offs plus the first worked Sunday exhausted the quota and the second
+// worked Sunday earned nothing, 1 EWD where 2 were due.
+//
+// The non-exempt cap was previously applied to everyone as max(4, occurrences)
+// with no exemption check at all, which handed every non-exempt employee whose
+// off-day fell 5 times a 5th rest day the server had already capped away
+// (confirmed: employee 3049, July 2026 -- Thursday off, 5 Thursdays, quota 5
+// against 2 real Weekly Offs + 2 forgiven absences, so a zero-rest block still
+// found room and paid 1 EWD on top of a full 4 rest days).
+export function monthlyOffDayQuota(weeklyOffDay, rangeStart, isExempt = false) {
   const dow = Number(weeklyOffDay);
-  if (!rangeStart || weeklyOffDay == null || weeklyOffDay === ""
+  if (!isExempt || !rangeStart || weeklyOffDay == null || weeklyOffDay === ""
       || !Number.isInteger(dow) || dow < 0 || dow > 6) {
     return MONTHLY_WEEKLY_OFF_QUOTA;
   }
@@ -72,15 +92,19 @@ export function monthlyOffDayQuota(weeklyOffDay, rangeStart) {
   return Math.max(MONTHLY_WEEKLY_OFF_QUOTA, count);
 }
 
-// One quota per employee present in the bucketing. weeklyOffDayByEmp is the
-// multi-employee (payroll) form; weeklyOffDay the scalar single-employee one.
-function resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, rangeStart }) {
+// One quota per employee present in the bucketing. weeklyOffDayByEmp /
+// offDayCapExemptByEmp are the multi-employee (payroll) form; weeklyOffDay /
+// offDayCapExempt the scalar single-employee one. An employee missing from
+// the exemption map is treated as non-exempt (the flat cap), which is the
+// safe default: it never grants a rest day the server didn't roster.
+function resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart }) {
   const quotas = {};
   Object.values(weeks).forEach((week) => {
     if (quotas[week.empPart] !== undefined) return;
     const code = week.empPart ? week.empPart.slice(0, -1) : null;
     const day = (weeklyOffDayByEmp && code != null) ? weeklyOffDayByEmp[code] : weeklyOffDay;
-    quotas[week.empPart] = monthlyOffDayQuota(day, rangeStart || fmtDate(week.blockStart));
+    const exempt = (offDayCapExemptByEmp && code != null) ? !!offDayCapExemptByEmp[code] : !!offDayCapExempt;
+    quotas[week.empPart] = monthlyOffDayQuota(day, rangeStart || fmtDate(week.blockStart), exempt);
   });
   return quotas;
 }
@@ -179,9 +203,9 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
 // `${employee_code}|${date}` (with employeeKey) for rows that should read
 // as "Weekly Off" instead of "Absent".
 export function getWeeklyOffOverrideKeys(rows, opts = {}) {
-  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null } = opts;
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null, offDayCapExemptByEmp = null, offDayCapExempt = false } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
-  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, rangeStart });
+  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart });
 
   // Company policy (2026-08-29): an employee is entitled to up to
   // MONTHLY_WEEKLY_OFF_QUOTA unpaid rest days per calendar month. Every lone
@@ -246,11 +270,13 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // so it never earns a bonus for "no rest taken" even if fully worked.
 //
 // Also gated on the employee's monthly weekly-off quota (see
-// MONTHLY_WEEKLY_OFF_QUOTA): if they've already received their full 4-a-month
-// entitlement elsewhere -- even unevenly, e.g. worked through one week and
-// were given 2 off days back-to-back the next to make up for it -- a block
-// with no off day of its own was already compensated and doesn't separately
-// earn a bonus.
+// monthlyOffDayQuota -- 4 for everyone except an exempt Management/Warehouse
+// employee): if they've already received their full monthly entitlement
+// elsewhere -- even unevenly, e.g. worked through one week and were given
+// 2 off days back-to-back the next to make up for it -- a block with no off
+// day of its own was already compensated and doesn't separately earn a bonus.
+// So a non-exempt employee with 4 rest days in the month can never be paid an
+// EWD, however many zero-rest blocks they have.
 //
 // A block containing a "Gazetted Holiday" status day (a paid public holiday
 // the employee did NOT work) is excluded like a Weekly Off / Leave block --
@@ -285,9 +311,9 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 // partial calendar block they joined in (confirmed: employee 3052, joined
 // 2026-07-02 -- July's 1-7 block had rows only for the 2nd-7th and paid 1 EWD).
 export function getFullyWorkedBlockKeys(rows, opts = {}) {
-  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, employmentBounds = null, employmentStart = null, employmentEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null } = opts;
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, employmentBounds = null, employmentStart = null, employmentEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null, offDayCapExemptByEmp = null, offDayCapExempt = false } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
-  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, rangeStart });
+  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart });
 
   // Forgiven lone absences count toward the same quota as real Weekly Offs
   // (see comment above) -- tallied per employee from the same override set
@@ -384,11 +410,14 @@ export function buildLedger({ emp, attendance, holidayDates, fromDate, toDate })
     return { work_date: date, attendance_status: isHoliday ? "Gazetted Holiday" : "Absent", is_synthetic: true };
   }).filter(Boolean);
 
+  // Same exemption payroll applies, so the Timesheet's rest-day count and
+  // Extra Working Days never disagree with the payslip's.
+  const offDayCapExempt = isOffDayCapExempt(emp);
   const overrideDates = getWeeklyOffOverrideKeys(base, {
-    rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null,
+    rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null, offDayCapExempt,
   });
   const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
-    rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null,
+    rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null, offDayCapExempt,
     employmentStart: (joinDate && joinDate >= effFrom && joinDate <= effTo) ? joinDate : null,
     employmentEnd: (exitDate && exitDate >= effFrom && exitDate <= effTo) ? exitDate : null,
   });

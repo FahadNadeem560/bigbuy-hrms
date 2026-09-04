@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 import { calculatePayrollForEmployee, getWorkingDaysInMonth, OT_SHORT_MIN_HOURS } from "../utils/payrollRules.js";
-import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys } from "../utils/attendanceRules.js";
+import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys, isOffDayCapExempt } from "../utils/attendanceRules.js";
 import { calcRemainingLeaveBalance } from "../utils/leaveBalance.js";
 
 // The monthly payroll calculation, lifted verbatim out of PayrollAutomation.jsx
@@ -166,11 +166,16 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
   // getWeeklyOffOverrideKeys) — otherwise absentDeduction in payrollRules.js
   // would wrongly dock a day's pay for it. Applied here so it's consistent
   // with the same rule on the Timesheet and Final Settlement pages.
-  // Per-employee rest-day entitlement: an employee whose roster off-day falls
-  // 5 times in the month is owed 5, not the flat 4 (see monthlyOffDayQuota).
+  // Per-employee rest-day entitlement: a flat 4 a month, except for a
+  // Management / Warehouse employee, who keeps every occurrence of their fixed
+  // off day and so is owed 5 in a month their off-day falls 5 times (see
+  // monthlyOffDayQuota / isOffDayCapExempt, which mirror the server-side
+  // is_exempt rule in generate_employee_work_rosters).
   const weeklyOffDayByEmp = Object.fromEntries((employees || [])
     .map(e => [e.employee_code, e.weekly_off_day]));
-  const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, weeklyOffDayByEmp });
+  const offDayCapExemptByEmp = Object.fromEntries((employees || [])
+    .map(e => [e.employee_code, isOffDayCapExempt(e)]));
+  const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, weeklyOffDayByEmp, offDayCapExemptByEmp });
 
   // Extra Working Days: a block worked straight through with no rest at
   // all (see getFullyWorkedBlockKeys) -- replaces trusting attendance.
@@ -193,7 +198,7 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
       end: (["Resigned", "Terminated"].includes(e.status) && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate) ? e.last_working_day : null,
     },
   ]));
-  const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds, weeklyOffDayByEmp });
+  const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds, weeklyOffDayByEmp, offDayCapExemptByEmp });
 
   // Attendance is generated daily for every employee regardless of
   // resignation status (confirmed: a resigned employee's post-departure
