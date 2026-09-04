@@ -352,27 +352,37 @@ function SettlementsLedger({ role }) {
   const branchOptions = useMemo(() => Array.from(new Set(rows.map(r => r.branch).filter(Boolean))).sort(), [rows]);
 
   const totals = useMemo(() => {
-    const fnfRows = filtered.filter(r => r.payment_status === "FnF");
     const sum = list => list.reduce((s, r) => s + Number(r.net_payable || 0), 0);
-    const payable = sum(fnfRows);
-    const paid = sum(fnfRows.filter(r => r.is_paid));
+    // A rejected settlement is not owed and a reversed one was undone, so
+    // neither is money the company still has to find. They were both landing
+    // in Total Payable, and therefore in Outstanding -- a rejection made the
+    // figure go up rather than down.
+    const owed = filtered.filter(r => r.payment_status === "FnF"
+      && !r.is_reversed && r.approval_status !== "Rejected");
+    const payable = sum(owed);
+    const paid = sum(owed.filter(r => r.is_paid));
     // Money HR has computed but nobody has released yet -- it cannot be paid
     // until Master/GM approve it, so it is worth showing separately from the
     // approved-but-unpaid outstanding balance.
-    const awaiting = sum(fnfRows.filter(r => (r.approval_status || "Pending Approval") === "Pending Approval"));
-    return { fnfCount: fnfRows.length, payable, paid, awaiting, outstanding: payable - paid };
+    const awaiting = sum(owed.filter(r => (r.approval_status || "Pending Approval") === "Pending Approval"));
+    const rejected = sum(filtered.filter(r => r.payment_status === "FnF"
+      && !r.is_reversed && r.approval_status === "Rejected"));
+    return { fnfCount: owed.length, payable, paid, awaiting, rejected, outstanding: payable - paid };
   }, [filtered]);
 
   return (
     <div>
       <SettlementSlipModal row={slip} onClose={() => setSlip(null)} />
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      <div className={`grid grid-cols-2 gap-3 mb-4 ${totals.rejected > 0 ? "md:grid-cols-6" : "md:grid-cols-5"}`}>
         {[
           ["F&F Settlements", totals.fnfCount],
           ["Total Payable", money(totals.payable)],
           ["Awaiting Approval", money(totals.awaiting)],
           ["Already Paid", money(totals.paid)],
           ["Outstanding", money(totals.outstanding)],
+          // Only worth a tile when there is something in it -- otherwise a
+          // permanent "Rs. 0 Rejected" box on a clean ledger.
+          ...(totals.rejected > 0 ? [["Rejected — not payable", money(totals.rejected)]] : []),
         ].map(([label, value]) => (
           <div key={label} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
             <p className="text-xs text-slate-500">{label}</p>

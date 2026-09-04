@@ -118,7 +118,9 @@ export default function FinanceReconciliation({ role, month, setMonth, actorName
       if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, pendingFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 };
       if (s.payment_status !== "FnF") acc[b].noFnf += s.netPayable;
       else if (s.isApproved) acc[b].payable += s.netPayable;
-      else acc[b].pendingFnf += s.netPayable;
+      // Only genuinely-waiting money counts as pending. A rejected settlement
+      // is not owed at all, and an "else" here put it in the pending column.
+      else if (s.approval_status === "Pending Approval") acc[b].pendingFnf += s.netPayable;
     });
     Object.keys(incentiveByBranch).forEach(b => { if (!acc[b]) acc[b] = { branch: b, payable: 0, hold: 0, noFnf: 0, pendingFnf: 0, loan: 0, advance: 0, tax: 0, eobi: 0, overtime: 0 }; });
     return Object.values(acc).map(b => ({
