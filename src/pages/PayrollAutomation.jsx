@@ -32,13 +32,13 @@ function PublishModal({ month, onConfirm, onCancel }) {
         <div className="text-2xl mb-3">⚠️</div>
         <h2 className="font-bold text-slate-800 text-lg mb-2">Publish Payroll</h2>
         <p className="text-slate-600 text-sm mb-4">
-          You are about to publish payroll for <strong>{month}</strong>.<br /><br />
+          You are about to publish the approved payroll for <strong>{month}</strong>.<br /><br />
           After publishing:
         </p>
         <ul className="text-sm text-slate-600 space-y-1 mb-5 list-disc pl-5">
-          <li>No changes can be made by HR</li>
-          <li>Payroll will be visible to Finance</li>
-          <li>Only Master can approve any corrections</li>
+          <li>Payroll becomes visible to Finance, who can then mark it paid</li>
+          <li>Payslip notifications go out to every employee being paid</li>
+          <li>Return to Draft is gone — corrections need a Master unlock</li>
         </ul>
         <p className="text-sm font-semibold text-slate-800 mb-4">Are you absolutely sure?</p>
         <div className="flex gap-3">
@@ -575,7 +575,7 @@ function VerificationPanel({ month, role, verifications, flagNotifications, onRe
       </div>
       <p className="text-xs text-slate-500">
         {progress.flagsRaised} flag{progress.flagsRaised !== 1 ? "s" : ""} raised · {progress.pendingHRResponse} pending HR response
-        {progress.confirmed === progress.total && progress.total > 0 && <span className="text-emerald-600 font-medium ml-2">All supervisors have verified. Ready to publish.</span>}
+        {progress.confirmed === progress.total && progress.total > 0 && <span className="text-emerald-600 font-medium ml-2">All supervisors have verified. Ready for Master to approve.</span>}
       </p>
       {["HR", "Master"].includes(role) && flagNotifications.filter(n => !n.is_read).length > 0 && (
         <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
@@ -648,10 +648,24 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
 
   const isPublished = payrollStatus === "Published" || payrollStatus === "Locked" || payrollStatus === "Completed";
   const isLocked = !!lockInfo?.is_locked;
-  const canGenerate = ["Master", "HR"].includes(role) && !isPublished && !isLocked;
-  const canRefresh  = ["Master", "HR"].includes(role) && !isPublished && !isLocked;
-  const canPublish  = role === "Master" && !isPublished && payrollRows.length > 0 && !isLocked;
+  // Approve freezes the figures. It used to be a label with nothing behind it
+  // -- HR could Refresh straight over an "Approved" month and the numbers
+  // Master signed off on changed with no trace. Now it is the gate: approving
+  // shuts HR out and is what makes Publish available.
+  const isApproved  = payrollStatus === "Approved";
+  const isFrozen    = isApproved || isPublished;
+  const canGenerate = ["Master", "HR"].includes(role) && !isFrozen && !isLocked;
+  const canRefresh  = ["Master", "HR"].includes(role) && !isFrozen && !isLocked;
   const canApprove  = role === "Master" && payrollStatus === "Draft" && !isLocked;
+  // A bad approval must not be a dead end -- Master can reopen the month for
+  // HR right up until it is published.
+  const canUnapprove = role === "Master" && isApproved && !isLocked;
+  const canPublish  = role === "Master" && isApproved && payrollRows.length > 0 && !isLocked;
+  const frozenReason =
+    isLocked    ? "Payroll is locked for this month. Master must unlock it first."
+    : isPublished ? "Payroll is published for this month and can no longer be changed here."
+    : isApproved  ? "Payroll is approved and frozen. Master must return it to Draft before it can be regenerated."
+    : "";
 
   // Finance only sees Published payroll
   const financeBlocked = role === "Finance" && !isPublished;
@@ -772,7 +786,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
   const buildPayrollRows = () => computePayrollForMonth({ month, employees, loans });
 
   async function generatePayroll() {
-    if (!canGenerate) return setErr("Access denied.");
+    if (!canGenerate) return setErr(frozenReason || "Access denied.");
     setGenerating(true); setErr(""); setMsg("");
     try {
       const rows = await buildPayrollRows();
@@ -817,7 +831,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
   }
 
   async function refreshPayroll() {
-    if (!canRefresh) return setErr("Access denied.");
+    if (!canRefresh) return setErr(frozenReason || "Access denied.");
     setRefreshing(true); setErr(""); setMsg("");
     try {
       const rows = await buildPayrollRows();
@@ -914,10 +928,16 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
   }
 
   async function updateStatus(newStatus) {
-    if (newStatus === "Approved" && role !== "Master") return setErr("Only Master can approve payroll.");
-    await supabase.from("payroll").update({ status: newStatus }).eq("payroll_month", month);
+    if (role !== "Master") return setErr("Only Master can change the payroll status.");
+    if (isPublished) return setErr("Payroll is already published — its status cannot be changed here.");
+    if (isLocked) return setErr("Payroll is locked. Unlock it first.");
+    const { error } = await supabase.from("payroll").update({ status: newStatus }).eq("payroll_month", month);
+    if (error) return setErr(error.message);
     setPayrollStatus(newStatus);
-    setMsg(`Payroll marked as ${newStatus}.`);
+    setErr("");
+    setMsg(newStatus === "Approved"
+      ? `Payroll approved for ${month}. The figures are frozen — HR can no longer Generate or Refresh — and it is now ready to publish.`
+      : `Payroll returned to Draft for ${month}. HR can generate and refresh it again.`);
   }
 
   async function publishPayroll() {
@@ -1309,10 +1329,16 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
             {canApprove && displayRows.length > 0 && (
               <Button variant="outline" onClick={() => updateStatus("Approved")} className="rounded-2xl">Approve</Button>
             )}
+            {canUnapprove && (
+              <Button variant="outline" onClick={() => updateStatus("Draft")} className="rounded-2xl">Return to Draft</Button>
+            )}
             {canPublish && (
               <Button onClick={() => setShowPublishModal(true)} className="rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white">
                 Publish Payroll
               </Button>
+            )}
+            {role === "Master" && !isApproved && !isPublished && !isLocked && payrollRows.length > 0 && (
+              <span className="self-center text-xs text-slate-500">Approve the payroll to enable Publish.</span>
             )}
             {role === "Master" && isLocked && (
               <Button onClick={() => setShowUnlockModal(true)} variant="outline" className="rounded-2xl border-purple-200 text-purple-700">
@@ -1329,6 +1355,15 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
       </div>
 
       <BranchComparisonSummary month={month} />
+
+      {isApproved && (
+        <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">
+          ✔ Payroll is Approved for {month}. The figures are frozen — Generate and Refresh are off.
+          {role === "Master"
+            ? " Publish it, or use Return to Draft to reopen it for HR."
+            : " Ask Master to return it to Draft if it needs changing."}
+        </div>
+      )}
 
       {isPublished && role !== "Finance" && (
         <div className="mb-3 p-3 rounded-xl bg-purple-50 text-purple-700 text-sm">
