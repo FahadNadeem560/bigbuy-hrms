@@ -81,12 +81,22 @@ export function isOffDayCapExempt(emp) {
 // (confirmed: employee 3049, July 2026 -- Thursday off, 5 Thursdays, quota 5
 // against 2 real Weekly Offs + 2 forgiven absences, so a zero-rest block still
 // found room and paid 1 EWD on top of a full 4 rest days).
-export function monthlyOffDayQuota(weeklyOffDay, rangeStart, isExempt = false) {
-  const dow = Number(weeklyOffDay);
-  if (!isExempt || !rangeStart || weeklyOffDay == null || weeklyOffDay === ""
-      || !Number.isInteger(dow) || dow < 0 || dow > 6) {
-    return MONTHLY_WEEKLY_OFF_QUOTA;
-  }
+// employment: `{ start, end }` -- the employee's joining_date / last working
+// day when either falls inside this month, else null on that side. A month
+// the employee was only employed for part of earns only part of the quota,
+// rounded: the entitlement is "4 rest days for a month worked", not "4 free
+// days for any month you appear in". Without this a leaver's stub month gets
+// a full month's forgiveness room and their no-shows come out free -- the
+// quota is spent on absences their own off-day never had the chance to claim
+// (confirmed: employee 2061, Warehouse, Sunday off, last working day
+// 2026-07-08 -- one Sunday inside those 8 days used 1 of 4, and the 3 spare
+// slots forgave his 07-01 no-show, showing 2 weekly offs against 6 present).
+//
+// This is deliberately NOT driven by the caller's query window: a full-month
+// employee whose ledger is clamped to a fortnight still has the whole month's
+// entitlement. Only real tenure shortens it.
+export function monthlyOffDayQuota(weeklyOffDay, rangeStart, isExempt = false, employment = null) {
+  if (!rangeStart) return MONTHLY_WEEKLY_OFF_QUOTA;
   // Counted across the whole calendar month the range starts in, because the
   // entitlement is monthly: a caller whose window is clamped to part of the
   // month (a mid-month joiner's ledger) must not thereby see a smaller quota.
@@ -94,11 +104,26 @@ export function monthlyOffDayQuota(weeklyOffDay, rangeStart, isExempt = false) {
   const y = start.getFullYear();
   const m = start.getMonth();
   const daysInMonth = new Date(y, m + 1, 0).getDate();
-  let count = 0;
-  for (let d = 1; d <= daysInMonth; d++) {
-    if (new Date(y, m, d).getDay() === dow) count++;
+
+  const dow = Number(weeklyOffDay);
+  let base = MONTHLY_WEEKLY_OFF_QUOTA;
+  if (isExempt && weeklyOffDay != null && weeklyOffDay !== ""
+      && Number.isInteger(dow) && dow >= 0 && dow <= 6) {
+    let count = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      if (new Date(y, m, d).getDay() === dow) count++;
+    }
+    base = Math.max(MONTHLY_WEEKLY_OFF_QUOTA, count);
   }
-  return Math.max(MONTHLY_WEEKLY_OFF_QUOTA, count);
+
+  const sd = employment?.start ? new Date(employment.start + "T00:00:00") : null;
+  const ed = employment?.end   ? new Date(employment.end   + "T00:00:00") : null;
+  const inMonth = (d) => d && d.getFullYear() === y && d.getMonth() === m;
+  const startDay = inMonth(sd) ? sd.getDate() : 1;
+  const endDay   = inMonth(ed) ? ed.getDate() : daysInMonth;
+  if (startDay <= 1 && endDay >= daysInMonth) return base;
+  const employedDays = Math.max(0, endDay - startDay + 1);
+  return Math.max(0, Math.round((base * employedDays) / daysInMonth));
 }
 
 // One quota per employee present in the bucketing. weeklyOffDayByEmp /
@@ -106,14 +131,18 @@ export function monthlyOffDayQuota(weeklyOffDay, rangeStart, isExempt = false) {
 // offDayCapExempt the scalar single-employee one. An employee missing from
 // the exemption map is treated as non-exempt (the flat cap), which is the
 // safe default: it never grants a rest day the server didn't roster.
-function resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart }) {
+function resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart, employmentBounds, employmentStart, employmentEnd }) {
   const quotas = {};
+  const scalarBounds = (employmentStart || employmentEnd) ? { start: employmentStart, end: employmentEnd } : null;
   Object.values(weeks).forEach((week) => {
     if (quotas[week.empPart] !== undefined) return;
     const code = week.empPart ? week.empPart.slice(0, -1) : null;
     const day = (weeklyOffDayByEmp && code != null) ? weeklyOffDayByEmp[code] : weeklyOffDay;
     const exempt = (offDayCapExemptByEmp && code != null) ? !!offDayCapExemptByEmp[code] : !!offDayCapExempt;
-    quotas[week.empPart] = monthlyOffDayQuota(day, rangeStart || fmtDate(week.blockStart), exempt);
+    // Same tenure bounds the EWD side already uses, so a partial month
+    // shortens the quota on both the forgiveness and the earning side at once.
+    const bounds = (employmentBounds && code != null) ? employmentBounds[code] : scalarBounds;
+    quotas[week.empPart] = monthlyOffDayQuota(day, rangeStart || fmtDate(week.blockStart), exempt, bounds);
   });
   return quotas;
 }
@@ -212,9 +241,9 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
 // `${employee_code}|${date}` (with employeeKey) for rows that should read
 // as "Weekly Off" instead of "Absent".
 export function getWeeklyOffOverrideKeys(rows, opts = {}) {
-  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null, offDayCapExemptByEmp = null, offDayCapExempt = false } = opts;
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, employmentBounds = null, employmentStart = null, employmentEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null, offDayCapExemptByEmp = null, offDayCapExempt = false } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
-  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart });
+  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart, employmentBounds, employmentStart, employmentEnd });
 
   // Company policy (2026-08-29): an employee is entitled to up to
   // MONTHLY_WEEKLY_OFF_QUOTA unpaid rest days per calendar month. Every lone
@@ -322,7 +351,7 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
 export function getFullyWorkedBlockKeys(rows, opts = {}) {
   const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null, employmentBounds = null, employmentStart = null, employmentEnd = null, weeklyOffDayByEmp = null, weeklyOffDay = null, offDayCapExemptByEmp = null, offDayCapExempt = false } = opts;
   const { weeks, monthlyWeeklyOffCount } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
-  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart });
+  const quotas = resolveQuotas(weeks, { weeklyOffDayByEmp, weeklyOffDay, offDayCapExemptByEmp, offDayCapExempt, rangeStart, employmentBounds, employmentStart, employmentEnd });
 
   // Forgiven lone absences count toward the same quota as real Weekly Offs
   // (see comment above) -- tallied per employee from the same override set
@@ -424,6 +453,8 @@ export function buildLedger({ emp, attendance, holidayDates, fromDate, toDate })
   const offDayCapExempt = isOffDayCapExempt(emp);
   const overrideDates = getWeeklyOffOverrideKeys(base, {
     rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null, offDayCapExempt,
+    employmentStart: (joinDate && joinDate >= effFrom && joinDate <= effTo) ? joinDate : null,
+    employmentEnd: (exitDate && exitDate >= effFrom && exitDate <= effTo) ? exitDate : null,
   });
   const fullyWorkedBlockKeys = getFullyWorkedBlockKeys(base, {
     rangeStart: effFrom, rangeEnd: effTo, weeklyOffDay: emp?.weekly_off_day ?? null, offDayCapExempt,

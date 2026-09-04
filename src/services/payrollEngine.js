@@ -175,7 +175,21 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
     .map(e => [e.employee_code, e.weekly_off_day]));
   const offDayCapExemptByEmp = Object.fromEntries((employees || [])
     .map(e => [e.employee_code, isOffDayCapExempt(e)]));
-  const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, weeklyOffDayByEmp, offDayCapExemptByEmp });
+  // Per-employee tenure window. Used by both the forgiveness side below and
+  // the EWD side further down: a month the employee was only employed part of
+  // earns only part of the rest-day quota, so a leaver's stub month can't
+  // spend a whole month's forgiveness room on its no-shows.
+  // joining_date / last_working_day are only trusted when they actually fall
+  // in this month, mirroring the proration guard further down (a stale/rehire
+  // date from a later stint would otherwise wrongly shorten every month).
+  const employmentBounds = Object.fromEntries((employees || []).map(e => [
+    e.employee_code,
+    {
+      start: (e.joining_date && e.joining_date >= fromDate && e.joining_date <= toDate) ? e.joining_date : null,
+      end: (["Resigned", "Terminated"].includes(e.status) && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate) ? e.last_working_day : null,
+    },
+  ]));
+  const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds, weeklyOffDayByEmp, offDayCapExemptByEmp });
 
   // Extra Working Days: a block worked straight through with no rest at
   // all (see getFullyWorkedBlockKeys) -- replaces trusting attendance.
@@ -184,20 +198,9 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
   // "day off" means the same thing on both the earning and deduction
   // side of payroll instead of trusting the roster for one and a
   // behavior-based guess for the other.
-  // Per-employee tenure window so a block that predates a mid-month joiner
-  // (or follows a mid-month leaver) isn't credited an EWD just because the
-  // days outside their tenure have no attendance row -- see
-  // getFullyWorkedBlockKeys. joining_date / last_working_day are only trusted
-  // when they actually fall in this month, mirroring the proration guard
-  // further down (a stale/rehire date from a later stint would otherwise
-  // wrongly suppress every block).
-  const employmentBounds = Object.fromEntries((employees || []).map(e => [
-    e.employee_code,
-    {
-      start: (e.joining_date && e.joining_date >= fromDate && e.joining_date <= toDate) ? e.joining_date : null,
-      end: (["Resigned", "Terminated"].includes(e.status) && e.last_working_day && e.last_working_day >= fromDate && e.last_working_day <= toDate) ? e.last_working_day : null,
-    },
-  ]));
+  // employmentBounds (built above) also stops a block that predates a
+  // mid-month joiner -- or follows a mid-month leaver -- being credited an
+  // EWD just because the days outside their tenure have no attendance row.
   const fullyWorkedBlocks = getFullyWorkedBlockKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds, weeklyOffDayByEmp, offDayCapExemptByEmp });
 
   // Attendance is generated daily for every employee regardless of
