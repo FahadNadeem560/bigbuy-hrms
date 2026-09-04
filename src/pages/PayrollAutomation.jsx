@@ -181,7 +181,25 @@ function PayslipModal({ row, month, onClose }) {
             <ERow label="Commission" value={row.commissionAddOn} />
             <ERow label="Fuel Allowance" value={row.fuelAllowance} />
             <ERow label="Other Earnings" value={row.otherEarnings} />
+            {/* Arrears and Absent Adjustment are one-time adjustments; both go
+                into totalEarnings but neither was listed here, so a payslip
+                carrying one didn't add up to its own total (employee 1897,
+                July 2026: 38,000 basic against 40,533 total, with the 2,533
+                arrears line nowhere on the slip). */}
+            <ERow label="Arrears" value={row.arrears} />
+            <ERow label="Absent Adjustment" value={row.absentAdjustment} />
             {!!row.leaveAdjustment && <ERow label="Leave's Adjustment (short hours/half day/absent covered from leave)" value={row.leaveAdjustment} />}
+            {/* Backstop: if a new earning is ever added to the engine and not
+                to this list, say so rather than showing a total nobody can
+                reconcile. */}
+            {(() => {
+              const listed = [row.basicSalary, row.extraWorkingDaysAmount, row.ghWorkedAmount, row.overtimeAmount,
+                row.commissionAddOn, row.fuelAllowance, row.otherEarnings, row.arrears,
+                row.absentAdjustment, row.leaveAdjustment]
+                .reduce((s, v) => s + Number(v || 0), 0);
+              const gap = Math.round(Number(row.totalEarnings || 0) - listed);
+              return gap !== 0 ? <ERow label="Unitemised earnings — check the payroll adjustments for this month" value={gap} /> : null;
+            })()}
             <div className="flex justify-between py-2 mt-1 bg-emerald-50 rounded-xl px-3">
               <span className="font-bold text-sm text-emerald-800">Total Earnings</span>
               <span className="font-bold text-sm text-emerald-800">{money(row.totalEarnings)}</span>
@@ -1106,6 +1124,7 @@ export default function PayrollAutomation({ role, actorName, initialTab }) {
       taxDeduction, eobiDeduction, otherDeductions, totalDeductions,
       finalSalary: totalEarnings - totalDeductions, gross: basicSalary,
       arrears: r.arrears || 0,
+      absentAdjustment: r.absentAdjustment || r.absent_adjustment || 0,
       ...deriveCheck(totalEarnings - totalDeductions, lastPayByCode[code] || 0),
     };
   }), [payrollRows, payrollStatus, empByCode, lastPayByCode]);
