@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-09-04-v14";
+const MIGRATION_VERSION = "2026-09-04-v15";
 let ran = false;
 
 export async function runMigrations() {
@@ -306,6 +306,23 @@ async function applyIncrementalMigrations() {
     `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`,
     `ALTER TABLE final_settlements ADD COLUMN IF NOT EXISTS rejection_reason TEXT`,
     `CREATE INDEX IF NOT EXISTS final_settlements_approval_status_idx ON public.final_settlements (approval_status)`,
+    // No F&F owes nothing, so there is no payable to approve -- those rows are
+    // Not Applicable rather than sitting on Pending Approval for ever (the
+    // Approval Queue only lists F&F, so nobody could action them).
+    `ALTER TABLE public.final_settlements DROP CONSTRAINT IF EXISTS final_settlements_approval_status_chk`,
+    `ALTER TABLE public.final_settlements ADD CONSTRAINT final_settlements_approval_status_chk CHECK (approval_status IN ('Pending Approval','Approved','Rejected','Not Applicable'))`,
+    `UPDATE public.final_settlements SET approval_status = 'Not Applicable' WHERE payment_status <> 'FnF' AND approval_status = 'Pending Approval'`,
+    `CREATE OR REPLACE FUNCTION public.final_settlement_set_approval_default() RETURNS trigger LANGUAGE plpgsql AS $fn$
+     BEGIN
+       IF new.payment_status IS DISTINCT FROM 'FnF'
+          AND coalesce(new.approval_status,'Pending Approval') = 'Pending Approval' THEN
+         new.approval_status := 'Not Applicable';
+       END IF;
+       RETURN new;
+     END;
+     $fn$`,
+    `DROP TRIGGER IF EXISTS final_settlement_set_approval_default_trg ON public.final_settlements`,
+    `CREATE TRIGGER final_settlement_set_approval_default_trg BEFORE INSERT ON public.final_settlements FOR EACH ROW EXECUTE FUNCTION public.final_settlement_set_approval_default()`,
     `ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_date DATE`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.final_settlements TO anon, authenticated`,
   ];

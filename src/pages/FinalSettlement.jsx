@@ -7,9 +7,12 @@ import { processFinalSettlement, fetchSettlementLines, markFinalSettlementPaid }
 
 // A processed settlement is not payable on its own -- HR initiates it, Master
 // or GM releases it in the Approval Queue, and only then can Finance pay it.
+// No F&F owes nothing, so there is no payable to approve: those rows are
+// "Not Applicable", not stuck waiting on someone.
 function ApprovalBadge({ status }) {
   if (status === "Approved") return <Badge tone="green">Approved</Badge>;
   if (status === "Rejected") return <Badge tone="red">Rejected</Badge>;
+  if (status === "Not Applicable") return <Badge tone="slate">Not Applicable</Badge>;
   return <Badge tone="yellow">Awaiting Approval</Badge>;
 }
 
@@ -240,6 +243,8 @@ function SettlementSlipModal({ row, onClose }) {
               ? `Approved · ${row.approved_by || "—"}${row.approved_at ? ` · ${new Date(row.approved_at).toLocaleDateString()}` : ""}`
               : row.approval_status === "Rejected"
               ? `Rejected · ${row.approved_by || "—"}${row.rejection_reason ? ` — ${row.rejection_reason}` : ""}`
+              : row.approval_status === "Not Applicable"
+              ? "Not applicable — nothing payable"
               : "Awaiting Master / GM approval"} />
             <IRow label="Paid" value={row.is_paid
               ? `Yes · ${row.paid_by || "—"}${row.paid_at ? ` · ${new Date(row.paid_at).toLocaleDateString()}` : ""}`
@@ -353,6 +358,7 @@ function SettlementsLedger({ role }) {
           <option value="Pending Approval">Awaiting Approval</option>
           <option value="Approved">Approved</option>
           <option value="Rejected">Rejected</option>
+          <option value="Not Applicable">Not Applicable (No F&F)</option>
         </select>
       </div>
 
