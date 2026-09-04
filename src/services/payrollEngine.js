@@ -123,6 +123,35 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
     scoped(supabase.from("leaves").select("employee_code, employee_id, opening_balance")),
     scoped(supabase.from("leave_requests").select("employee_code, leave_type, days, reason").eq("status", "Approved")),
   ]);
+  // employees.salary is only ever the salary as it stands TODAY. Recomputing
+  // an earlier month therefore paid it at a rate the employee wasn't on yet:
+  // employee 1867 (Zain) got a 22,000 -> 25,000 increment effective 18-Aug and
+  // July was regenerated at 25,000. Every approved change whose effective_from
+  // lands after this month ends is reversed out, earliest first, so the month
+  // is costed at the salary that was actually in force during it.
+  //
+  // "Downward Revision" rows live in the same table and are handled by the
+  // same rule -- what matters is the date the change took effect, not which
+  // direction the money moved.
+  const { data: laterSalaryChanges } = await scoped(
+    supabase.from("salary_increments")
+      .select("employee_code, old_salary, effective_from")
+      .eq("status", "Approved").gt("effective_from", toDate)
+      .order("effective_from", { ascending: true })
+  );
+  const salaryInForceByEmp = {};
+  (laterSalaryChanges || []).forEach(r => {
+    // Ordered by effective_from, so the first one seen per employee is the
+    // earliest change after this month -- its old_salary is what they were on.
+    if (salaryInForceByEmp[r.employee_code] === undefined) {
+      salaryInForceByEmp[r.employee_code] = Number(r.old_salary || 0);
+    }
+  });
+  const salaryInForce = (emp) => {
+    const past = salaryInForceByEmp[emp.employee_code];
+    return past !== undefined ? past : Number(emp.salary || 0);
+  };
+
   const skippedLoanIds = new Set((loanReliefData || []).map(r => r.loan_id));
   const groupByCode = Object.fromEntries((groupsData || []).map(g => [g.code, g]));
   const taxSettingByEmp = Object.fromEntries((taxSettingsData || []).map(t => [t.employee_code, t]));
@@ -388,7 +417,7 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
     const empMapped = {
       id: emp.employee_code, name: emp.full_name, branch: emp.branch,
       dept: emp.department, level: emp.staff_level || "Non-Management",
-      salary: emp.salary || 0, status: emp.status, joiningDate: emp.joining_date,
+      salary: salaryInForce(emp), status: emp.status, joiningDate: emp.joining_date,
       isAttendanceExempt: !!emp.is_attendance_exempt,
       extraDaysEligible,
       overtimeEligible,
