@@ -97,3 +97,52 @@ export async function markFinalSettlementPaid(settlementId) {
   const { error } = await supabase.rpc("mark_final_settlement_paid", { p_settlement_id: settlementId });
   if (error) throw error;
 }
+
+// ─── Paid vouchers ────────────────────────────────────────────────────────
+// Finance attaches the paid voucher before marking an F&F paid. The gate is
+// in mark_final_settlement_paid itself, not just the UI -- the RPC refuses a
+// settlement with no voucher attached.
+//
+// The bucket is private (vouchers carry bank/cash-payment detail), so nothing
+// is stored or returned as a public URL: the row keeps a storage path and it
+// is resolved to a short-lived signed URL on read, the same way loan
+// guarantee documents work.
+const VOUCHER_BUCKET = "settlement-vouchers";
+const VOUCHER_URL_TTL_SECONDS = 60 * 15;
+
+export async function uploadSettlementVoucher(settlementId, file, remarks, uploadedBy) {
+  const ext = (file.name.split(".").pop() || "dat").toLowerCase();
+  const path = `${settlementId}/${Date.now()}.${ext}`;
+  const { error: upErr } = await supabase.storage.from(VOUCHER_BUCKET).upload(path, file);
+  if (upErr) throw upErr;
+  // Only recorded once the file is actually in the bucket -- a row pointing at
+  // a failed upload would satisfy the mark-paid gate with no evidence behind it.
+  const { error } = await supabase.from("final_settlement_vouchers").insert({
+    settlement_id: settlementId, file_path: path,
+    remarks: remarks || null, uploaded_by: uploadedBy || null,
+  });
+  if (error) throw error;
+}
+
+// Returns the vouchers for a set of settlements, keyed by settlement_id, each
+// with a signed `url` ready to open.
+export async function fetchSettlementVouchers(settlementIds) {
+  const ids = (settlementIds || []).filter(Boolean);
+  if (ids.length === 0) return {};
+  const { data, error } = await supabase.from("final_settlement_vouchers")
+    .select("*").in("settlement_id", ids).order("uploaded_at", { ascending: true });
+  if (error) throw error;
+  const rows = data || [];
+  const paths = [...new Set(rows.map(r => r.file_path).filter(Boolean))];
+  let urlMap = {};
+  if (paths.length) {
+    const { data: signed } = await supabase.storage.from(VOUCHER_BUCKET)
+      .createSignedUrls(paths, VOUCHER_URL_TTL_SECONDS);
+    (signed || []).forEach(s => { if (s.signedUrl && !s.error) urlMap[s.path] = s.signedUrl; });
+  }
+  const bySettlement = {};
+  rows.forEach(r => {
+    (bySettlement[r.settlement_id] ||= []).push({ ...r, url: urlMap[r.file_path] || null });
+  });
+  return bySettlement;
+}

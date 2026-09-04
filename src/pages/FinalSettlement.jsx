@@ -3,7 +3,25 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 import { buildSettlement, DEDUCTION_COMPONENTS, sumMonthlyDeductions } from "../services/settlementEngine.js";
-import { processFinalSettlement, fetchSettlementLines, markFinalSettlementPaid } from "../services/finalSettlementService.js";
+import { processFinalSettlement, fetchSettlementLines, markFinalSettlementPaid,
+         uploadSettlementVoucher, fetchSettlementVouchers } from "../services/finalSettlementService.js";
+
+// Signed links to the paid voucher(s) behind a settlement. The bucket is
+// private, so these expire -- reopening the page re-signs them.
+function VoucherLinks({ list }) {
+  if (!list?.length) return <span className="text-xs text-slate-400">—</span>;
+  return (
+    <div className="flex flex-col gap-0.5">
+      {list.map((v, i) => (
+        <a key={v.id} href={v.url || undefined} target="_blank" rel="noreferrer"
+          title={v.remarks || ""}
+          className={`text-xs ${v.url ? "text-blue-600 hover:underline" : "text-slate-400"}`}>
+          Voucher {list.length > 1 ? i + 1 : ""} {v.uploaded_by ? `· ${v.uploaded_by}` : ""}
+        </a>
+      ))}
+    </div>
+  );
+}
 
 // A processed settlement is not payable on its own -- HR initiates it, Master
 // or GM releases it in the Approval Queue, and only then can Finance pay it.
@@ -84,9 +102,12 @@ function EmpPicker({ employees, value, onChange }) {
 // recomputed here; the figures are exactly what was locked in at settlement).
 function SettlementSlipModal({ row, onClose }) {
   const [lines, setLines] = useState([]);
+  const [slipVouchers, setSlipVouchers] = useState([]);
   useEffect(() => {
-    if (!row?.id) { setLines([]); return; }
+    if (!row?.id) { setLines([]); setSlipVouchers([]); return; }
     fetchSettlementLines(row.id).then(setLines).catch(() => setLines([]));
+    fetchSettlementVouchers([row.id])
+      .then(m => setSlipVouchers(m[row.id] || [])).catch(() => setSlipVouchers([]));
   }, [row?.id]);
   if (!row) return null;
   const isTerm = row.separation_type === "termination";
@@ -288,6 +309,12 @@ function SettlementSlipModal({ row, onClose }) {
               : row.approval_status === "Not Applicable"
               ? "Not applicable — nothing payable"
               : "Awaiting Master / GM approval"} />
+            {slipVouchers.length > 0 && (
+              <div className="flex justify-between py-1.5 border-b border-slate-100">
+                <span className="text-slate-500 text-sm">Paid Voucher</span>
+                <span className="text-sm text-right"><VoucherLinks list={slipVouchers} /></span>
+              </div>
+            )}
             <IRow label="Paid" value={row.is_paid
               ? `Yes · ${row.paid_by || "—"}${row.paid_at ? ` · ${new Date(row.paid_at).toLocaleDateString()}` : ""}`
               : "Not yet paid"} />
@@ -304,8 +331,10 @@ function SettlementSlipModal({ row, onClose }) {
 // payroll table (see final_settlements / loadBase in PayrollAutomation.jsx).
 // Its own payable line: only F&F rows are actually owed anything -- No F&F
 // is a record of zero/forfeited settlement, nothing to mark paid.
-function SettlementsLedger({ role }) {
+function SettlementsLedger({ role, actorName }) {
   const [rows, setRows] = useState([]);
+  const [vouchers, setVouchers] = useState({});
+  const [uploadingId, setUploadingId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [monthFilter, setMonthFilter] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
@@ -325,7 +354,22 @@ function SettlementsLedger({ role }) {
     ]);
     const nameByCode = Object.fromEntries((emps || []).map(e => [e.employee_code, e.full_name]));
     setRows((settlements || []).map(s => ({ ...s, employee_name: nameByCode[s.employee_code] || s.employee_code })));
+    // Signed voucher URLs expire, so they are fetched with the ledger rather
+    // than cached anywhere.
+    try {
+      setVouchers(await fetchSettlementVouchers((settlements || []).map(s => s.id)));
+    } catch { setVouchers({}); }
     setLoading(false);
+  }
+
+  async function uploadVoucher(row, file) {
+    if (!file) return;
+    setUploadingId(row.id); setErr("");
+    try {
+      await uploadSettlementVoucher(row.id, file, null, actorName || role);
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setUploadingId(null); }
   }
   useEffect(() => { load(); }, []);
 
@@ -422,13 +466,13 @@ function SettlementsLedger({ role }) {
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full min-w-[1000px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
-                <tr>{["Employee", "Type", "Branch", "Department", "Last Working Day", "Month", "Status", "Approval", "Net Payable", "Paid", "Action"].map(h =>
+                <tr>{["Employee", "Type", "Branch", "Department", "Last Working Day", "Month", "Status", "Approval", "Net Payable", "Paid", "Voucher", "Action"].map(h =>
                   <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.length === 0
-                  ? <tr><td colSpan={11} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
+                  ? <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
                   : filtered.map(r => (
                     <tr key={r.id} onClick={() => setSlip(r)} className="hover:bg-slate-50 cursor-pointer">
                       <td className="px-4 py-3 font-medium">{r.employee_name} <span className="text-xs text-slate-400">({r.employee_code})</span></td>
@@ -453,11 +497,26 @@ function SettlementsLedger({ role }) {
                         {r.is_paid ? <Badge tone="green">Paid</Badge> : <span className="text-slate-400 text-xs">Unpaid</span>}
                       </td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                        <VoucherLinks list={vouchers[r.id]} />
+                      </td>
+                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         {r.payment_status === "FnF" && !r.is_paid && canMarkPaid && (
                           r.approval_status === "Approved" ? (
-                            <Button onClick={() => markPaid(r)} disabled={marking === r.id} className="rounded-lg text-xs py-1 px-2">
-                              {marking === r.id ? "Marking…" : "Mark Paid"}
-                            </Button>
+                            // Mark Paid only appears once the paid voucher is
+                            // attached. mark_final_settlement_paid refuses it
+                            // anyway, so this is the explanation, not the gate.
+                            vouchers[r.id]?.length ? (
+                              <Button onClick={() => markPaid(r)} disabled={marking === r.id} className="rounded-lg text-xs py-1 px-2">
+                                {marking === r.id ? "Marking…" : "Mark Paid"}
+                              </Button>
+                            ) : (
+                              <label className={`inline-block rounded-lg text-xs py-1 px-2 border border-slate-200 cursor-pointer hover:bg-slate-50 ${uploadingId === r.id ? "opacity-60 pointer-events-none" : ""}`}
+                                title="Attach the paid voucher (image or PDF) before marking this settlement paid.">
+                                <input type="file" className="hidden" accept="image/*,application/pdf"
+                                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; uploadVoucher(r, f); }} />
+                                {uploadingId === r.id ? "Uploading…" : "Upload Voucher"}
+                              </label>
+                            )
                           ) : (
                             // Nothing is payable until it clears approval, and a
                             // greyed-out button with no reason is what sent people
@@ -482,7 +541,7 @@ function SettlementsLedger({ role }) {
   );
 }
 
-export default function FinalSettlement({ role }) {
+export default function FinalSettlement({ role, actorName }) {
   const [innerTab, setInnerTab] = useState("process");
   const [employees, setEmployees] = useState([]);
   const [selEmp, setSelEmp] = useState(null);
@@ -731,7 +790,7 @@ export default function FinalSettlement({ role }) {
         ))}
       </div>
 
-      {innerTab === "ledger" ? <SettlementsLedger role={role} /> : (
+      {innerTab === "ledger" ? <SettlementsLedger role={role} actorName={actorName} /> : (
       <>
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
