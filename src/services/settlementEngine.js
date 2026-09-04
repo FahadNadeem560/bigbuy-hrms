@@ -227,3 +227,45 @@ export async function buildSettlement({
     lines: [...monthLines, ...holdLines],
   };
 }
+
+// ── Deduction breakdown ───────────────────────────────────────────────────
+// A settlement's deductions come from two places: the ones the payroll engine
+// charged inside each settled month (absences, fines, tax, EOBI, that month's
+// loan installment...), and the ones that only fall due at exit (the loan
+// balance left over, unrecovered advances, a short-notice penalty).
+//
+// Only the second group was ever itemised on screen. The first was a single
+// "Monthly deductions (loans, fines, tax, EOBI…)" line in the calculator, and
+// on the stored settlement slip it wasn't shown at all -- the slip listed the
+// loan balance and the notice penalty and then a Total Deductions that didn't
+// add up to them, with no way to see what the difference was.
+//
+// The per-month payroll row is kept on each line's `detail`, both in memory
+// and in final_settlement_lines.detail, so the components can be summed back
+// out for either view without recomputing anything.
+export const DEDUCTION_COMPONENTS = [
+  ["absentDeduction",    "Absent days"],
+  ["halfDayDeduction",   "Half days"],
+  ["lateDeduction",      "Late arrivals"],
+  ["shortHourDeduction", "Short hours"],
+  ["fineDeduction",      "Fines"],
+  ["shortageDeduction",  "Cash shortages"],
+  ["advanceDeduction",   "Advance recovered in month"],
+  ["loanDeduction",      "Loan instalments in month"],
+  ["taxDeduction",       "Income tax"],
+  ["eobiDeduction",      "EOBI"],
+  ["otherDeductions",    "Other deductions"],
+];
+
+// Totals each component across every month line. Lines with no `detail`
+// (released-hold lines) carry no deductions and are skipped.
+export function sumMonthlyDeductions(monthLines) {
+  const out = {};
+  DEDUCTION_COMPONENTS.forEach(([k]) => { out[k] = 0; });
+  (monthLines || []).forEach((l) => {
+    const d = l?.detail;
+    if (!d) return;
+    DEDUCTION_COMPONENTS.forEach(([k]) => { out[k] += Number(d[k] || 0); });
+  });
+  return out;
+}

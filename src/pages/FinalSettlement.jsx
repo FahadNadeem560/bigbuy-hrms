@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
-import { buildSettlement } from "../services/settlementEngine.js";
+import { buildSettlement, DEDUCTION_COMPONENTS, sumMonthlyDeductions } from "../services/settlementEngine.js";
 import { processFinalSettlement, fetchSettlementLines, markFinalSettlementPaid } from "../services/finalSettlementService.js";
 
 // A processed settlement is not payable on its own -- HR initiates it, Master
@@ -216,18 +216,60 @@ function SettlementSlipModal({ row, onClose }) {
             </div>
           </div>
 
-          {/* Deductions */}
-          <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Deductions</h3>
-            <DRow label="Outstanding Loans" value={row.loan_balance} />
-            <DRow label="Short Notice Penalty" value={row.notice_penalty} />
-            {legacy && <p className="text-sm text-slate-400 py-1.5">Breakdown not captured for this imported record.</p>}
-            {!legacy && !row.loan_balance && !row.notice_penalty && <p className="text-sm text-slate-400 py-1.5">None</p>}
-            <div className="flex justify-between py-2 mt-1 bg-red-50 rounded-xl px-3">
-              <span className="font-bold text-sm text-red-800">Total Deductions</span>
-              <span className="font-bold text-sm text-red-800">– {money(row.total_deductions)}</span>
-            </div>
-          </div>
+          {/* Deductions.
+              The stored row only carries the exit-side figures (loan balance,
+              notice penalty) plus a total, so the months' own deductions are
+              summed back out of each line's `detail` -- otherwise the total
+              doesn't reconcile with anything on screen. Whatever is still
+              unaccounted for after those three is the advance residual, which
+              has no column of its own. */}
+          {(() => {
+            const comps = sumMonthlyDeductions(lines);
+            const shown = DEDUCTION_COMPONENTS.filter(([k]) => Math.round(comps[k]) !== 0);
+            const compsTotal = shown.reduce((s, [k]) => s + Math.round(comps[k]), 0);
+            const monthlyCharged = Math.round(Number(row.total_deductions || 0)
+              - Number(row.loan_balance || 0) - Number(row.notice_penalty || 0));
+            // A fixed-days payout drops the months' figures from the total but
+            // leaves the lines themselves intact, so the components are still
+            // there to sum and would double-count if shown as charged.
+            const overrideSuppressed = compsTotal > 0 && monthlyCharged < compsTotal - 1;
+            // Only meaningful when the month lines are actually there to
+            // subtract. A legacy import has no lines, so the whole total would
+            // otherwise surface as a made-up advance recovery.
+            const residual = (legacy || lines.length === 0)
+              ? 0 : Math.max(0, monthlyCharged - (overrideSuppressed ? 0 : compsTotal));
+            const nothing = !legacy && !row.loan_balance && !row.notice_penalty
+              && !monthlyCharged && !compsTotal;
+            return (
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Deductions</h3>
+                {legacy && <p className="text-sm text-slate-400 py-1.5">Breakdown not captured for this imported record.</p>}
+                {nothing && <p className="text-sm text-slate-400 py-1.5">None</p>}
+                {!legacy && overrideSuppressed && (
+                  <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-1.5 mb-1">
+                    Paid on a fixed number of days, so the deductions the payroll engine charged
+                    inside these months were not applied — only the exit items below.
+                  </p>
+                )}
+                {!legacy && !overrideSuppressed && shown.length > 0 && (
+                  <>
+                    <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mt-1">Charged inside the settled months</p>
+                    {shown.map(([k, label]) => <DRow key={k} label={label} value={Math.round(comps[k])} />)}
+                  </>
+                )}
+                {(row.loan_balance || row.notice_penalty || residual > 0) && (
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mt-2">Falling due at exit</p>
+                )}
+                <DRow label="Loan balance at exit" value={row.loan_balance} />
+                <DRow label="Unrecovered advances" value={residual} />
+                <DRow label="Short notice penalty" value={row.notice_penalty} />
+                <div className="flex justify-between py-2 mt-1 bg-red-50 rounded-xl px-3">
+                  <span className="font-bold text-sm text-red-800">Total Deductions</span>
+                  <span className="font-bold text-sm text-red-800">– {money(row.total_deductions)}</span>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Net */}
           <div className="bg-slate-50 rounded-xl px-4 py-4 flex justify-between items-center">
@@ -941,11 +983,34 @@ export default function FinalSettlement({ role }) {
                   </div>
                   <div className="space-y-2.5 text-sm">
                     <h3 className="font-semibold text-slate-700 mb-2">Deductions</h3>
-                    {paidDaysOverride == null && (
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Monthly deductions (loans, fines, tax, EOBI…)</span>
-                        <span className="text-red-500">{money(calc.monthLines.reduce((s, l) => s + l.deductions, 0))}</span>
-                      </div>
+                    {paidDaysOverride == null ? (() => {
+                      const comps = sumMonthlyDeductions(calc.monthLines);
+                      const shown = DEDUCTION_COMPONENTS.filter(([k]) => Math.round(comps[k]) !== 0);
+                      const monthsTotal = calc.monthLines.reduce((s, l) => s + l.deductions, 0);
+                      return (
+                        <>
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-1">Charged inside the settled months</p>
+                          {shown.length === 0
+                            ? <div className="flex justify-between"><span className="text-slate-500">None</span><span className="text-slate-400">Rs. 0</span></div>
+                            : shown.map(([k, label]) => (
+                              <div key={k} className="flex justify-between">
+                                <span className="text-slate-500 pl-3">{label}</span>
+                                <span className="text-red-500">{money(Math.round(comps[k]))}</span>
+                              </div>
+                            ))}
+                          <div className="flex justify-between border-t border-slate-100 pt-1.5">
+                            <span className="text-slate-500">Monthly deductions subtotal</span>
+                            <span className="text-red-500">{money(monthsTotal)}</span>
+                          </div>
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-2">Falling due at exit</p>
+                        </>
+                      );
+                    })() : (
+                      <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-1.5">
+                        A fixed-days payout replaces the months' own figures, so nothing the payroll
+                        engine charged inside them (absences, fines, tax, EOBI, loan instalments) is
+                        deducted here. Only the exit items below apply.
+                      </p>
                     )}
                     <div className="flex justify-between">
                       <span className="text-slate-500">
