@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 import { calculatePayrollForEmployee, getWorkingDaysInMonth, OT_SHORT_MIN_HOURS } from "../utils/payrollRules.js";
-import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys, isOffDayCapExempt } from "../utils/attendanceRules.js";
+import { getWeeklyOffOverrideKeys, getFullyWorkedBlockKeys, getUnearnedRestDayKeys, isOffDayCapExempt } from "../utils/attendanceRules.js";
 import { calcRemainingLeaveBalance } from "../utils/leaveBalance.js";
 
 // The monthly payroll calculation, lifted verbatim out of PayrollAutomation.jsx
@@ -191,6 +191,13 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
   ]));
   const weeklyOffOverrides = getWeeklyOffOverrideKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate, employmentBounds, weeklyOffDayByEmp, offDayCapExemptByEmp });
 
+  // The other direction: a roster Weekly Off in a block the employee never
+  // worked (and took no leave or public holiday in) is not a rest day they
+  // earned, so it is charged like any other unworked day instead of quietly
+  // paying out. Without this, someone absent all month still drew their four
+  // weekly offs -- see getUnearnedRestDayKeys.
+  const unearnedRestDays = getUnearnedRestDayKeys(att || [], { employeeKey: "employee_code", rangeStart: fromDate, rangeEnd: toDate });
+
   // Extra Working Days: a block worked straight through with no rest at
   // all (see getFullyWorkedBlockKeys) -- replaces trusting attendance.
   // extra_day_eligible, which was set from employee_work_rosters (the
@@ -228,7 +235,13 @@ export async function computePayrollForMonth({ month, employees, loans, applySid
       workedHours: 0, requiredHours: 0, shortHourFractionalDays: 0, netShortHours: 0,
     };
     const isOverriddenOff = weeklyOffOverrides.has(`${c}|${a.work_date}`);
-    const s = isOverriddenOff ? "Weekly Off" : (a.attendance_status || a.status || "");
+    const rawStatus = a.attendance_status || a.status || "";
+    // A rest day the employee never earned reads as what it actually was: a
+    // day they did not come in. Forgiveness and this can never collide -- a
+    // forgiven absence requires a worked day in the block, which is exactly
+    // what an unearned rest day's block lacks.
+    const isUnearnedRest = rawStatus === "Weekly Off" && unearnedRestDays.has(`${c}|${a.work_date}`);
+    const s = isOverriddenOff ? "Weekly Off" : (isUnearnedRest ? "Absent" : rawStatus);
     // Gazetted Holiday actually worked -- a working status on a holiday row.
     // Group/individual eligibility is applied later where `group` is known;
     // here we just count the days. Half Day worked = half a day.

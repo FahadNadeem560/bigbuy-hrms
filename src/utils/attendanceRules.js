@@ -181,7 +181,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     const empPart = employeeKey ? `${row[employeeKey]}|` : "";
     const weekKey = `${empPart}${fmtDate(blockStart)}`;
     const week = (weeks[weekKey] ||= {
-      absentRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasGazettedHolidayOff: false,
+      absentRows: [], restRows: [], hasRealWeeklyOff: false, hasLeave: false, hasAnyAbsent: false, hasGazettedHolidayOff: false,
       hasWorkedDay: false,
       blockStart, blockEnd, empPart, isFullBlock,
     });
@@ -207,6 +207,7 @@ function bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, c
     // Absent day relabeled Weekly Off too, hiding a real absence.
     if (status === "Weekly Off") {
       week.hasRealWeeklyOff = true;
+      week.restRows.push(row);
       monthlyWeeklyOffCount[empPart] = (monthlyWeeklyOffCount[empPart] || 0) + 1;
     } else if (status === "Leave") week.hasLeave = true;
     else if (status === "Gazetted Holiday") {
@@ -289,6 +290,38 @@ export function getWeeklyOffOverrideKeys(rows, opts = {}) {
     overrideKeys.add(`${empPart}${row[dateKey]}`);
   });
   return overrideKeys;
+}
+
+// The mirror image of getWeeklyOffOverrideKeys: rest days the employee did
+// NOT earn. A rest day is rest *from work*, and that principle was only ever
+// enforced in one direction -- the forgiveness rule refuses to relabel an
+// absence in a block with no worked day, but a *roster* "Weekly Off" row in
+// that same block was still never deducted, so it paid out. An employee who
+// did not show up all month still drew their four weekly offs: employee 1907,
+// July 2026, 27 Absent and 4 Weekly Off, paid 2,200 of a 22,000 salary for a
+// month he never worked.
+//
+// Returns keys (same shape as the override set) for Weekly Off rows sitting
+// in a block the employee neither worked, took leave in, nor had a public
+// holiday in. Approved Leave and a Gazetted Holiday both mean the week was
+// legitimately not worked, so the rest day stands.
+//
+// A block only partly inside the caller's window is skipped, exactly as in
+// getWeeklyOffOverrideKeys: the days that would prove it was worked may
+// simply be outside the query.
+export function getUnearnedRestDayKeys(rows, opts = {}) {
+  const { dateKey = "work_date", statusKey = "attendance_status", employeeKey = null, checkInKey = "check_in", checkOutKey = "check_out", rangeStart = null, rangeEnd = null } = opts;
+  const { weeks } = bucketIntoBlocks(rows, { dateKey, statusKey, employeeKey, checkInKey, checkOutKey });
+  const keys = new Set();
+  Object.values(weeks).forEach((week) => {
+    if (week.hasWorkedDay || week.hasLeave || week.hasGazettedHolidayOff) return;
+    if (week.restRows.length === 0) return;
+    if (rangeStart || rangeEnd) {
+      if ((rangeStart && fmtDate(week.blockStart) < rangeStart) || (rangeEnd && fmtDate(week.blockEnd) > rangeEnd)) return;
+    }
+    week.restRows.forEach((row) => keys.add(`${week.empPart}${row[dateKey]}`));
+  });
+  return keys;
 }
 
 // A full 7-day block the employee worked straight through with no rest at
@@ -461,7 +494,16 @@ export function buildLedger({ emp, attendance, holidayDates, fromDate, toDate })
     employmentStart: (joinDate && joinDate >= effFrom && joinDate <= effTo) ? joinDate : null,
     employmentEnd: (exitDate && exitDate >= effFrom && exitDate <= effTo) ? exitDate : null,
   });
+  // Same rule payroll applies, so the Timesheet never shows a paid rest day
+  // that the payslip is charging as an absence.
+  const unearnedRest = getUnearnedRestDayKeys(base, { rangeStart: effFrom, rangeEnd: effTo });
   base.forEach((row) => {
+    if (unearnedRest.has(row.work_date) && row.attendance_status === "Weekly Off") {
+      row.attendance_status = "Absent";
+      row.unearned_rest_day = true;
+      row.short_hours = 0; row.late_minutes = 0; row.ot_hours = 0; row.overtime_hours = 0;
+      return;
+    }
     if (overrideDates.has(row.work_date)) {
       row.attendance_status = "Weekly Off";
       row.short_hours = 0; row.late_minutes = 0; row.ot_hours = 0; row.overtime_hours = 0;
