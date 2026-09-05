@@ -347,6 +347,10 @@ function SettlementsLedger({ role, actorName }) {
   const [marking, setMarking] = useState(null);
   const [slip, setSlip] = useState(null);
   const [err, setErr] = useState("");
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState("");
+  const [bulkResult, setBulkResult] = useState(null);
 
   const canMarkPaid = ["Master", "Finance"].includes(role);
 
@@ -412,6 +416,67 @@ function SettlementsLedger({ role, actorName }) {
       return true;
     });
   }, [rows, search, monthFilter, branchFilter, deptFilter, statusFilter, approvalFilter, typeFilter, payFilter]);
+
+  // ── Bulk Mark Paid ──────────────────────────────────────────────────────
+  // Finance settles a batch with one bank transfer, so paying them off one
+  // row at a time is busywork. This mirrors mark_final_settlement_paid's own
+  // gates exactly (FnF, approved, not paid, not reversed, voucher attached)
+  // rather than relaxing any of them -- the RPC still runs per settlement, so
+  // each payment keeps its own audit_logs entry.
+  //
+  // Scoped to `filtered`, not every row: filtering to a branch or month and
+  // paying that batch is the whole point, and it is what the panel states.
+  const bulkGroups = useMemo(() => {
+    const unpaid = filtered.filter(r => r.payment_status === "FnF" && !r.is_paid && !r.is_reversed);
+    const eligible = unpaid.filter(r => r.approval_status === "Approved");
+    return {
+      needVoucher: eligible.filter(r => !vouchers[r.id]?.length),
+      eligible,
+      // Kept apart because they are different problems: one needs Master/GM to
+      // act, the other needs a reversal. Lumping them under "awaiting
+      // approval" would send Finance to the wrong place.
+      awaiting: unpaid.filter(r => (r.approval_status || "Pending Approval") === "Pending Approval"),
+      rejected: unpaid.filter(r => r.approval_status === "Rejected"),
+      total: eligible.reduce((s, r) => s + Number(r.net_payable || 0), 0),
+    };
+  }, [filtered, vouchers]);
+
+  // The voucher gate is deliberate, so a batch cannot skip it -- instead one
+  // payment proof covering the batch (the bank advice for the transfer) is
+  // attached to each settlement that has none. Every row still ends up with
+  // its own voucher record, which is what the RPC and the audit trail want.
+  async function runBulkMarkPaid() {
+    const { eligible, needVoucher } = bulkGroups;
+    if (!canMarkPaid || eligible.length === 0) return;
+    if (needVoucher.length > 0 && !bulkFile) return;
+    setErr(""); setBulkResult(null);
+    const failures = [];
+    const failedIds = new Set();
+    let attached = 0, paid = 0;
+    try {
+      for (const r of needVoucher) {
+        setBulkBusy(`Attaching voucher for ${r.employee_name}…`);
+        try {
+          await uploadSettlementVoucher(r.id, bulkFile, "Batch payment voucher", actorName || role);
+          attached++;
+        } catch (e) {
+          failedIds.add(r.id);
+          failures.push(`${r.employee_name}: voucher upload failed — ${e.message}`);
+        }
+      }
+      // Anything whose voucher failed above would only fail the RPC's voucher
+      // check anyway, so it is dropped rather than retried blindly.
+      for (const r of eligible.filter(r => !failedIds.has(r.id))) {
+        setBulkBusy(`Marking ${r.employee_name} paid…`);
+        try { await markFinalSettlementPaid(r.id); paid++; }
+        catch (e) { failures.push(`${r.employee_name}: ${e.message}`); }
+      }
+      setBulkResult({ paid, attached, total: eligible.length, failures });
+      setBulkFile(null);
+      setBulkOpen(false);
+      await load();
+    } finally { setBulkBusy(""); }
+  }
 
   const branchOptions = useMemo(() => Array.from(new Set(rows.map(r => r.branch).filter(Boolean))).sort(), [rows]);
   const deptOptions = useMemo(() => Array.from(new Set(rows.map(r => r.department).filter(Boolean))).sort(), [rows]);
@@ -526,6 +591,95 @@ function SettlementsLedger({ role, actorName }) {
         ? <p className="text-slate-400 text-sm">Loading settlements...</p>
         : (
           <>
+          {bulkResult && (
+            <div className={`mb-3 p-3 rounded-xl text-sm ${bulkResult.failures.length ? "bg-amber-50 text-amber-800" : "bg-green-50 text-green-700"}`}>
+              <p className="font-medium">
+                Marked {bulkResult.paid} of {bulkResult.total} settlements paid
+                {bulkResult.attached > 0 && ` (voucher attached to ${bulkResult.attached})`}.
+              </p>
+              {bulkResult.failures.length > 0 && (
+                <ul className="mt-1 list-disc list-inside text-xs">
+                  {bulkResult.failures.map((f, i) => <li key={i}>{f}</li>)}
+                </ul>
+              )}
+              <button onClick={() => setBulkResult(null)} className="text-xs underline mt-1">Dismiss</button>
+            </div>
+          )}
+
+          {canMarkPaid && (bulkGroups.eligible.length > 0 || bulkGroups.awaiting.length > 0 || bulkGroups.rejected.length > 0) && (
+            <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-3">
+              {!bulkOpen ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button onClick={() => { setBulkOpen(true); setBulkResult(null); }}
+                    disabled={bulkGroups.eligible.length === 0}
+                    className="rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-40">
+                    Mark All Paid ({bulkGroups.eligible.length})
+                  </Button>
+                  <span className="text-xs text-slate-500">
+                    {bulkGroups.eligible.length > 0
+                      ? <>{money(bulkGroups.total)} across {bulkGroups.eligible.length} approved settlement{bulkGroups.eligible.length > 1 ? "s" : ""} in the current view.</>
+                      : <>Nothing here is ready to pay.</>}
+                    {bulkGroups.awaiting.length > 0 &&
+                      ` ${bulkGroups.awaiting.length} awaiting Master/GM approval — not included.`}
+                    {bulkGroups.rejected.length > 0 &&
+                      ` ${bulkGroups.rejected.length} rejected — Master must reverse before a corrected one can be paid.`}
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <h3 className="font-bold text-slate-800 mb-1">Mark {bulkGroups.eligible.length} settlement{bulkGroups.eligible.length > 1 ? "s" : ""} paid</h3>
+                  <p className="text-xs text-slate-500 mb-3">
+                    {money(bulkGroups.total)} total. This covers only the settlements matching your current filters
+                    {activeFilterCount === 0 && " (no filters applied — this is the whole ledger)"}.
+                  </p>
+
+                  <div className="max-h-40 overflow-y-auto border border-slate-100 rounded-xl mb-3">
+                    <table className="w-full text-xs">
+                      <tbody className="divide-y divide-slate-100">
+                        {bulkGroups.eligible.map(r => (
+                          <tr key={r.id}>
+                            <td className="px-3 py-1.5">{r.employee_name} <span className="text-slate-400">({r.employee_code})</span></td>
+                            <td className="px-3 py-1.5 text-slate-400">{r.branch || "—"}</td>
+                            <td className="px-3 py-1.5 text-right font-medium">{money(r.net_payable)}</td>
+                            <td className="px-3 py-1.5 text-right">
+                              {vouchers[r.id]?.length
+                                ? <span className="text-green-600">voucher on file</span>
+                                : <span className="text-amber-600">needs voucher</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {bulkGroups.needVoucher.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-xs text-slate-600 mb-1">
+                        {bulkGroups.needVoucher.length} of these have no paid voucher yet. Attach the payment proof for
+                        this batch (the bank advice covering the transfer) — it is filed against each of them individually.
+                      </p>
+                      <input type="file" accept="image/*,application/pdf"
+                        onChange={e => setBulkFile(e.target.files?.[0] || null)}
+                        className="text-xs" />
+                      {!bulkFile && <p className="text-xs text-amber-600 mt-1">Required before this batch can be marked paid.</p>}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 items-center">
+                    <Button onClick={runBulkMarkPaid}
+                      disabled={!!bulkBusy || (bulkGroups.needVoucher.length > 0 && !bulkFile)}
+                      className="rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-40">
+                      {bulkBusy ? "Working…" : `Confirm — pay ${money(bulkGroups.total)}`}
+                    </Button>
+                    <Button variant="outline" onClick={() => { setBulkOpen(false); setBulkFile(null); }}
+                      disabled={!!bulkBusy} className="rounded-2xl">Cancel</Button>
+                    {bulkBusy && <span className="text-xs text-slate-500">{bulkBusy}</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <p className="text-xs text-slate-400 mb-2">Click a row for the full settlement slip.</p>
           <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh]">
             <table className="w-full min-w-[1000px] text-sm">
