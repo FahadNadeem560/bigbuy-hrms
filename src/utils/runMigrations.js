@@ -1,6 +1,6 @@
 import { supabase } from "../lib/supabaseClient.js";
 
-const MIGRATION_VERSION = "2026-09-04-v15";
+const MIGRATION_VERSION = "2026-09-05-v16";
 let ran = false;
 
 export async function runMigrations() {
@@ -325,6 +325,24 @@ async function applyIncrementalMigrations() {
     `CREATE TRIGGER final_settlement_set_approval_default_trg BEFORE INSERT ON public.final_settlements FOR EACH ROW EXECUTE FUNCTION public.final_settlement_set_approval_default()`,
     `ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_date DATE`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON public.final_settlements TO anon, authenticated`,
+    // v16: "Remind Later" on the Due for Increment list. Same table as the
+    // existing Dismiss (and the same employee_code+due_date scoping, so a
+    // moved next_increment_due still clears it), split by `kind`:
+    //   dismissed -> hidden until the due date itself changes (old behaviour)
+    //   snoozed   -> hidden until REMINDER_LEAD_DAYS before remind_month
+    //                starts, then reappears and fires one notification.
+    // reminded_at is the once-only latch for that notification.
+    `ALTER TABLE public.increment_due_dismissals ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'dismissed'`,
+    `ALTER TABLE public.increment_due_dismissals ADD COLUMN IF NOT EXISTS remind_month TEXT`,
+    `ALTER TABLE public.increment_due_dismissals ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMPTZ`,
+    `UPDATE public.increment_due_dismissals SET kind = 'dismissed' WHERE kind IS NULL`,
+    `ALTER TABLE public.increment_due_dismissals DROP CONSTRAINT IF EXISTS increment_due_dismissals_kind_chk`,
+    `ALTER TABLE public.increment_due_dismissals ADD CONSTRAINT increment_due_dismissals_kind_chk CHECK (kind IN ('dismissed','snoozed'))`,
+    `ALTER TABLE public.increment_due_dismissals DROP CONSTRAINT IF EXISTS increment_due_dismissals_remind_month_chk`,
+    `ALTER TABLE public.increment_due_dismissals ADD CONSTRAINT increment_due_dismissals_remind_month_chk CHECK (remind_month IS NULL OR remind_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$')`,
+    `ALTER TABLE public.increment_due_dismissals DROP CONSTRAINT IF EXISTS increment_due_dismissals_snooze_needs_month_chk`,
+    `ALTER TABLE public.increment_due_dismissals ADD CONSTRAINT increment_due_dismissals_snooze_needs_month_chk CHECK (kind <> 'snoozed' OR remind_month IS NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS increment_due_dismissals_kind_month_idx ON public.increment_due_dismissals (kind, remind_month)`,
   ];
 
   for (const sql of stmts) {

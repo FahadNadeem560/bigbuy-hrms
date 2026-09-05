@@ -34,7 +34,7 @@ import { fetchRecentAttendance } from "./services/attendanceService.js";
 import { runMigrations } from "./utils/runMigrations.js";
 import { escalateStaleApprovals } from "./services/leaveApprovalService.js";
 import { checkAutoLockPreviousMonth, sendHoldReminderIfNeeded } from "./services/payrollControlService.js";
-import { checkIncrementDueNotifications } from "./services/incrementService.js";
+import { checkIncrementDueNotifications, checkIncrementReminders } from "./services/incrementService.js";
 import { sendOnboardingOtp, sweepPendingWhatsapp } from "./services/whatsappService.js";
 import { signOut } from "./services/authService.js";
 import { getBranchFilter, isBranchRestricted } from "./utils/branchFilter.js";
@@ -234,6 +234,7 @@ export default function BigBuyHRMS({ profile }) {
     checkAutoLockPreviousMonth().catch(() => {});
     sendHoldReminderIfNeeded().catch(() => {});
     checkIncrementDueNotifications().catch(() => {});
+    checkIncrementReminders().catch(() => {});
     sweepPendingWhatsapp().catch(() => {});
   }, []);
 

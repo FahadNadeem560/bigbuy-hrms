@@ -13,6 +13,7 @@ const TYPE_ICONS = {
   payroll_verification: "✅",
   payroll_flag: "🚩",
   increment_due_branch: "📈",
+  increment_reminder: "⏰",
   increment_proposed: "📝",
   increment_decision: "📈",
   loan_proposed: "💳",
@@ -36,6 +37,7 @@ const TYPE_NAV = {
   increment_proposed:       { tab: "approval-queue", subtab: "increments" },
   increment_decision:       { tab: "salary-reports" },
   increment_due_branch:     { tab: "salary-reports" },
+  increment_reminder:       { tab: "salary-reports" },
   loan_proposed:            { tab: "approval-queue", subtab: "loans" },
   loan_decision:            { tab: "loans", subtab: "loans" },
   advance_requested:        { tab: "loans", subtab: "advances" },
@@ -113,8 +115,11 @@ export default function NotificationBell({ role, employeeCode, onNavigate }) {
     setOpen(false);
     if (!onNavigate) return;
 
-    if (n.type === "increment_due_branch") {
-      onNavigate({ type: n.type, tab: "salary-reports", filter: { view: "due", branch: n.related_branch || n.link || null } });
+    // Both land on the Due for Increment tab. increment_reminder is about one
+    // named employee, so it opens the list unfiltered by branch rather than
+    // narrowing to a branch it never recorded.
+    if (n.type === "increment_due_branch" || n.type === "increment_reminder") {
+      onNavigate({ type: n.type, tab: "salary-reports", filter: { view: "due", branch: n.type === "increment_due_branch" ? (n.related_branch || n.link || null) : null } });
       return;
     }
     const nav = TYPE_NAV[n.type];

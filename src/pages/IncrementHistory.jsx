@@ -5,7 +5,8 @@ import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money, formatMonthYear } from "../utils/format.js";
 import { BRANCH_CODE_MAP } from "../constants/branches.js";
 import { fetchActiveConfidentialIncentives } from "../services/payrollControlService.js";
-import { proposeIncrement, fetchIncrementDueDismissals, dismissIncrementDue, restoreIncrementDue } from "../services/incrementService.js";
+import { proposeIncrement, fetchIncrementDueDismissals, dismissIncrementDue, restoreIncrementDue,
+  snoozeIncrementDue, isReminderDue, reminderDueDate, REMINDER_LEAD_DAYS } from "../services/incrementService.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -313,12 +314,20 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
   const [showDismissed, setShowDismissed] = useState(false);
   const [dismissingCode, setDismissingCode] = useState(null);
   const [dismissReason, setDismissReason] = useState("");
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  const [snoozingCode, setSnoozingCode] = useState(null);
+  const [snoozeMonth, setSnoozeMonth] = useState("");
+  const [snoozeReason, setSnoozeReason] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
   useEffect(() => {
     if (dueFilter?.view) setView(dueFilter.view);
-    if (dueFilter?.branch) setDueBranchFilter(dueFilter.branch);
+    // Explicitly reset when the caller sends no branch (an increment_reminder
+    // is about one named employee and carries none) — otherwise a branch left
+    // over from an earlier branch-scoped notification can hide the very row
+    // this navigation was meant to show.
+    if (dueFilter?.view || dueFilter?.branch) setDueBranchFilter(dueFilter.branch || "");
   }, [dueFilter]);
 
   async function load() {
@@ -558,12 +567,32 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
     return map;
   }, [dismissals]);
 
+  // A parked employee is hidden only while their park is still holding:
+  //   dismissed          -> always (until next_increment_due itself moves)
+  //   snoozed, immature  -> until REMINDER_LEAD_DAYS before the chosen month
+  //   snoozed, matured   -> not hidden at all; back in the active list, and
+  //                         tagged there so it's clear why they returned.
+  const parkedFor = e => dismissalByKey[`${e.employee_code}::${e.next_increment_due}`];
+  const isHiddenBy = park => !!park && (park.kind !== "snoozed" || !isReminderDue(park));
+
   const activeDueList = useMemo(() =>
-    dueList.filter(e => !dismissalByKey[`${e.employee_code}::${e.next_increment_due}`]), [dueList, dismissalByKey]);
+    dueList
+      .filter(e => !isHiddenBy(parkedFor(e)))
+      .map(e => {
+        const park = parkedFor(e);
+        return { ...e, maturedSnooze: park && park.kind === "snoozed" ? park : null };
+      }),
+    [dueList, dismissalByKey]);
   const dismissedDueList = useMemo(() =>
     dueList
-      .filter(e => dismissalByKey[`${e.employee_code}::${e.next_increment_due}`])
-      .map(e => ({ ...e, dismissal: dismissalByKey[`${e.employee_code}::${e.next_increment_due}`] })),
+      .filter(e => { const p = parkedFor(e); return isHiddenBy(p) && p.kind !== "snoozed"; })
+      .map(e => ({ ...e, dismissal: parkedFor(e) })),
+    [dueList, dismissalByKey]);
+  const snoozedDueList = useMemo(() =>
+    dueList
+      .filter(e => { const p = parkedFor(e); return isHiddenBy(p) && p.kind === "snoozed"; })
+      .map(e => ({ ...e, dismissal: parkedFor(e) }))
+      .sort((a, b) => String(a.dismissal.remind_month).localeCompare(String(b.dismissal.remind_month))),
     [dueList, dismissalByKey]);
 
   const dueSummary = useMemo(() => ({
@@ -589,6 +618,39 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
       });
       setDismissingCode(null); setDismissReason("");
       setMsg(`${emp.full_name} dismissed from the Due list.`);
+      load();
+    } catch (e) { setErr(e.message); }
+  }
+
+  // Payroll months offerable as a reminder target: next month through 24
+  // months out. The current month is excluded — its reminder date has already
+  // passed, so snoozing to it would be a no-op that puts the employee
+  // straight back on the list.
+  const snoozeMonthOptions = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 24 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() + 1 + i, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    });
+  }, []);
+
+  function openSnooze(emp) {
+    setDismissingCode(null);
+    setSnoozingCode(emp.employee_code);
+    setSnoozeMonth(snoozeMonthOptions[0] || "");
+    setSnoozeReason("");
+  }
+
+  async function handleSnooze(emp) {
+    setErr(""); setMsg("");
+    try {
+      await snoozeIncrementDue({
+        employeeCode: emp.employee_code, employeeName: emp.full_name, dueDate: emp.next_increment_due,
+        remindMonth: snoozeMonth, reason: snoozeReason, snoozedBy: actorName || role,
+      });
+      const fires = reminderDueDate(snoozeMonth);
+      setSnoozingCode(null); setSnoozeMonth(""); setSnoozeReason("");
+      setMsg(`${emp.full_name} snoozed — reminder on ${fires.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}, before ${formatMonthYear(`${snoozeMonth}-01`)} payroll.`);
       load();
     } catch (e) { setErr(e.message); }
   }
@@ -929,6 +991,12 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               <option value="">All Branches</option>
               {Object.keys(BRANCH_CODE_MAP).map(b => <option key={b}>{b}</option>)}
             </select>
+            {snoozedDueList.length > 0 && (
+              <button onClick={() => setShowSnoozed(s => !s)}
+                className="px-4 py-2 rounded-xl border border-indigo-200 text-sm text-indigo-600 hover:bg-indigo-50">
+                {showSnoozed ? "Hide" : "Show"} Snoozed ({snoozedDueList.length})
+              </button>
+            )}
             {dismissedDueList.length > 0 && (
               <button onClick={() => setShowDismissed(s => !s)}
                 className="px-4 py-2 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-50">
@@ -951,6 +1019,49 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
               <p className="text-2xl font-bold text-emerald-600">{dueSummary.nextMonth}</p>
             </div>
           </div>
+
+          {showSnoozed && snoozedDueList.length > 0 && (
+            <div className="bg-white border border-indigo-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh] mb-4">
+              <div className="px-5 pt-4 pb-2">
+                <h2 className="font-bold text-slate-800">Snoozed — Remind Later</h2>
+                <p className="text-xs text-slate-400">
+                  {snoozedDueList.length} employee{snoozedDueList.length > 1 ? "s" : ""} hidden until {REMINDER_LEAD_DAYS} days before their chosen payroll month, then automatically back on the list with a notification to Master, GM and HR.
+                </p>
+              </div>
+              <table className="w-full min-w-[900px] text-sm">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>{["Emp Code", "Name", "Next Due Date", "Remind Before", "Reminder Fires", "Note", "Snoozed By", "Action"].map(h => (
+                    <th key={h} className="text-left px-4 py-3 font-medium sticky top-0 z-10 bg-slate-50 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {snoozedDueList.map(e => {
+                    const fires = reminderDueDate(e.dismissal.remind_month);
+                    return (
+                      <tr key={e.employee_code} className="hover:bg-slate-50/50">
+                        <td className="px-4 py-3 text-slate-500">{e.employee_code}</td>
+                        <td className="px-4 py-3 font-medium">{e.full_name}</td>
+                        <td className="px-4 py-3">{e.next_increment_due}</td>
+                        <td className="px-4 py-3">
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700">
+                            {formatMonthYear(`${e.dismissal.remind_month}-01`)} payroll
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 text-xs">
+                          {fires ? fires.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 max-w-[200px] truncate">{e.dismissal.reason || "—"}</td>
+                        <td className="px-4 py-3 text-slate-500">{e.dismissal.dismissed_by || "—"}</td>
+                        <td className="px-4 py-3">
+                          <Button variant="outline" onClick={() => handleRestoreDismiss(e.dismissal)} className="rounded-lg text-xs py-1 px-2">Restore Now</Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {showDismissed && dismissedDueList.length > 0 && (
             <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto overflow-y-auto max-h-[70vh] mb-4">
@@ -1001,7 +1112,15 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                     return (
                       <tr key={e.employee_code} className="hover:bg-slate-50/50">
                         <td className="px-4 py-3 text-slate-500">{e.employee_code}</td>
-                        <td className="px-4 py-3 font-medium">{e.full_name}</td>
+                        <td className="px-4 py-3 font-medium">
+                          {e.full_name}
+                          {e.maturedSnooze && (
+                            <span className="ml-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-700 align-middle"
+                              title={`Snoozed by ${e.maturedSnooze.dismissed_by || "—"} to be reviewed before ${formatMonthYear(`${e.maturedSnooze.remind_month}-01`)} payroll${e.maturedSnooze.reason ? ` — "${e.maturedSnooze.reason}"` : ""}`}>
+                              Reminder: {formatMonthYear(`${e.maturedSnooze.remind_month}-01`)}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">{e.branch || "—"}</td>
                         <td className="px-4 py-3">{e.department || "—"}</td>
                         <td className="px-4 py-3">{e.joining_date || "—"}</td>
@@ -1032,12 +1151,35 @@ export default function IncrementHistory({ role, actorName, actorEmployeeCode, d
                                   <Button variant="outline" onClick={() => { setDismissingCode(null); setDismissReason(""); }} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
                                 </div>
                               </div>
+                            ) : snoozingCode === e.employee_code ? (
+                              <div className="flex flex-col gap-1 min-w-[210px]">
+                                <label className="text-[10px] text-slate-400 leading-tight">Remind me before this month's payroll</label>
+                                <select value={snoozeMonth} onChange={ev => setSnoozeMonth(ev.target.value)}
+                                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs">
+                                  {snoozeMonthOptions.map(m => (
+                                    <option key={m} value={m}>{formatMonthYear(`${m}-01`)}</option>
+                                  ))}
+                                </select>
+                                {snoozeMonth && (
+                                  <span className="text-[10px] text-indigo-500 leading-tight">
+                                    Reminder on {reminderDueDate(snoozeMonth)?.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                                  </span>
+                                )}
+                                <input value={snoozeReason} onChange={ev => setSnoozeReason(ev.target.value)} placeholder="Note (optional)…"
+                                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs" />
+                                <div className="flex gap-1">
+                                  <Button onClick={() => handleSnooze(e)} className="rounded-lg text-xs py-1 px-2">Set Reminder</Button>
+                                  <Button variant="outline" onClick={() => { setSnoozingCode(null); setSnoozeMonth(""); setSnoozeReason(""); }} className="rounded-lg text-xs py-1 px-2">Cancel</Button>
+                                </div>
+                              </div>
                             ) : (
-                              <div className="flex gap-1">
+                              <div className="flex flex-wrap gap-1">
                                 <Button onClick={() => quickActionFromDue(e)} className="rounded-lg text-xs py-1 px-2">
                                   {role === "HR" ? "Propose Increment" : "Add Increment"}
                                 </Button>
-                                <Button variant="outline" onClick={() => { setDismissingCode(e.employee_code); setDismissReason(""); }}
+                                <Button variant="outline" onClick={() => openSnooze(e)}
+                                  className="rounded-lg text-xs py-1 px-2 text-indigo-600 border-indigo-200">Remind Later</Button>
+                                <Button variant="outline" onClick={() => { setSnoozingCode(null); setDismissingCode(e.employee_code); setDismissReason(""); }}
                                   className="rounded-lg text-xs py-1 px-2 text-slate-500 border-slate-200">Dismiss</Button>
                               </div>
                             )}
