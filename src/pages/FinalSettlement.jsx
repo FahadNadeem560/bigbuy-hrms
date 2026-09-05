@@ -336,10 +336,14 @@ function SettlementsLedger({ role, actorName }) {
   const [vouchers, setVouchers] = useState({});
   const [uploadingId, setUploadingId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
   const [monthFilter, setMonthFilter] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
+  const [deptFilter, setDeptFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [approvalFilter, setApprovalFilter] = useState("All");
+  const [typeFilter, setTypeFilter] = useState("All");
+  const [payFilter, setPayFilter] = useState("All");
   const [marking, setMarking] = useState(null);
   const [slip, setSlip] = useState(null);
   const [err, setErr] = useState("");
@@ -385,15 +389,41 @@ function SettlementsLedger({ role, actorName }) {
     finally { setMarking(null); }
   }
 
-  const filtered = useMemo(() => rows.filter(r => {
-    if (monthFilter && r.payroll_month !== monthFilter) return false;
-    if (branchFilter && r.branch !== branchFilter) return false;
-    if (statusFilter !== "All" && r.payment_status !== statusFilter) return false;
-    if (approvalFilter !== "All" && (r.approval_status || "Pending Approval") !== approvalFilter) return false;
-    return true;
-  }), [rows, monthFilter, branchFilter, statusFilter, approvalFilter]);
+  // Every term must hit somewhere on the row, so "waseem warehouse" narrows
+  // rather than widening the way a single OR'd string would.
+  const filtered = useMemo(() => {
+    const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return rows.filter(r => {
+      if (monthFilter && r.payroll_month !== monthFilter) return false;
+      if (branchFilter && r.branch !== branchFilter) return false;
+      if (deptFilter && r.department !== deptFilter) return false;
+      if (statusFilter !== "All" && r.payment_status !== statusFilter) return false;
+      if (approvalFilter !== "All" && (r.approval_status || "Pending Approval") !== approvalFilter) return false;
+      if (typeFilter !== "All" && (r.separation_type === "termination" ? "termination" : "resignation") !== typeFilter) return false;
+      if (payFilter === "Paid" && !r.is_paid) return false;
+      if (payFilter === "Unpaid" && (r.is_paid || r.is_reversed)) return false;
+      if (payFilter === "Reversed" && !r.is_reversed) return false;
+      if (terms.length) {
+        const hay = [r.employee_name, r.employee_code, r.department, r.branch,
+          r.staff_level, r.payroll_month, r.resignation_reason]
+          .filter(Boolean).join(" ").toLowerCase();
+        if (!terms.every(t => hay.includes(t))) return false;
+      }
+      return true;
+    });
+  }, [rows, search, monthFilter, branchFilter, deptFilter, statusFilter, approvalFilter, typeFilter, payFilter]);
 
   const branchOptions = useMemo(() => Array.from(new Set(rows.map(r => r.branch).filter(Boolean))).sort(), [rows]);
+  const deptOptions = useMemo(() => Array.from(new Set(rows.map(r => r.department).filter(Boolean))).sort(), [rows]);
+
+  const activeFilterCount = [search.trim(), monthFilter, branchFilter, deptFilter,
+    statusFilter !== "All" && statusFilter, approvalFilter !== "All" && approvalFilter,
+    typeFilter !== "All" && typeFilter, payFilter !== "All" && payFilter].filter(Boolean).length;
+
+  function clearFilters() {
+    setSearch(""); setMonthFilter(""); setBranchFilter(""); setDeptFilter("");
+    setStatusFilter("All"); setApprovalFilter("All"); setTypeFilter("All"); setPayFilter("All");
+  }
 
   const totals = useMemo(() => {
     const sum = list => list.reduce((s, r) => s + Number(r.net_payable || 0), 0);
@@ -437,25 +467,59 @@ function SettlementsLedger({ role, actorName }) {
 
       {err && <div className="mb-3 p-3 rounded-xl bg-red-50 text-red-700 text-sm">{err}</div>}
 
-      <div className="flex flex-wrap gap-3 mb-4">
-        <input type="month" value={monthFilter} onChange={e => setMonthFilter(e.target.value)}
-          className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
-        <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-          <option value="">All Branches</option>
-          {branchOptions.map(b => <option key={b}>{b}</option>)}
-        </select>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-          <option value="All">All Status</option>
-          <option value="FnF">F&F</option>
-          <option value="No_FnF">No F&F</option>
-        </select>
-        <select value={approvalFilter} onChange={e => setApprovalFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
-          <option value="All">All Approvals</option>
-          <option value="Pending Approval">Awaiting Approval</option>
-          <option value="Approved">Approved</option>
-          <option value="Rejected">Rejected</option>
-          <option value="Not Applicable">Not Applicable (No F&F)</option>
-        </select>
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm mb-4">
+        <div className="flex flex-wrap gap-3">
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search name, code, department, branch or reason…"
+            className="flex-1 min-w-[220px] px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          <input type="month" value={monthFilter} onChange={e => setMonthFilter(e.target.value)}
+            title="Filter by settlement payroll month"
+            className="px-4 py-2 rounded-xl border border-slate-200 text-sm" />
+          <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="">All Branches</option>
+            {branchOptions.map(b => <option key={b}>{b}</option>)}
+          </select>
+          <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="">All Departments</option>
+            {deptOptions.map(d => <option key={d}>{d}</option>)}
+          </select>
+          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="All">All Types</option>
+            <option value="resignation">Resignation</option>
+            <option value="termination">Termination</option>
+          </select>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="All">All Status</option>
+            <option value="FnF">F&F</option>
+            <option value="No_FnF">No F&F</option>
+          </select>
+          <select value={approvalFilter} onChange={e => setApprovalFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="All">All Approvals</option>
+            <option value="Pending Approval">Awaiting Approval</option>
+            <option value="Approved">Approved</option>
+            <option value="Rejected">Rejected</option>
+            <option value="Not Applicable">Not Applicable (No F&F)</option>
+          </select>
+          <select value={payFilter} onChange={e => setPayFilter(e.target.value)} className="px-4 py-2 rounded-xl border border-slate-200 text-sm">
+            <option value="All">Paid &amp; Unpaid</option>
+            <option value="Unpaid">Unpaid only</option>
+            <option value="Paid">Paid only</option>
+            <option value="Reversed">Reversed only</option>
+          </select>
+          {activeFilterCount > 0 && (
+            <button onClick={clearFilters}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-500 hover:bg-slate-50">
+              Clear ({activeFilterCount})
+            </button>
+          )}
+        </div>
+        {activeFilterCount > 0 && (
+          // The tiles above are computed from `filtered`, so say so plainly --
+          // otherwise a filtered Total Payable reads as the company-wide one.
+          <p className="text-xs text-slate-400 mt-2">
+            Showing {filtered.length} of {rows.length} settlements. The totals above cover this filtered set only.
+          </p>
+        )}
       </div>
 
       {loading
@@ -472,7 +536,13 @@ function SettlementsLedger({ role, actorName }) {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.length === 0
-                  ? <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">No settlements found.</td></tr>
+                  ? <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">
+                      {rows.length === 0 ? "No settlements found." : (
+                        <>No settlements match these filters.{" "}
+                          <button onClick={clearFilters} className="text-blue-600 hover:underline">Clear filters</button>
+                        </>
+                      )}
+                    </td></tr>
                   : filtered.map(r => (
                     <tr key={r.id} onClick={() => setSlip(r)} className="hover:bg-slate-50 cursor-pointer">
                       <td className="px-4 py-3 font-medium">{r.employee_name} <span className="text-xs text-slate-400">({r.employee_code})</span></td>

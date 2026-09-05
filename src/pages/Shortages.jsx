@@ -3,6 +3,28 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Button, Badge, PageTitle } from "../components/ui.jsx";
 import { money } from "../utils/format.js";
 
+// A shortage is raised against whoever was on the counter, and that is the
+// whole cash counter, not just the person on the till: Till Helpers handle
+// the same drawer and were previously unselectable because the picker
+// matched the word "cashier" alone.
+//
+// The department is the real definition of the group (Cash-Counter, 28 active
+// across Cashier / Till Helper / Head Cashier / Chief Cashier / CRO), so that
+// is the primary test. Designation is kept as a fallback so a counter role
+// filed under some other department still appears — the department field has
+// spelling drift elsewhere in this data and shouldn't be the only way in.
+const CASH_COUNTER_DEPT = "cashcounter";
+const CASH_COUNTER_DESIGNATION = /\b(cashier|till)\b/;
+
+function normalizeDept(v) {
+  return String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function isCashCounterStaff(e) {
+  if (normalizeDept(e.department) === CASH_COUNTER_DEPT) return true;
+  return CASH_COUNTER_DESIGNATION.test(String(e.designation || "").toLowerCase());
+}
+
 function EmpPicker({ employees, value, onChange }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
@@ -12,40 +34,55 @@ function EmpPicker({ employees, value, onChange }) {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
+
+  // Active first, then by name. A left employee can still legitimately carry a
+  // shortage (recovered through their final settlement), so they stay
+  // selectable rather than being filtered out — just clearly marked.
+  const counterStaff = useMemo(() => employees.filter(isCashCounterStaff).sort((a, b) => {
+    const aActive = a.status === "Active", bActive = b.status === "Active";
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    return String(a.full_name || "").localeCompare(String(b.full_name || ""));
+  }), [employees]);
+
+  // Empty query lists the whole counter rather than nothing — with a bounded
+  // group this size, browsing is faster than guessing at a name, and it makes
+  // it obvious that Till Helpers are in scope.
   const hits = useMemo(() => {
-    if (!q.trim()) return [];
-    const lq = q.toLowerCase();
-    return employees
-      .filter(e => {
-        const desig = (e.designation || "").toLowerCase();
-        const isCashier = desig.includes("cashier");
-        const nameMatch = e.full_name?.toLowerCase().includes(lq) || e.employee_code?.toLowerCase().includes(lq);
-        return isCashier && nameMatch;
-      })
-      .slice(0, 10);
-  }, [employees, q]);
+    const lq = q.trim().toLowerCase();
+    if (!lq) return counterStaff.slice(0, 50);
+    return counterStaff.filter(e =>
+      e.full_name?.toLowerCase().includes(lq) ||
+      e.employee_code?.toLowerCase().includes(lq) ||
+      e.designation?.toLowerCase().includes(lq)
+    ).slice(0, 50);
+  }, [counterStaff, q]);
+
   return (
     <div className="relative" ref={ref}>
       <input value={value ? `${value.employee_code} — ${value.full_name}` : q}
         onChange={e => { if (value) onChange(null); setQ(e.target.value); setOpen(true); }}
         onFocus={() => { if (!value) setOpen(true); }}
-        placeholder="Search cashier employee..."
+        placeholder="Search cash counter staff by name, code or role…"
         className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" />
       {open && hits.length > 0 && (
-        <div className="absolute z-20 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-48 overflow-y-auto">
+        <div className="absolute z-20 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg mt-1 max-h-64 overflow-y-auto">
+          <div className="px-4 py-1.5 text-[11px] text-slate-400 border-b border-slate-100 sticky top-0 bg-white">
+            {q.trim() ? `${hits.length} match${hits.length === 1 ? "" : "es"}` : `Cash counter — ${counterStaff.length} staff`}
+          </div>
           {hits.map(e => (
             <button key={e.employee_code} onMouseDown={ev => ev.preventDefault()}
               onClick={() => { onChange(e); setQ(""); setOpen(false); }}
               className="w-full text-left px-4 py-2 hover:bg-slate-50 text-sm">
               <span className="font-semibold">{e.employee_code}</span> — {e.full_name}
-              <span className="text-xs text-slate-400 ml-2">{e.designation}</span>
+              <span className="text-xs text-slate-400 ml-2">{e.designation || "—"}</span>
+              {e.status !== "Active" && <span className="text-[10px] text-amber-600 ml-2">({e.status || "Inactive"})</span>}
             </button>
           ))}
         </div>
       )}
-      {open && q.length >= 1 && hits.length === 0 && (
+      {open && q.trim() && hits.length === 0 && (
         <div className="absolute z-20 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-lg mt-1 p-3 text-sm text-slate-400">
-          No cashier employees found matching "{q}"
+          No cash counter staff matching "{q}".
         </div>
       )}
     </div>
@@ -80,7 +117,7 @@ export default function Shortages({ role }) {
   async function loadAll() {
     const [{ data: sh }, { data: emps }] = await Promise.all([
       supabase.from("shortages").select("*").order("created_at", { ascending: false }).limit(500),
-      supabase.from("employees").select("employee_code,full_name,department,branch,designation").order("full_name"),
+      supabase.from("employees").select("employee_code,full_name,department,branch,designation,status").order("full_name"),
     ]);
     setShortages(sh || []);
     setEmployees(emps || []);
@@ -144,7 +181,7 @@ export default function Shortages({ role }) {
 
   return (
     <div>
-      <PageTitle title="Shortage Module" subtitle="Cashier cash shortages, tallied per cashier at month-end and deducted from that month's payroll."
+      <PageTitle title="Shortage Module" subtitle="Cash counter shortages, tallied per employee at month-end and deducted from that month's payroll."
         action={canEnter && <Button onClick={() => setShowForm(s => !s)} className="rounded-2xl">{showForm ? "Cancel" : "+ New Shortage"}</Button>} />
 
       {msg && <div className="mb-3 p-3 rounded-xl bg-blue-50 text-blue-700 text-sm">{msg}</div>}
@@ -153,9 +190,9 @@ export default function Shortages({ role }) {
       {showForm && canEnter && (
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm mb-4">
           <h2 className="font-bold text-slate-800 mb-4">Record Cash Shortage</h2>
-          <p className="text-xs text-slate-500 mb-3">Only cashier employees are shown. The shortage is deducted from the selected month's payroll (whenever that month is next generated / refreshed).</p>
+          <p className="text-xs text-slate-500 mb-3">Cash counter staff are shown — cashiers, till helpers and the head/chief cashier. The shortage is deducted from the selected month's payroll (whenever that month is next generated / refreshed).</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div><p className="text-xs text-slate-500 mb-1">Cashier Employee *</p><EmpPicker employees={employees} value={form.employee} onChange={v => setForm(f => ({ ...f, employee: v }))} /></div>
+            <div><p className="text-xs text-slate-500 mb-1">Cash Counter Staff *</p><EmpPicker employees={employees} value={form.employee} onChange={v => setForm(f => ({ ...f, employee: v }))} /></div>
             <div><p className="text-xs text-slate-500 mb-1">Payroll Month *</p><input type="month" value={form.shortage_month} onChange={e => setForm(f => ({ ...f, shortage_month: e.target.value }))} className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             <div><p className="text-xs text-slate-500 mb-1">Shortage Amount (Rs.) *</p><input type="number" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0" className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
             <div><p className="text-xs text-slate-500 mb-1">Description</p><input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Details of shortage..." className="w-full px-4 py-2 rounded-xl border border-slate-200 text-sm" /></div>
